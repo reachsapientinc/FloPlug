@@ -1,32 +1,36 @@
 /**
  * functions/src/nodes/cStreamMeta.ts
  *
- * CStreamEnvelope — the internal flow envelope.
+ * Two concerns live here:
  *
- * Throughout a flow, data travels as a plain value (cStream).
- * When a TemplateNode renders content with a specific MIME type,
- * the content type needs to travel alongside without polluting
- * the content itself (which may be raw XML, CSV, plain text, etc.).
+ * 1. CStreamEnvelope — thin wrapper TemplateNode uses to carry a MIME
+ *    content-type alongside rendered output so EndNode can emit correctly.
+ *    Only TemplateNode wraps; all other nodes call unwrap() on arrival.
  *
- * Solution: a thin envelope { value, contentType } used ONLY inside
- * the flow runner. The endNode unwraps it and emits correctly.
+ * 2. Re-exports of the canonical cStream helpers from resolveValue.ts
+ *    (getMessage, wrapMessage, passThroughMessage) so node files only
+ *    need to import from one place.
  *
- * Rules:
- *   - Only TemplateNode wraps into an envelope.
- *   - All other nodes receive the raw value (unwrapped before dispatch).
- *   - EndNode detects the envelope and formats the final output.
- *   - Mapper/Filter/Function/VarStore all operate on raw cStream —
- *     they never see the envelope wrapper.
+ * Canonical cStream shape (set by every node that produces output):
+ *   {
+ *     message:  <current payload>,
+ *     _meta: {
+ *       contentType?: string,
+ *       status?:      number,
+ *       source?:      string,
+ *     }
+ *   }
  *
- * This means:
- *   XML template → downstream nodes get the raw XML string
- *   JSON template → downstream nodes get the parsed object
- *   CSV/text/html → downstream nodes get the raw string
- *   Content-type is preserved for the endNode to use.
+ * Resolution convention (used by resolveValue.ts):
+ *   "cStream"        → cStream.message  (whole payload)
+ *   "cStream.empId"  → cStream.message.empId
+ *   "local.myVar"    → store.local.myVar
+ *   "global.cfg.key" → store.global.cfg.key
  */
 
 export type CStreamContentType =
   | 'text/plain'
+  | 'text/xml'
   | 'application/xml'
   | 'application/json'
   | 'text/html'
@@ -38,7 +42,7 @@ export interface CStreamEnvelope {
   contentType:        CStreamContentType;
 }
 
-/** Wrap a rendered value with its content type. */
+/** Wrap a rendered value with its content type (TemplateNode only). */
 export function wrapEnvelope(value: unknown, contentType: CStreamContentType): CStreamEnvelope {
   return { __floplug_envelope: true, value, contentType };
 }
@@ -55,8 +59,6 @@ export function isEnvelope(val: unknown): val is CStreamEnvelope {
 /**
  * Unwrap an envelope to its raw value.
  * If not an envelope, returns the value as-is.
- * Use this at the top of every node executor to ensure
- * they always receive raw content regardless of upstream.
  */
 export function unwrap(val: unknown): unknown {
   return isEnvelope(val) ? val.value : val;
@@ -64,10 +66,32 @@ export function unwrap(val: unknown): unknown {
 
 /**
  * Unwrap and return both value + contentType.
- * contentType defaults to 'application/json' when not an envelope
- * (backwards compatible — plain objects have always been treated as JSON).
+ * contentType defaults to 'application/json' when not an envelope.
  */
 export function unwrapWithMeta(val: unknown): { value: unknown; contentType: CStreamContentType } {
   if (isEnvelope(val)) return { value: val.value, contentType: val.contentType };
+  // Check if it's a canonical cStream envelope with _meta.contentType
+  if (
+    typeof val === 'object' && val !== null &&
+    'message' in (val as any)
+  ) {
+    const cs    = val as Record<string, unknown>;
+    const meta  = cs._meta as Record<string, unknown> | undefined;
+    const ct    = (meta?.contentType as CStreamContentType | undefined) ?? 'application/json';
+    return { value: cs.message, contentType: ct };
+  }
   return { value: val, contentType: 'application/json' };
 }
+
+// ── Re-export canonical helpers so nodes import from one place ────────────────
+export {
+  getMessage,
+  wrapMessage,
+  passThroughMessage,
+  resolveToString,
+  resolveToRaw,
+  resolveUrl,
+  type ValueBinding,
+  type ValueSource,
+  type ResolveContext,
+} from '../engine/resolveValue.js';

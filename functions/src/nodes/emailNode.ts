@@ -1,53 +1,33 @@
 /**
  * emailNode.ts
  *
- * Executes an emailNode in the Flo.
+ * Executes an email plug node in a Flo.
  * Plug admins configure SMTP credentials — developers never see them.
- * Developers configure: to, cc, bcc, subject, body, contentType, bodyMode.
- * All fields support static | cStream | local | global value bindings.
+ * Developers configure: to, cc, bcc, subject, body via emailBindings on the node.
+ *
+ * All fields resolve through the canonical resolveValue helpers:
+ *   source=cStream  → cStream.message (or cStream.message.path)
+ *   source=local    → store.local.varName
+ *   source=global   → store.global.varName
+ *   source=static   → literal string
+ *
+ * Output target:
+ *   nd.outputTarget = 'cStream' (default) → replaces cStream with email result
+ *   nd.outputTarget = 'local'             → store.local[outputVarName] = result
+ *   nd.outputTarget = 'global'            → store.global[outputVarName] = result
  */
 
-import nodemailer                  from 'nodemailer';
-import { getFirestore }            from 'firebase-admin/firestore';
-import {COLLECTIONS,HUB_COLLECTIONS} from '@floplug/shared';
-
-// ── Value binding resolver ────────────────────────────────────────────────────
-
-function resolveBinding(
-  binding:  { source: string; value: string } | undefined,
-  cStream:  Record<string, unknown>,
-  local:    Record<string, unknown>,
-  global:   Record<string, unknown>,
-): string {
-  if (!binding?.value) return '';
-  const val = (() => {
-    switch (binding.source) {
-      case 'static':  return binding.value;
-      case 'cStream': return getPath(cStream, binding.value);
-      case 'local':   return getPath(local,   binding.value);
-      case 'global':  return getPath(global,  binding.value);
-      default:        return binding.value;
-    }
-  })();
-  return val == null ? '' : String(val);
-}
-
-function getPath(obj: Record<string, unknown>, path: string): unknown {
-  return path.split('.').reduce<unknown>((cur, key) =>
-    cur != null && typeof cur === 'object' ? (cur as Record<string, unknown>)[key] : undefined,
-    obj
-  );
-}
+import nodemailer                                            from 'nodemailer';
+import { getFirestore }                                     from 'firebase-admin/firestore';
+import { COLLECTIONS, HUB_COLLECTIONS }                    from '@floplug/shared';
+import { resolveToString, wrapMessage, type ResolveContext } from './cStreamMeta.js';
 
 // ── Address parser ────────────────────────────────────────────────────────────
-// Accepts "a@b.com, c@d.com" or ["a@b.com","c@d.com"]
-
 function parseAddresses(raw: string): string[] {
   return raw.split(',').map(s => s.trim()).filter(Boolean);
 }
 
 // ── SMTP credentials loader ───────────────────────────────────────────────────
-
 interface SmtpPlug {
   host:      string;
   port:      number;
@@ -58,11 +38,7 @@ interface SmtpPlug {
   fromName?: string;
 }
 
-async function loadSmtpPlug(
-  hubId:    string,
-  tenantId: string,
-  plugId:   string,
-): Promise<SmtpPlug> {
+async function loadSmtpPlug(hubId: string, tenantId: string, plugId: string): Promise<SmtpPlug> {
   const snap = await getFirestore()
     .collection(COLLECTIONS.HUBS).doc(hubId)
     .collection(HUB_COLLECTIONS.TENANTS).doc(tenantId)
@@ -72,9 +48,8 @@ async function loadSmtpPlug(
   if (!snap.exists) throw new Error(`EmailPlug not found: ${plugId}`);
 
   const d = snap.data() as any;
-  // Guard: accept smtp_basic authProtocol OR legacy connectorType==='email'
-  if (d.authProtocol !== 'smtp_basic' && d.nodeType !== 'emailNode') {
-    throw new Error(`Plug ${plugId} is not an email plug (authProtocol=${d.authProtocol})`);
+  if (d.nodeType !== 'emailNode' && d.authProtocol !== 'smtp_basic') {
+    throw new Error(`Plug ${plugId} is not an email plug (nodeType=${d.nodeType})`);
   }
 
   return {
@@ -89,22 +64,26 @@ async function loadSmtpPlug(
 }
 
 // ── Main executor ─────────────────────────────────────────────────────────────
-
 export async function executeEmailNode(
-  cStream:  Record<string, unknown>,
-  nd:       Record<string, any>,
-  store:    { global: Record<string, unknown>; local: Record<string, unknown> },
+  cStream: Record<string, unknown>,
+  nd:      Record<string, any>,
+  store:   { global: Record<string, unknown>; local: Record<string, unknown> },
 ): Promise<{ cStream: Record<string, unknown>; logLine: string }> {
 
   const { hubId, tenantId } = nd;
-  const plugId = nd.plugId as string;
+  const plugId        = nd.plugId        as string;
+  const outputTarget  = (nd.outputTarget  as string) || 'cStream';
+  const outputVarName = (nd.outputVarName as string) || '';
 
-  console.log(`[emailNode] START plugId=${plugId} hubId=${hubId}`);
+  console.log(`[emailNode] START plugId=${plugId} hubId=${hubId} outputTarget=${outputTarget}`);
 
-  // ── Read emailBindings (set by developer in the canvas inspector) ───────────
-  // Structure: nd.emailBindings.{ to, cc, bcc, subject, body }
-  //   each: { source: 'static'|'cStream'|'local'|'global', value: string,
-  //            asAttachment?: boolean, fileName?: string, contentType?: string }
+  // ── Build resolve context using canonical helpers ────────────────────────────
+  const ctx: ResolveContext = { cStream, store };
+
+  // ── Read emailBindings ───────────────────────────────────────────────────────
+  // Shape: { to, cc, bcc, subject, body } each:
+  //   { source: 'static'|'cStream'|'local'|'global', value: string,
+  //     asAttachment?: boolean, fileName?: string, contentType?: string }
   const bindings = (nd.emailBindings ?? {}) as Record<string, {
     source:        string;
     value:         string;
@@ -113,14 +92,23 @@ export async function executeEmailNode(
     contentType?:  string;
   }>;
 
-  // ── Resolve bindings ────────────────────────────────────────────────────────
-  const toRaw      = resolveBinding(bindings.to,      cStream, store.local, store.global);
-  const ccRaw      = resolveBinding(bindings.cc,      cStream, store.local, store.global);
-  const bccRaw     = resolveBinding(bindings.bcc,     cStream, store.local, store.global);
-  const subject    = resolveBinding(bindings.subject,  cStream, store.local, store.global);
-  const bodyRaw    = resolveBinding(bindings.body,     cStream, store.local, store.global);
+  // ── Resolve each field ───────────────────────────────────────────────────────
+  const toRaw   = resolveToString(bindings.to      as any, ctx);
+  const ccRaw   = resolveToString(bindings.cc      as any, ctx);
+  const bccRaw  = resolveToString(bindings.bcc     as any, ctx);
+  const subject = resolveToString(bindings.subject  as any, ctx);
+  let   bodyRaw = resolveToString(bindings.body     as any, ctx);
 
-  // attachmentName and contentType come from the body binding's attachment sub-fields
+  // Body fallback: if cStream source and body came back empty,
+  // use cStream.message directly (most common case — send upstream payload)
+  if (!bodyRaw && bindings.body?.source === 'cStream') {
+    const msg = cStream.message;
+    if (msg != null) {
+      bodyRaw = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2);
+      console.log('[emailNode] body resolved from cStream.message directly');
+    }
+  }
+
   const attachName    = bindings.body?.fileName    || 'attachment.txt';
   const attachContent = bindings.body?.contentType || 'text/plain';
   const isAttach      = bindings.body?.asAttachment === true;
@@ -134,12 +122,12 @@ export async function executeEmailNode(
     throw new Error(`[emailNode] 'to' resolved to empty — check binding source/path`);
   }
 
-  console.log(`[emailNode] to=${toList.join(',')} subject="${subject}"`);
+  console.log(`[emailNode] to=${toList.join(',')} subject="${subject}" body length=${bodyRaw.length}`);
 
-  // ── Load SMTP plug ──────────────────────────────────────────────────────────
+  // ── Load SMTP credentials ────────────────────────────────────────────────────
   const plug = await loadSmtpPlug(hubId, tenantId, plugId);
 
-  // ── Build transporter ───────────────────────────────────────────────────────
+  // ── Build transporter ────────────────────────────────────────────────────────
   const transporter = nodemailer.createTransport({
     host:   plug.host,
     port:   plug.port,
@@ -147,7 +135,7 @@ export async function executeEmailNode(
     auth:   { user: plug.user, pass: plug.password },
   });
 
-  // ── Build mail options ──────────────────────────────────────────────────────
+  // ── Build mail options ───────────────────────────────────────────────────────
   const from = plug.fromName ? `"${plug.fromName}" <${plug.fromEmail}>` : plug.fromEmail;
 
   const mailOptions: nodemailer.SendMailOptions = {
@@ -171,25 +159,41 @@ export async function executeEmailNode(
     ),
   };
 
-  // ── Send ────────────────────────────────────────────────────────────────────
+  // ── Send ─────────────────────────────────────────────────────────────────────
   console.log(`[emailNode] Sending via ${plug.host}:${plug.port} secure=${plug.secure}`);
   const info = await transporter.sendMail(mailOptions);
   console.log(`[emailNode] Sent messageId=${info.messageId}`);
 
-  // ── Write result to cStream ─────────────────────────────────────────────────
-  const nextCStream: Record<string, unknown> = {
-    ...cStream,
-    _emailResult: {
-      messageId: info.messageId,
-      to:        toList,
-      cc:        ccList,
-      bcc:       bccList,
-      subject,
-      mode:      isAttach ? 'attachment' : 'inline',
-      status:    'sent',
-    },
+  // ── Build result payload ─────────────────────────────────────────────────────
+  const emailResult = {
+    messageId: info.messageId,
+    to:        toList,
+    cc:        ccList,
+    bcc:       bccList,
+    subject,
+    mode:      isAttach ? 'attachment' : 'inline',
+    status:    'sent',
   };
 
-  const logLine = `✓ EmailNode: to=${toList.join(',')} subject="${subject}" msgId=${info.messageId} mode=${isAttach ? 'attachment' : 'inline'}`;
-  return { cStream: nextCStream, logLine };
+  const logLine = `✓ EmailNode: to=${toList.join(',')} subject="${subject}" msgId=${info.messageId} mode=${emailResult.mode}`;
+
+  // ── Route output ─────────────────────────────────────────────────────────────
+  if (outputTarget === 'local' && outputVarName) {
+    store.local[outputVarName] = emailResult;
+    // cStream passes through — just tag _meta.source
+    const nextCs = { ...cStream, _meta: { ...(cStream._meta as object ?? {}), source: 'emailNode' } };
+    return { cStream: nextCs, logLine };
+  }
+
+  if (outputTarget === 'global' && outputVarName) {
+    store.global[outputVarName] = emailResult;
+    const nextCs = { ...cStream, _meta: { ...(cStream._meta as object ?? {}), source: 'emailNode' } };
+    return { cStream: nextCs, logLine };
+  }
+
+  // Default: wrap result as canonical cStream
+  return {
+    cStream: wrapMessage(emailResult, { source: 'emailNode' }) as Record<string, unknown>,
+    logLine,
+  };
 }

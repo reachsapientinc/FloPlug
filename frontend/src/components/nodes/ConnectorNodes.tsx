@@ -1,14 +1,13 @@
 /**
- * ConnectorNodes.tsx
- * - NodeShell: width/height 100% so content fills resized frame
- * - Handles: Left (target) / Right (source) for horizontal flow
- * - All nodes fully controlled via node.data + onUpdate
+ * ConnectorNodes.tsx — SalesforceNode, SapNode, OracleNode, MapperNode, FilterNode
+ * All nodes now have a NodeDrawer at the bottom for output target configuration.
  */
 
 import React from 'react';
 import { type NodeProps, NodeResizer } from '@xyflow/react';
 import { httpsCallable } from 'firebase/functions';
 import { BaseNode, NodeField, NodeInput, NodeSelect, NodeButton, NodeResult } from './BaseNode';
+import { NodeDrawer } from './NodeDrawer';
 
 // ── NodeShell ─────────────────────────────────────────────────────────────────
 interface ShellProps {
@@ -26,10 +25,12 @@ const NodeShell: React.FC<ShellProps> = ({
     e.stopPropagation();
     (data.onDelete as any)?.(id);
   };
+  const outputTarget = (data.outputTarget as string) || 'cStream';
+
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', boxSizing: 'border-box' }}>
       <NodeResizer
-        isVisible={selected} minWidth={180} minHeight={80}
+        isVisible={selected} minWidth={180} minHeight={100}
         handleStyle={{ background: '#4f8ef7', border: '2px solid #0f1117', width: 10, height: 10, borderRadius: 3 }}
         lineStyle={{ borderColor: 'rgba(79,142,247,0.35)' }}
       />
@@ -45,7 +46,23 @@ const NodeShell: React.FC<ShellProps> = ({
       )}
       <BaseNode selected={selected} color={color} icon={icon} title={title}
         status={status} hasTarget={hasTarget} hasSource={hasSource}>
+
+        {/* Output target badge */}
+        {outputTarget !== 'cStream' && (
+          <div style={{ fontSize: 8, color: '#39ff14', background: 'rgba(57,255,20,0.07)', border: '0.5px solid rgba(57,255,20,0.2)', borderRadius: 3, padding: '1px 5px', alignSelf: 'flex-start', marginBottom: 4 }}>
+            → {outputTarget}.{(data.outputVarName as string) || '?'}
+          </div>
+        )}
+
         {children}
+
+        {/* Shared output target drawer */}
+        <NodeDrawer id={id} data={data} label="Output settings" color={color} defaultOpen={false}>
+          <div style={{ fontSize: 8, color: '#3a3a50', marginBottom: 4, lineHeight: 1.5 }}>
+            Choose where this node's result is stored. Use local/global to avoid
+            overwriting cStream for downstream nodes.
+          </div>
+        </NodeDrawer>
       </BaseNode>
     </div>
   );
@@ -211,7 +228,6 @@ export const MapperNode: React.FC<NodeProps> = ({ id, data, selected }) => {
         </NodeSelect>
       </NodeField>
 
-      {/* Column headers */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 60px 1fr 14px', gap: 3, marginBottom: 3 }}>
         {['Source', 'Transform', 'Target', ''].map((h, i) => (
           <div key={i} style={{ fontSize: 8, color: '#45455a', textTransform: 'uppercase', letterSpacing: '0.3px' }}>{h}</div>

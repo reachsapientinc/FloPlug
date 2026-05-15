@@ -48,7 +48,7 @@ jobs:
       - name: Deploy to Firebase Prod
         uses: FirebaseExtended/action-hosting-deploy@v0
         with:
-          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          repoToken: ${{ secrets.MY_GH_TOKEN }}
           firebaseServiceAccount: ${{ secrets.PROD_FIREBASE_SERVICE_ACCOUNT }}
           projectId: floplug-prod
           channelId: live

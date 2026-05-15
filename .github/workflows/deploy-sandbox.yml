@@ -48,7 +48,7 @@ jobs:
       - name: Deploy to Firebase Sandbox
         uses: FirebaseExtended/action-hosting-deploy@v0
         with:
-          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          repoToken: ${{ secrets.MY_GH_TOKEN }}
           firebaseServiceAccount: ${{ secrets.SANDBOX_FIREBASE_SERVICE_ACCOUNT }}
           projectId: floplug-sandbox
           channelId: live

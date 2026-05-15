@@ -1,24 +1,14 @@
 /**
- * AdvancedNodes.tsx
- *
- * Contains: VariableStoreNode, FIFNode, FunctionNode
- *
- * TemplateNode has been moved to its own file: ./nodes/TemplateNode.tsx
- * Import it from there and register it in nodeTypes alongside these.
- *
- * Changes vs previous version:
- *  1. VariableStoreNode  — multi-row table for N store operations in one node.
- *  2. All nodes          — content fills the resized frame via flex + overflow:auto.
- *  3. Node layout        — compact horizontal two-column grid for fields.
- *  4. NodeShell          — passes width/height through so BaseNode can fill.
- *  5. TemplateNode       — extracted to ./nodes/TemplateNode.tsx
+ * AdvancedNodes.tsx — VariableStoreNode, FIFNode, FunctionNode
+ * All nodes now have a NodeDrawer for output target configuration.
  */
 
 import React, { useState } from 'react';
 import { type NodeProps, NodeResizer } from '@xyflow/react';
 import { BaseNode, NodeField, NodeInput, NodeSelect } from './BaseNode';
+import { NodeDrawer } from './NodeDrawer';
 
-// ── NodeShell (shared) ────────────────────────────────────────────────────────
+// ── NodeShell ─────────────────────────────────────────────────────────────────
 interface ShellProps {
   id: string; data: Record<string, unknown>; selected: boolean;
   color: string; icon: string; title: string;
@@ -37,6 +27,7 @@ const NodeShell: React.FC<ShellProps> = ({
     e.stopPropagation();
     (data.onDelete as any)?.(id);
   };
+  const outputTarget = (data.outputTarget as string) || 'cStream';
 
   return (
     <>
@@ -58,16 +49,25 @@ const NodeShell: React.FC<ShellProps> = ({
         }}>×</button>
       )}
       <BaseNode
-        selected={selected}
-        color={color}
-        icon={icon}
-        title={title}
-        status={status}
-        hasTarget={hasTarget}
-        hasSource={hasSource}
-        fillContainer
+        selected={selected} color={color} icon={icon} title={title}
+        status={status} hasTarget={hasTarget} hasSource={hasSource} fillContainer
       >
+        {/* Output target badge */}
+        {outputTarget !== 'cStream' && (
+          <div style={{ fontSize: 8, color: '#39ff14', background: 'rgba(57,255,20,0.07)', border: '0.5px solid rgba(57,255,20,0.2)', borderRadius: 3, padding: '1px 5px', alignSelf: 'flex-start', marginBottom: 4 }}>
+            → {outputTarget}.{(data.outputVarName as string) || '?'}
+          </div>
+        )}
+
         {children}
+
+        {/* Shared output target drawer */}
+        <NodeDrawer id={id} data={data} label="Output settings" color={color} defaultOpen={false}>
+          <div style={{ fontSize: 8, color: '#3a3a50', marginBottom: 4, lineHeight: 1.5 }}>
+            Where should this node store its result?
+            Use local/global to keep cStream unchanged for downstream nodes.
+          </div>
+        </NodeDrawer>
       </BaseNode>
     </>
   );
@@ -78,21 +78,20 @@ export interface StoreRow {
   action:     'set' | 'get' | 'clear';
   scope:      'global' | 'local';
   varName:    string;
-  sourcePath: string;   // for set: which part of cStream to read (empty = all)
-  targetPath: string;   // for get: where in cStream to inject (empty = replace)
+  sourcePath: string;
+  targetPath: string;
 }
 
 const defaultRow = (): StoreRow => ({
   action: 'set', scope: 'global', varName: '', sourcePath: '', targetPath: '',
 });
 
-// ── VariableStoreNode — multi-row ─────────────────────────────────────────────
+// ── VariableStoreNode ─────────────────────────────────────────────────────────
 export const VariableStoreNode: React.FC<NodeProps> = ({ id, data, selected }) => {
   const rows: StoreRow[] = (data.rows as StoreRow[]) ?? [defaultRow()];
   const update = (patch: Record<string, unknown>) => (data.onUpdate as any)?.(id, patch);
 
   const setRows = (next: StoreRow[]) => update({ rows: next });
-
   const addRow    = () => setRows([...rows, defaultRow()]);
   const removeRow = (i: number) => setRows(rows.filter((_, idx) => idx !== i));
   const patchRow  = (i: number, patch: Partial<StoreRow>) =>
@@ -104,7 +103,6 @@ export const VariableStoreNode: React.FC<NodeProps> = ({ id, data, selected }) =
       minWidth={420} minHeight={120}>
 
       <div style={{ overflowY: 'auto', flex: 1, minHeight: 0 }}>
-        {/* Column headers */}
         <div style={styles.tableHeader}>
           <div style={{ ...styles.col, flex: '0 0 70px' }}>Action</div>
           <div style={{ ...styles.col, flex: '0 0 62px' }}>Scope</div>
@@ -115,78 +113,47 @@ export const VariableStoreNode: React.FC<NodeProps> = ({ id, data, selected }) =
 
         {rows.map((row, i) => (
           <div key={i} style={styles.tableRow}>
-            {/* Action */}
-            <select
-              value={row.action}
-              onChange={e => patchRow(i, { action: e.target.value as StoreRow['action'] })}
-              style={{ ...styles.cell, flex: '0 0 70px' }}
-            >
+            <select value={row.action} onChange={e => patchRow(i, { action: e.target.value as StoreRow['action'] })}
+              style={{ ...styles.cell, flex: '0 0 70px' }}>
               <option value="set">Set</option>
               <option value="get">Get</option>
               <option value="clear">Clear</option>
             </select>
-
-            {/* Scope */}
-            <select
-              value={row.scope}
-              onChange={e => patchRow(i, { scope: e.target.value as StoreRow['scope'] })}
-              style={{ ...styles.cell, flex: '0 0 62px' }}
-            >
+            <select value={row.scope} onChange={e => patchRow(i, { scope: e.target.value as StoreRow['scope'] })}
+              style={{ ...styles.cell, flex: '0 0 62px' }}>
               <option value="global">Global</option>
               <option value="local">Local</option>
             </select>
-
-            {/* Variable name */}
-            <input
-              value={row.varName}
-              placeholder="varName"
+            <input value={row.varName} placeholder="varName"
               onChange={e => patchRow(i, { varName: e.target.value })}
-              style={{ ...styles.cell, flex: 1 }}
-            />
-
-            {/* Contextual path field */}
+              style={{ ...styles.cell, flex: 1 }} />
             {row.action === 'set' ? (
-              <input
-                value={row.sourcePath}
-                placeholder="src path (empty=all)"
+              <input value={row.sourcePath} placeholder="src path (empty=all)"
                 onChange={e => patchRow(i, { sourcePath: e.target.value })}
                 style={{ ...styles.cell, flex: 1 }}
-                title="Dot-path within cStream to read from. Leave empty to capture the entire cStream."
-              />
+                title="Dot-path within cStream.message to read from. Leave empty to capture entire message." />
             ) : row.action === 'get' ? (
-              <input
-                value={row.targetPath}
-                placeholder="inject at path (empty=replace)"
+              <input value={row.targetPath} placeholder="inject at path (empty=replace)"
                 onChange={e => patchRow(i, { targetPath: e.target.value })}
-                style={{ ...styles.cell, flex: 1 }}
-                title="Dot-path within cStream to inject into. Leave empty to replace cStream entirely."
-              />
+                style={{ ...styles.cell, flex: 1 }} />
             ) : (
               <div style={{ ...styles.cell, flex: 1, color: '#3a3a50', fontStyle: 'italic' }}>—</div>
             )}
-
-            {/* Delete row */}
-            <button
-              onClick={() => removeRow(i)}
-              style={{ background: 'none', border: 'none', color: '#f87171', fontSize: 13, cursor: 'pointer', padding: '0 2px', flexShrink: 0, lineHeight: 1 }}
-              title="Remove row"
-            >×</button>
+            <button onClick={() => removeRow(i)}
+              style={{ background: 'none', border: 'none', color: '#f87171', fontSize: 13, cursor: 'pointer', padding: '0 2px', flexShrink: 0, lineHeight: 1 }}>×</button>
           </div>
         ))}
 
-        {/* Add row */}
         <button onClick={addRow} style={styles.addBtn}>+ Add store operation</button>
-
-        {/* Legend */}
         <div style={{ fontSize: 9, color: '#3a3a50', marginTop: 4, lineHeight: 1.6, padding: '0 2px' }}>
-          Set writes cStream (or a path) into the variable.  Get injects it back.  Clear deletes it.
+          Paths apply to <code style={{ fontFamily: 'monospace', color: '#4f8ef7' }}>cStream.message</code> — use dot-notation e.g. <code style={{ fontFamily: 'monospace', color: '#4f8ef7' }}>invoice.total</code>
         </div>
       </div>
     </NodeShell>
   );
 };
 
-// ── FIFNode (Flow-in-Flow) ────────────────────────────────────────────────────
+// ── FIFNode ───────────────────────────────────────────────────────────────────
 export const FIFNode: React.FC<NodeProps> = ({ id, data, selected }) => {
   const selectedFloId  = (data.selectedFloId  as string)   ?? '';
   const availableFlos  = (data.availableFlos  as { id: string; name: string }[]) ?? [];
@@ -199,10 +166,7 @@ export const FIFNode: React.FC<NodeProps> = ({ id, data, selected }) => {
 
       <div style={{ overflowY: 'auto', flex: 1, minHeight: 0 }}>
         <NodeField label="Sub-Flow to Execute">
-          <NodeSelect
-            value={selectedFloId}
-            onChange={e => update({ selectedFloId: e.target.value })}
-          >
+          <NodeSelect value={selectedFloId} onChange={e => update({ selectedFloId: e.target.value })}>
             <option value="">— Select a flow —</option>
             {availableFlos.map(f => (
               <option key={f.id} value={f.id} disabled={disabledFloIds.includes(f.id)}>
@@ -211,12 +175,10 @@ export const FIFNode: React.FC<NodeProps> = ({ id, data, selected }) => {
             ))}
           </NodeSelect>
         </NodeField>
-
         <div style={{ fontSize: 9, color: '#3a3a50', marginTop: 4, lineHeight: 1.5 }}>
           cStream passes into sub-flow and is replaced by its output.<br />
           Global store is shared. Local store is isolated.
         </div>
-
         {!selectedFloId && (
           <div style={{ fontSize: 9, color: '#f59e0b', marginTop: 4 }}>
             ⚠ No flow selected — this node will be skipped at runtime.
@@ -229,9 +191,10 @@ export const FIFNode: React.FC<NodeProps> = ({ id, data, selected }) => {
 
 // ── FunctionNode ──────────────────────────────────────────────────────────────
 const FUNCTION_PLACEHOLDER = `// Available: cStream, global, local
-// Return an object to merge or replace cStream.
+// cStream is the canonical envelope — use cStream.message for the payload.
+// Return a value to replace/merge into cStream.message.
 return {
-  processed: cStream.value * 2,
+  processed: cStream.message?.value * 2,
 };`;
 
 export const FunctionNode: React.FC<NodeProps> = ({ id, data, selected }) => {
@@ -245,12 +208,11 @@ export const FunctionNode: React.FC<NodeProps> = ({ id, data, selected }) => {
       color="#b45309" icon="fn" title="Function" minWidth={240} minHeight={160}>
 
       <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: 6, overflowY: 'auto' }}>
-        {/* Two-column top row */}
         <div style={{ display: 'flex', gap: 6 }}>
           <div style={{ flex: 1 }}>
             <NodeField label="Output Mode">
               <NodeSelect value={outputMode} onChange={e => update({ outputMode: e.target.value })}>
-                <option value="overwrite">Overwrite cStream</option>
+                <option value="overwrite">Overwrite cStream.message</option>
                 <option value="append">Append at path</option>
               </NodeSelect>
             </NodeField>
@@ -258,32 +220,21 @@ export const FunctionNode: React.FC<NodeProps> = ({ id, data, selected }) => {
           {outputMode === 'append' && (
             <div style={{ flex: 1 }}>
               <NodeField label="Target Path">
-                <NodeInput
-                  placeholder="e.g. result.out"
-                  value={targetPath}
-                  onChange={e => update({ targetPath: e.target.value })}
-                />
+                <NodeInput placeholder="e.g. result.out" value={targetPath}
+                  onChange={e => update({ targetPath: e.target.value })} />
               </NodeField>
             </div>
           )}
         </div>
 
-        {/* Code textarea fills remaining space */}
         <NodeField label="Code Snippet">
-          <textarea
-            value={code}
-            onChange={e => update({ code: e.target.value })}
-            spellCheck={false}
+          <textarea value={code} onChange={e => update({ code: e.target.value })} spellCheck={false}
             style={{
               width: '100%', flex: 1, minHeight: 80,
-              background: '#0a0c12',
-              border: '0.5px solid rgba(255,255,255,0.08)',
-              borderRadius: 4, color: '#22c55e',
-              fontSize: 9, fontFamily: 'monospace',
-              padding: '5px 7px', resize: 'none', outline: 'none',
-              boxSizing: 'border-box',
-            }}
-          />
+              background: '#0a0c12', border: '0.5px solid rgba(255,255,255,0.08)',
+              borderRadius: 4, color: '#22c55e', fontSize: 9, fontFamily: 'monospace',
+              padding: '5px 7px', resize: 'none', outline: 'none', boxSizing: 'border-box',
+            }} />
         </NodeField>
 
         <div style={{ fontSize: 9, color: '#3a3a50' }}>Runs server-side in a sandboxed context.</div>
@@ -296,27 +247,22 @@ export const FunctionNode: React.FC<NodeProps> = ({ id, data, selected }) => {
 const styles: Record<string, React.CSSProperties> = {
   tableHeader: {
     display: 'flex', gap: 4, padding: '0 2px 4px',
-    borderBottom: '0.5px solid rgba(255,255,255,0.06)',
-    marginBottom: 4,
+    borderBottom: '0.5px solid rgba(255,255,255,0.06)', marginBottom: 4,
   },
   col: {
     fontSize: 8, color: '#45455a', textTransform: 'uppercase',
     letterSpacing: '0.4px', fontWeight: 600,
   },
-  tableRow: {
-    display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4,
-  },
+  tableRow: { display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 },
   cell: {
     padding: '3px 5px', borderRadius: 4,
     border: '0.5px solid rgba(255,255,255,0.08)',
     background: '#0f1117', color: '#c0c0cc',
-    fontSize: 9, fontFamily: 'inherit', outline: 'none',
-    minWidth: 0,
+    fontSize: 9, fontFamily: 'inherit', outline: 'none', minWidth: 0,
   },
   addBtn: {
-    marginTop: 4, width: '100%', padding: '4px 0',
-    borderRadius: 4, border: '0.5px dashed rgba(8,145,178,0.4)',
-    background: 'rgba(8,145,178,0.06)', color: '#0891b2',
-    fontSize: 9, cursor: 'pointer', fontFamily: 'inherit',
+    marginTop: 4, width: '100%', padding: '4px 0', borderRadius: 4,
+    border: '0.5px dashed rgba(8,145,178,0.4)', background: 'rgba(8,145,178,0.06)',
+    color: '#0891b2', fontSize: 9, cursor: 'pointer', fontFamily: 'inherit',
   },
 };

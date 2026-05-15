@@ -21,6 +21,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { type NodeProps, NodeResizer, Handle, Position } from '@xyflow/react';
+import { NodeDrawer } from './NodeDrawer';
 
 // ── Content-type options ──────────────────────────────────────────────────────
 export const CONTENT_TYPES = [
@@ -550,6 +551,20 @@ export const TemplateNode: React.FC<NodeProps> = ({ id, data, selected, width, h
         >
           ✏ Edit Template
         </button>
+
+        {/* Output target drawer — consistent with all other nodes */}
+        <NodeDrawer
+          id={id}
+          data={data as unknown as Record<string, unknown>}
+          label="Output settings"
+          color="#0f766e"
+          defaultOpen={false}
+        >
+          <div style={{ fontSize: 8, color: '#3a3a50', marginBottom: 4, lineHeight: 1.5 }}>
+            By default the rendered template replaces <code style={{ fontFamily: 'monospace', color: '#4f8ef7' }}>cStream.message</code>.
+            Use local/global to store without overwriting cStream.
+          </div>
+        </NodeDrawer>
 
         <Handle type="source" position={Position.Right} style={{ width: 10, height: 10, background: '#4f8ef7', border: '2px solid #0f1117', borderRadius: '50%' }} />
       </div>

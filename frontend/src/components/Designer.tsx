@@ -6,7 +6,7 @@
  *     trusting the isAdmin prop. All admin checks now use isHubAdmin from the token.
  *  2. All workspaces loaded for hub admins — resolveWorkspace fetches every workspace
  *     and exposes a workspace switcher dropdown in the topbar.
- *  3. loadFlows — skips ownerUid filter for hub admins so all flos are visible.
+ *  3. loadFlows — skips ownerUid filter for hub admins so all flows are visible.
  *  4. Plug field placeholders — dynamic per plug category.
  *  5. Attachment filename field — new field on PlugNode inspector supporting
  *     static text or {{local.varName}} / {{global.varName}} references.
@@ -206,7 +206,7 @@ export function getPlugPlaceholders(category?: string) {
 const workspacesCol = (hubId: string, tenantId: string) =>
   collection(db, COLLECTIONS.HUBS, hubId, HUB_COLLECTIONS.TENANTS, tenantId, HUB_COLLECTIONS.WORKSPACES);
 
-const flosCol = (hubId: string, tenantId: string, wsId: string) =>
+const flowsCol = (hubId: string, tenantId: string, wsId: string) =>
   collection(db, COLLECTIONS.HUBS, hubId, HUB_COLLECTIONS.TENANTS, tenantId, HUB_COLLECTIONS.WORKSPACES, wsId, HUB_COLLECTIONS.FLOS);
 
 const flowDocRef = (hubId: string, tenantId: string, wsId: string, fId: string) =>
@@ -349,8 +349,8 @@ const DesignerInner: React.FC<DesignerProps> = ({
   const [rfInstance,     setRfInstance]                  = useState<ReactFlowInstance | null>(null);
   const pendingViewport = useRef<{ x: number; y: number; zoom: number } | null>(null);
   const [selectedNode,   setSelectedNode]                = useState<Node | null>(null);
-  const [activeFlo,     setActiveFlo]                  = useState<FloMeta | null>(null);
-  const [flos,          setFlos]                       = useState<FloMeta[]>([]);
+  const [activeFlow,     setActiveFlow]                  = useState<FloMeta | null>(null);
+  const [flows,          setFlows]                       = useState<FloMeta[]>([]);
   const [saving,         setSaving]                      = useState(false);
   const [statusMsg,      setStatusMsg]                   = useState('');
   const [wsLoading,      setWsLoading]                   = useState(true);
@@ -471,29 +471,29 @@ const DesignerInner: React.FC<DesignerProps> = ({
     loadPlugs();
   }, [hubId, tenantId]);
 
-  // ── Step 2: Load flos once workspace is known ──────────────────────────────
-  // Hub admins see ALL flos in the workspace (no ownerUid filter).
+  // ── Step 2: Load flows once workspace is known ──────────────────────────────
+  // Hub admins see ALL flows in the workspace (no ownerUid filter).
   useEffect(() => {
     if (!activeWs) return;
     const loadFlows = async () => {
       try {
         const snap = await getDocs(
           query(
-            flosCol(hubId, tenantId, activeWs.id),
+            flowsCol(hubId, tenantId, activeWs.id),
             ...(isHubAdmin ? [] : [where('ownerUid', '==', userId)]),
             orderBy('createdAt', 'desc')
           )
         );
         const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as FloMeta));
-        console.log(`[Designer] Found ${list.length} flos in ws=${activeWs.id}`);
-        setFlos(list);
+        console.log(`[Designer] Found ${list.length} flows in ws=${activeWs.id}`);
+        setFlows(list);
 
         const target = floId
           ? list.find(f => f.id === floId)
           : list.find(f => f.defaultToLoad) ?? list[0];
 
         if (target) openFlow(target);
-        else { setNodes(makeDefaultNodes()); setEdges([]); setActiveFlo(null); }
+        else { setNodes(makeDefaultNodes()); setEdges([]); setActiveFlow(null); }
       } catch (err) {
         console.error('[Designer] loadFlows error:', err);
       }
@@ -562,7 +562,7 @@ const DesignerInner: React.FC<DesignerProps> = ({
 
       setNodes(hydrated);
       setEdges(data.edges ?? []);
-      setActiveFlo(flow);
+      setActiveFlow(flow);
       setSelectedNode(null);
       setRunResult(null);
 
@@ -583,7 +583,7 @@ const DesignerInner: React.FC<DesignerProps> = ({
     if (!activeWs) return;
     const defaults = makeDefaultNodes();
 
-    const newDocRef = await addDoc(flosCol(hubId, tenantId, activeWs.id), {
+    const newDocRef = await addDoc(flowsCol(hubId, tenantId, activeWs.id), {
       name:          form.name,
       shortCode:     form.shortCode,
       integrationId: form.integrationId,
@@ -611,10 +611,10 @@ const DesignerInner: React.FC<DesignerProps> = ({
       isDefault:     false,
       defaultToLoad: false,
     };
-    setFlos(prev => [meta, ...prev]);
+    setFlows(prev => [meta, ...prev]);
     setNodes(defaults);
     setEdges([]);
-    setActiveFlo(meta);
+    setActiveFlow(meta);
     setSelectedNode(null);
     setRunResult(null);
     setStatusMsg('Flow created ✓');
@@ -622,8 +622,8 @@ const DesignerInner: React.FC<DesignerProps> = ({
   };
 
   // ── Save the current flow ───────────────────────────────────────────────────
-  const saveFlo = async () => {
-    if (!activeFlo) return;
+  const saveFlow = async () => {
+    if (!activeFlow) return;
     setSaving(true);
     setStatusMsg('Saving…');
     try {
@@ -632,14 +632,14 @@ const DesignerInner: React.FC<DesignerProps> = ({
       const viewport   = rfInstance?.getViewport() ?? undefined;
 
       await setDoc(
-        flowDocRef(hubId, tenantId, activeFlo.workspaceId, activeFlo.id),
+        flowDocRef(hubId, tenantId, activeFlow.workspaceId, activeFlow.id),
         {
           nodes:         cleanNodes,
           edges:         cleanEdges,
           ...(viewport ? { viewport } : {}),
-          name:          activeFlo.name          ?? '',
-          shortCode:     activeFlo.shortCode     ?? '',
-          integrationId: activeFlo.integrationId ?? '',
+          name:          activeFlow.name          ?? '',
+          shortCode:     activeFlow.shortCode     ?? '',
+          integrationId: activeFlow.integrationId ?? '',
           ownerUid:      userId,
           updatedAt:     serverTimestamp(),
         },
@@ -647,7 +647,7 @@ const DesignerInner: React.FC<DesignerProps> = ({
       );
       setStatusMsg('Saved ✓');
     } catch (err: any) {
-      console.error('[Designer] saveFlo error:', err);
+      console.error('[Designer] saveFlow error:', err);
       setStatusMsg(`Save failed: ${err.message}`);
     } finally {
       setSaving(false);
@@ -657,9 +657,9 @@ const DesignerInner: React.FC<DesignerProps> = ({
 
   // ── Run the flow ────────────────────────────────────────────────────────────
   const handleRun = async (inputJson: Record<string, unknown>) => {
-    if (!activeFlo) return;
+    if (!activeFlow) return;
 
-    const perms = (activeFlo as any).invokePermissions as FloInvokePermissions | undefined;
+    const perms = (activeFlow as any).invokePermissions as FloInvokePermissions | undefined;
     if (perms && !isHubAdmin) {
       const canRun = perms.canRunInDesigner &&
         (perms.allowedUids.includes('*') || perms.allowedUids.includes(userId) ||
@@ -674,15 +674,15 @@ const DesignerInner: React.FC<DesignerProps> = ({
     setRunning(true);
     try {
       const fn = httpsCallable<
-        { hubId: string; tenantId: string; wsId: string; floId: string;
+        { hubId: string; tenantId: string; wsId: string; flowId: string;
           nodes: Node[]; edges: Edge[]; inputJson: Record<string, unknown>; },
         { log: string[]; status: string; output: Record<string, unknown> | null }
-      >(functions, 'executeFlo');
+      >(functions, 'executeFlow');
 
       const res = await fn({
         hubId, tenantId,
         wsId:      activeWs?.id ?? '',
-        floId:    activeFlo.id,
+        flowId:    activeFlow.id,
         nodes:     sanitizeNodes(nodesRef.current) as unknown as Node[],
         edges:     sanitizeEdges(edgesRef.current) as unknown as Edge[],
         inputJson,
@@ -712,10 +712,10 @@ const DesignerInner: React.FC<DesignerProps> = ({
 
   // ── Publish ─────────────────────────────────────────────────────────────────
   const publishFlow = async () => {
-    if (!activeFlo) return;
+    if (!activeFlow) return;
     try {
       await setDoc(
-        flowDocRef(hubId, tenantId, activeFlo.workspaceId, activeFlo.id),
+        flowDocRef(hubId, tenantId, activeFlow.workspaceId, activeFlow.id),
         { status: 'active', publishedAt: serverTimestamp() },
         { merge: true }
       );
@@ -898,7 +898,7 @@ const DesignerInner: React.FC<DesignerProps> = ({
             value={activeWs.id}
             onChange={e => {
               const ws = allWorkspaces.find(w => w.id === e.target.value) ?? null;
-              if (ws) { setActiveWs(ws); setFlos([]); setActiveFlo(null); }
+              if (ws) { setActiveWs(ws); setFlows([]); setActiveFlow(null); }
             }}
           >
             {allWorkspaces.map(ws => (
@@ -915,14 +915,14 @@ const DesignerInner: React.FC<DesignerProps> = ({
 
         {/* Flow selector */}
         <select
-          value={activeFlo?.id ?? ''}
-          onChange={e => { const f = flos.find(x => x.id === e.target.value); if (f) openFlow(f); }}
+          value={activeFlow?.id ?? ''}
+          onChange={e => { const f = flows.find(x => x.id === e.target.value); if (f) openFlow(f); }}
           style={s.flowSelect}
         >
           <option value="" disabled>
-            {flos.length === 0 ? 'No flos yet…' : 'Select a flow…'}
+            {flows.length === 0 ? 'No flows yet…' : 'Select a flow…'}
           </option>
-          {flos.map(f => (
+          {flows.map(f => (
             <option key={f.id} value={f.id}>
               {f.isDefault ? '⭐ ' : ''}{f.name}
             </option>
@@ -954,9 +954,9 @@ const DesignerInner: React.FC<DesignerProps> = ({
         )}
 
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
-          {activeFlo?.shortCode && (
+          {activeFlow?.shortCode && (
             <span style={{ fontSize: 10, color: '#6b6b80', fontFamily: 'monospace' }}>
-              {activeFlo.shortCode}
+              {activeFlow.shortCode}
             </span>
           )}
           <span style={{ fontSize: 10, color: '#6b6b80' }}>
@@ -973,23 +973,23 @@ const DesignerInner: React.FC<DesignerProps> = ({
           )}
           <div style={s.tbSep} />
           <button
-            onClick={saveFlo}
-            disabled={saving || !activeFlo}
-            style={{ ...s.btnGhost, opacity: saving || !activeFlo ? 0.5 : 1, cursor: !activeFlo ? 'not-allowed' : 'pointer' }}
+            onClick={saveFlow}
+            disabled={saving || !activeFlow}
+            style={{ ...s.btnGhost, opacity: saving || !activeFlow ? 0.5 : 1, cursor: !activeFlow ? 'not-allowed' : 'pointer' }}
           >
             {saving ? 'Saving…' : 'Save'}
           </button>
           <button
             onClick={() => { setRunResult(null); setRunModalOpen(true); }}
-            disabled={!activeFlo}
-            style={{ ...s.btnRun, opacity: !activeFlo ? 0.6 : 1, cursor: !activeFlo ? 'not-allowed' : 'pointer' }}
+            disabled={!activeFlow}
+            style={{ ...s.btnRun, opacity: !activeFlow ? 0.6 : 1, cursor: !activeFlow ? 'not-allowed' : 'pointer' }}
           >
             ▶ Run
           </button>
           <button
             onClick={publishFlow}
-            disabled={!activeFlo}
-            style={{ ...s.btnPub, opacity: !activeFlo ? 0.5 : 1, cursor: !activeFlo ? 'not-allowed' : 'pointer' }}
+            disabled={!activeFlow}
+            style={{ ...s.btnPub, opacity: !activeFlow ? 0.5 : 1, cursor: !activeFlow ? 'not-allowed' : 'pointer' }}
           >
             Publish
           </button>
@@ -1068,7 +1068,7 @@ const DesignerInner: React.FC<DesignerProps> = ({
             <MiniMap style={{ background: '#141720', borderRadius: 8 }} nodeColor="#4f8ef7" maskColor="rgba(15,17,23,.7)" />
           </ReactFlow>
 
-          {flos.length === 0 && (
+          {flows.length === 0 && (
             <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, pointerEvents: 'none' }}>
               <div style={{ width: 52, height: 52, borderRadius: 14, background: 'rgba(79,142,247,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <svg width="22" height="22" fill="none" stroke="#4f8ef7" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
