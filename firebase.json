@@ -1,0 +1,44 @@
+{
+  "firestore": {
+    "database": "(default)",
+    "location": "nam5",
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "functions": [
+    {
+      "source": "functions",
+      "runtime": "nodejs24",
+      "codebase": "default",
+      "disallowLegacyRuntimeConfig": true,
+      "ignore": [
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log",
+        "*.local",
+        "node_modules/.cache"
+      ],
+      "predeploy": [
+        "npm --prefix packages/shared run build",
+        "cp packages/shared/dist/index.js functions/shared/index.js && cp packages/shared/dist/index.d.ts functions/shared/index.d.ts && rm -rf functions/shared/types && cp -r packages/shared/dist/types functions/shared/types",
+        "npm --prefix functions run build"
+      ]
+    }
+  ],
+  "hosting": [{
+    "target": "app",
+    "public": "frontend/dist",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "cleanUrls": true,
+    "rewrites": [
+      { "source": "/designer", "destination": "/designer.html" },
+      { "source": "/logs", "destination": "/engine-logs.html" },
+      { "source": "**", "destination": "/index.html" }
+    ]
+  }
+]
+}

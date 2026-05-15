@@ -1,0 +1,30 @@
+{
+  "projects": {
+    "dev": "floplug-dev",
+    "stage": "floplug-stage",
+    "sb": "floplug-sandbox",
+    "prod": "floplug-prod"
+  },
+  "targets": {
+    "floplug-dev": {
+      "hosting": {
+        "app": ["floplug-dev"]
+      }
+    },
+    "floplug-stage": {
+      "hosting": {
+        "app": ["floplug-stage"]
+      }
+    },
+    "floplug-sandbox": {
+      "hosting": {
+        "app": ["floplug-sandbox"]
+      }
+    },
+    "floplug-prod": {
+      "hosting": {
+        "app": ["floplug-prod"]
+      }
+    }
+  }
+}

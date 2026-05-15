@@ -1,0 +1,97 @@
+// packages/shared/src/constants/constants.ts
+// ── Firestore collection paths ────────────────────────────────────────────────
+export const COLLECTIONS = {
+    CONNECTORS: "FloPlugConnectors",
+    GLOBAL_SETTINGS: 'FloPlugGlobalSettings',
+    HUBS: 'FloPlugHubs',
+    AUTH_TYPES: 'FloPlugGlobalSettings/AuthenticationTypes',
+    FLOPLUGUSERS: 'FloPlugUsers', // product-level admin users
+};
+export const SUB_COLLECTIONS = {
+    AUTH_TYPES: 'AuthenticationTypes',
+};
+// ── Sub-collection names ──────────────────────────────────────────────────────
+export const HUB_COLLECTIONS = {
+    TENANTS: 'Tenants',
+    WORKSPACES: 'Workspaces',
+    FLOWS: 'Flows', //Deprecated do not use.
+    FLOS: 'Flos',
+    PLUGS: 'Plugs',
+    USERS: 'Users',
+    EXEC_LOG: 'ExecutionLog',
+    CONNECTORS: 'ConnectorCredentials',
+    EMAIL_LOG: 'EmailLog',
+    SCHEMAS: 'Schemas',
+};
+// ── Hub roles ─────────────────────────────────────────────────────────────────
+export const HUB_ROLES = {
+    ADMIN: 'hub_admin',
+    USER: 'user',
+};
+// ── Permissions ───────────────────────────────────────────────────────────────
+export const PERMISSIONS = {
+    MANAGE_PLUGS: 'manage:plugs',
+    MANAGE_USERS: 'manage:users',
+    RUN_FLOS: 'run:flows',
+    INVOKE_FLOS: 'invoke:flows',
+    DESIGN_FLOS: 'design:flows',
+    VIEW_LOGS: 'view:logs',
+    MANAGE_SETTINGS: 'manage:settings',
+};
+// ── Role → permissions map ────────────────────────────────────────────────────
+// Lives in shared so both validateTenantUser and hubFunctions use the same map
+export const ROLE_PERMISSIONS = {
+    [HUB_ROLES.ADMIN]: [
+        PERMISSIONS.MANAGE_PLUGS,
+        PERMISSIONS.MANAGE_USERS,
+        PERMISSIONS.RUN_FLOS,
+        PERMISSIONS.INVOKE_FLOS,
+        PERMISSIONS.DESIGN_FLOS,
+        PERMISSIONS.VIEW_LOGS,
+        PERMISSIONS.MANAGE_SETTINGS,
+    ],
+    [HUB_ROLES.USER]: [
+        PERMISSIONS.DESIGN_FLOS,
+        PERMISSIONS.VIEW_LOGS,
+        // run:flows and invoke:flows added per-user via invokePermissions
+    ],
+};
+// ── Storage purposes ──────────────────────────────────────────────────────────
+export const STORAGE_PURPOSES = {
+    SCHEMAS: 'schemas',
+    BRAND_ASSETS: 'brandAssets',
+    EXPORTS: 'exports',
+    DOCUMENTS: 'documents',
+};
+// ── Auth styles ───────────────────────────────────────────────────────────────
+export const AUTH_STYLES = {
+    HTTP_BASIC: 'httpBasic',
+    WSSE_HEADER: 'wsseHeader',
+    BEARER_TOKEN: 'bearerToken',
+    API_KEY_HEADER: 'apiKeyHeader',
+    API_KEY_QUERY: 'apiKeyQuery',
+    OAUTH2_CLIENT_CREDS: 'oauth2ClientCreds',
+};
+// ── Flow execution ────────────────────────────────────────────────────────────
+export const EXECUTION = {
+    MAX_DEPTH: 5,
+    MAX_LOOP_ITER: 1000,
+};
+// ── Node types ────────────────────────────────────────────────────────────────
+export const NODE_TYPES = {
+    START: 'startNode',
+    END: 'endNode',
+    MAPPER: 'mapperNode',
+    FILTER: 'filterNode',
+    TEMPLATE: 'templateNode',
+    FUNCTION: 'functionNode',
+    VAR_STORE: 'variableStoreNode',
+    PLUG: 'plugNode',
+    WORKDAY: 'workdayNode',
+    SALESFORCE: 'salesforceNode',
+    SAP: 'sapNode',
+    ORACLE: 'oracleNode',
+    FIF: 'fifNode',
+    LOOP: 'loopNode',
+    EMAIL: 'emailNode',
+};

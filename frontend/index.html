@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <script>
+      // This must be the VERY first thing in the head
+      window.global = window;
+      window.process = {
+        env: { NODE_ENV: 'production' },
+        browser: true,
+        version: '',
+        nextTick: function(cb) { setTimeout(cb, 0); }
+      };
+    </script>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FloPlug Admin</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

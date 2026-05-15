@@ -1,0 +1,131 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isProductAdmin() {
+      return isSignedIn() &&
+        request.auth.token.get('adminRole', '') in
+          ['product_admin', 'developer', 'admin_sales'];
+    }
+
+    function isHubAdmin() {
+      return isSignedIn() &&
+        request.auth.token.get('isHubAdmin', false) == true;
+    }
+
+    function belongsToHub(hubId, tenantId) {
+      return isSignedIn() &&
+        request.auth.token.get('hubId',    '') == hubId &&
+        request.auth.token.get('tenantId', '') == tenantId;
+    }
+
+    function hasPermission(perm) {
+      return isSignedIn() &&
+        perm in request.auth.token.get('permissions', []);
+    }
+
+    // ── CollectionGroup — Tenants slug resolution (BEFORE login) ─────────────
+    // Must be top-level with {path=**} for collectionGroup queries to work.
+    // tenantResolver.ts uses collectionGroup('Tenants') unauthenticated.
+
+    match /{path=**}/Tenants/{tenantId} {
+      allow read: if true;
+    }
+
+    // ── FloPlugGlobalSettings ─────────────────────────────────────────────────
+
+    match /FloPlugGlobalSettings/{docId} {
+      allow read:  if isSignedIn();
+      allow write: if isProductAdmin();
+
+      match /{subCol}/{subDoc} {
+        allow read:  if isSignedIn();
+        allow write: if isProductAdmin();
+
+        match /{deepCol}/{deepDoc} {
+          allow read:  if isSignedIn();
+          allow write: if isProductAdmin();
+        }
+      }
+    }
+
+    // ── FloPlugConnectors ─────────────────────────────────────────────────────
+
+    match /FloPlugConnectors/{connectorId} {
+      allow read:  if isSignedIn();
+      allow write: if isProductAdmin();
+
+      match /Schemas/{schemaId} {
+        allow read:  if isSignedIn();
+        allow write: if isProductAdmin();
+      }
+
+      match /Actions/{actionId} {
+        allow read:  if isSignedIn();
+        allow write: if isProductAdmin();
+      }
+    }
+
+    // ── FloPlugAdmins ─────────────────────────────────────────────────────────
+
+    match /FloPlugAdmins/{uid} {
+      allow read:  if isProductAdmin() || request.auth.uid == uid;
+      allow write: if isProductAdmin();
+    }
+
+    // ── FloPlugHubs ───────────────────────────────────────────────────────────
+
+    match /FloPlugHubs/{hubId} {
+      allow read:  if isSignedIn() &&
+                      request.auth.token.get('hubId', '') == hubId;
+      allow write: if isProductAdmin();
+
+      match /Tenants/{tenantId} {
+        allow read:  if true;
+        allow write: if isProductAdmin();
+
+        match /Workspaces/{wsId} {
+          allow read:  if belongsToHub(hubId, tenantId);
+          allow write: if isHubAdmin() && belongsToHub(hubId, tenantId);
+
+        match /Flows/{flowId} {
+          allow read:  if belongsToHub(hubId, tenantId);
+          allow write: if belongsToHub(hubId, tenantId) &&
+                          hasPermission('design:flows');
+          }
+          match /Flos/{floId} {
+            allow read:  if belongsToHub(hubId, tenantId);
+            allow write: if belongsToHub(hubId, tenantId) && hasPermission('design:flows');
+          }
+        }
+
+        match /Plugs/{plugId} {
+          allow read: if belongsToHub(hubId, tenantId) &&
+                         (isHubAdmin() || !('credentials' in resource.data));
+          allow write: if isHubAdmin() && belongsToHub(hubId, tenantId);
+        }
+
+        match /Users/{uid} {
+          allow read:  if belongsToHub(hubId, tenantId) ||
+                          (isSignedIn() && request.auth.uid == uid);
+          allow write: if isHubAdmin() && belongsToHub(hubId, tenantId);
+        }
+
+        match /ExecutionLog/{runId} {
+          allow read:  if belongsToHub(hubId, tenantId) &&
+                          hasPermission('view:logs');
+          allow write: if false;
+        }
+      }
+    }
+
+    // ── Deny everything else ──────────────────────────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

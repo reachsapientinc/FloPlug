@@ -1,0 +1,33 @@
+{
+  "name": "functions",
+  "type": "module",
+  "scripts": {
+    "build": "rm -rf lib && tsc",
+    "build:watch": "tsc --watch",
+    "serve": "npm run build && firebase emulators:start --only functions",
+    "shell": "npm run build && firebase functions:shell",
+    "start": "npm run shell",
+    "deploy": "firebase deploy --only functions",
+    "logs": "firebase functions:log"
+  },
+  "engines": {
+    "node": "22"
+  },
+  "main": "lib/index.js",
+  "dependencies": {
+    "@floplug/shared": "file:./shared",
+    "@xyflow/react": "^12.10.2",
+    "axios": "^1.15.0",
+    "firebase-admin": "^13.8.0",
+    "firebase-functions": "^7.0.0",
+    "nodemailer": "^8.0.7"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "@types/nodemailer": "^8.0.0",
+    "firebase-functions-test": "^3.4.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.3"
+  },
+  "private": true
+}
