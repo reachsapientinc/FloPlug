@@ -56,6 +56,10 @@ floplug-stage/
 floplug-sandbox/
 floplug-prod/
 
+# Scripts output / temp files
+
+
+
 # ── Frontend env files ────────────────────────────────────────────────────────
 frontend/.env
 frontend/.env.*

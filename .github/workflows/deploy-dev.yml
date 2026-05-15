@@ -1,0 +1,54 @@
+name: Deploy to Dev
+
+on:
+  push:
+    branches:
+      - dev
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install root dependencies
+        run: npm install
+
+      - name: Build shared
+        run: npm --prefix packages/shared run build
+
+      - name: Sync shared into functions
+        run: |
+          rm -rf functions/shared
+          mkdir -p functions/shared/dist
+          cp -r packages/shared/dist/* functions/shared/dist/
+          cp packages/shared/package.json functions/shared/package.json
+
+      - name: Build functions
+        run: npm --prefix functions run build
+
+      - name: Build frontend
+        run: npm --prefix frontend run build -- --mode development
+        env:
+          VITE_FIREBASE_API_KEY:            ${{ secrets.DEV_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN:        ${{ secrets.DEV_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID:         ${{ secrets.DEV_FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_STORAGE_BUCKET:     ${{ secrets.DEV_FIREBASE_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID:${{ secrets.DEV_FIREBASE_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID:             ${{ secrets.DEV_FIREBASE_APP_ID }}
+
+      - name: Write functions .env
+        run: echo "WEB_API_KEY=${{ secrets.DEV_WEB_API_KEY }}" > functions/.env
+
+      - name: Deploy to Firebase Dev
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.DEV_FIREBASE_SERVICE_ACCOUNT }}
+          projectId: floplug-dev
+          channelId: live
