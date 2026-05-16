@@ -57,6 +57,9 @@ const emptyField = (): AuthProtocolField => ({
 const emptyForm = (): ConnectorDoc => ({
   id: '', label: '', category: 'ERP',
   supportedAuthTypes: [], description: '', isActive: true,
+  eligibleForPreDefinedNodes: false,
+  tierControlled:             false,
+  availableForTiers:          [],
 });
 
 // ── KV editor ────────────────────────────────────────────────────────────────
@@ -202,6 +205,7 @@ const ConnectorManagement: React.FC = () => {
   const [error,        setError]        = useState('');
   const [successMsg,   setSuccessMsg]   = useState('');
   const [expandedAuth, setExpandedAuth] = useState<string | null>(null);
+  const [availableTiers, setAvailableTiers] = useState<{ id: string; tierName: string }[]>([]);
 
   const grantTypes = [...new Set(authTypes.map(p => p.grantType).filter(Boolean))];
   // const accent = (p: AuthProtocol | ConnectorDoc) =>
@@ -229,6 +233,11 @@ const ConnectorManagement: React.FC = () => {
         const d = authSnap.data();
         const raw = (d.authProtocols ?? d.authTypes ?? []) as AuthProtocol[];
         setAuthTypes(raw.filter((p: AuthProtocol) => p.isActive));
+        const tierSnap = await getDocs(collection(db, 'FloPlugTiers'));
+        setAvailableTiers(tierSnap.docs.map(d => ({
+          id:       d.id,
+          tierName: (d.data().tierName as string) ?? d.id,
+        })));
       }
     } catch (e: any) {
       console.error('[ConnectorMgmt] Load failed:', e);
@@ -292,11 +301,14 @@ const ConnectorManagement: React.FC = () => {
     setSaving(true);
     try {
       const payload: Record<string, any> = {
-        id: connId, label: form.label.trim(), category: form.category,
-        supportedAuthTypes: form.supportedAuthTypes,
-        description: form.description.trim(), isActive: form.isActive,
-        updatedAt: serverTimestamp(),
-      };
+          id: connId, label: form.label.trim(), category: form.category,
+          supportedAuthTypes: form.supportedAuthTypes,
+          description: form.description.trim(), isActive: form.isActive,
+          eligibleForPreDefinedNodes: form.eligibleForPreDefinedNodes ?? false,
+          tierControlled:             form.tierControlled             ?? false,
+          availableForTiers:          form.availableForTiers          ?? [],
+          updatedAt: serverTimestamp(),
+        };
       if (cleanOv) payload.authOverride = cleanOv;
 
       await setDoc(doc(db, 'FloPlugConnectors', connId), payload, { merge: true });
@@ -404,6 +416,84 @@ const ConnectorManagement: React.FC = () => {
                   value={form.description} placeholder="Brief description…"
                   onChange={e => patch({ description: e.target.value })} />
               </div>
+              {/* ── FloKit / PreDefinedNode eligibility ────────────────────────── */}
+                <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div style={s.secTitle} >PreDefined Nodes &amp; Tier Control</div>
+
+                  {/* eligibleForPreDefinedNodes */}
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+                    <div
+                      onClick={() => patch({ eligibleForPreDefinedNodes: !form.eligibleForPreDefinedNodes })}
+                      style={{ ...s.toggle, ...(form.eligibleForPreDefinedNodes ? s.toggleOn : {}) }}>
+                      <div style={{ ...s.toggleThumb, ...(form.eligibleForPreDefinedNodes ? s.toggleThumbOn : {}) }} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 12, color: form.eligibleForPreDefinedNodes ? '#f0f0f4' : '#6b6b80', fontWeight: 500 }}>
+                        Eligible for PreDefined Nodes
+                      </div>
+                      <div style={{ fontSize: 10, color: '#45455a', marginTop: 1 }}>
+                        Enables FloKit and PreDefinedNode creation for this connector
+                      </div>
+                    </div>
+                  </label>
+
+                  {/* tierControlled */}
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+                    <div
+                      onClick={() => patch({ tierControlled: !form.tierControlled })}
+                      style={{ ...s.toggle, ...(form.tierControlled ? s.toggleOn : {}) }}>
+                      <div style={{ ...s.toggleThumb, ...(form.tierControlled ? s.toggleThumbOn : {}) }} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 12, color: form.tierControlled ? '#f0f0f4' : '#6b6b80', fontWeight: 500 }}>
+                        Tier Controlled
+                      </div>
+                      <div style={{ fontSize: 10, color: '#45455a', marginTop: 1 }}>
+                        Access to this connector is gated by hub tier
+                      </div>
+                    </div>
+                  </label>
+
+                  {/* availableForTiers — only shown when tierControlled is on */}
+                  {form.tierControlled && (
+                    <div style={{ marginLeft: 44 }}>
+                      <div style={{ fontSize: 10, color: '#9090a0', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                        Available for Tiers
+                      </div>
+                      {availableTiers.length === 0 ? (
+                        <div style={{ fontSize: 11, color: '#45455a', fontStyle: 'italic' }}>
+                          No tiers found — create tiers in Tier Management first.
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          {availableTiers.map(t => {
+                            const selected = (form.availableForTiers ?? []).includes(t.id);
+                            return (
+                              <button
+                                key={t.id}
+                                type="button"
+                                onClick={() => patch({
+                                  availableForTiers: selected
+                                    ? (form.availableForTiers ?? []).filter(id => id !== t.id)
+                                    : [...(form.availableForTiers ?? []), t.id],
+                                })}
+                                style={{
+                                  padding: '5px 12px', borderRadius: 20, fontSize: 11, cursor: 'pointer',
+                                  border: `0.5px solid ${selected ? 'rgba(79,142,247,0.5)' : 'rgba(255,255,255,0.1)'}`,
+                                  background: selected ? 'rgba(79,142,247,0.15)' : 'rgba(255,255,255,0.03)',
+                                  color: selected ? '#4f8ef7' : '#6b6b80',
+                                  fontFamily: 'inherit',
+                                }}
+                              >
+                                {selected ? '✓ ' : ''}{t.tierName}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
             </div>
 
             {/* Supported Auth Types */}

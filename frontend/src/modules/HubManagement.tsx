@@ -17,7 +17,7 @@ import { getFunctions, httpsCallable }  from 'firebase/functions';
 import { db }                           from '../firebaseConfig';
 import { collection, getDocs, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import type { HubDoc, HubBranding }     from '@floplug/shared';
-
+import {COLLECTIONS,HUB_COLLECTIONS} from '@floplug/shared';
 const ACCENT_PRESETS = [
   '#4f8ef7','#cc0000','#0066cc','#16a34a',
   '#d97706','#7c3aed','#0f766e','#db2777',
@@ -84,7 +84,7 @@ const BrandingEditor: React.FC<BrandingEditorProps> = ({ hub, onSaved }) => {
       );
 
       const updates = tenantsSnap.docs.map(tenantDoc =>
-        updateDoc(doc(db, 'FloPlugHubs', hub.id, 'Tenants', tenantDoc.id), {
+        updateDoc(doc(db, COLLECTIONS.HUBS, hub.id, HUB_COLLECTIONS.TENANTS, tenantDoc.id), {
           'branding.displayTitle': branding.displayTitle,
           'branding.accentColor':  branding.accentColor,
           ...(branding.logoBase64 ? { 'branding.logoBase64': branding.logoBase64 } : {}),
@@ -387,7 +387,7 @@ const HubManagement: React.FC = () => {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const snap = await getDocs(collection(db, 'FloPlugHubs'));
+      const snap = await getDocs(collection(db, COLLECTIONS.HUBS));
       const loaded = snap.docs
         .map(d => ({ id: d.id, ...d.data() } as HubDoc))
         .sort((a, b) => a.hubName.localeCompare(b.hubName));

@@ -8,8 +8,9 @@ service cloud.firestore {
 
     function isProductAdmin() {
       return isSignedIn() &&
-        request.auth.token.get('adminRole', '') in
-          ['product_admin', 'developer', 'admin_sales'];
+        request.auth.token.get('role', '') in
+          ['product_admin', 'developer', 'admin_sales'] && 
+          request.auth.token.get('isAdmin', 'false') == true;
     }
 
     function isHubAdmin() {
@@ -77,11 +78,17 @@ service cloud.firestore {
       allow write: if isProductAdmin();
     }
 
+    //---FloPlugTiers
+    match /FloPlugTiers/{tierId} {
+      allow read:  if isProductAdmin() || request.auth.uid == uid;
+      allow write: if isProductAdmin();
+    }
+
     // ── FloPlugHubs ───────────────────────────────────────────────────────────
 
     match /FloPlugHubs/{hubId} {
-      allow read:  if isSignedIn() &&
-                      request.auth.token.get('hubId', '') == hubId;
+      allow read:  if (isProductAdmin() || isSignedIn() &&
+                      request.auth.token.get('hubId', '') == hubId);
       allow write: if isProductAdmin();
 
       match /Tenants/{tenantId} {

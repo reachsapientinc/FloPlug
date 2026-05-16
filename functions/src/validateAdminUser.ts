@@ -22,6 +22,7 @@ import type { AdminUser, ValidateAdminData }      from './types/types.ts';
 import { toAdminRole, toFloPlugEnvArray } from '@floplug/shared';
 import './constants.js';
 import { ADMIN_ROLE } from './constants.js';
+import {COLLECTIONS} from '@floplug/shared';
 const db = getFirestore();
 
 /**
@@ -61,7 +62,7 @@ export const validateAdminUser = onCall<ValidateAdminData>(
 
   // 2. Check FloPlugUsers — all product users live in this single collection
   const snap = await db
-    .collection('FloPlugUsers')
+    .collection(COLLECTIONS.FLOPLUGUSERS)
     .where('email',    '==', email)
     .where('isActive', '==', true)
     .limit(1)
