@@ -80,6 +80,7 @@ const PlugNode: React.FC<{ id: string; data: PlugNodeData; selected: boolean }> 
         minWidth: 160, minHeight: 80,
         width: '100%', height: '100%',
         boxSizing: 'border-box' as const,
+        overflow: 'visible',
         fontFamily: "'Inter',-apple-system,sans-serif",
         display: 'flex', flexDirection: 'column' as const, gap: 5,
       }}>

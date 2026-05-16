@@ -49,9 +49,8 @@ export const BaseNode: React.FC<BaseNodeProps> = ({
   const outerStyle: React.CSSProperties = fillContainer
     ? {
         width:         width  ?? 260,
-        height:        height ?? 220,
+        minHeight:     height ?? 120,
         minWidth:      160,
-        minHeight:     80,
         boxSizing:     'border-box',
         display:       'flex',
         flexDirection: 'column',
@@ -64,7 +63,7 @@ export const BaseNode: React.FC<BaseNodeProps> = ({
         fontFamily:    "'Inter',-apple-system,sans-serif",
         fontSize:      11,
         color:         '#d0d0e0',
-        overflow:      'hidden',
+        overflow:      'visible',
       }
     : {
         width:         '100%',
@@ -78,6 +77,7 @@ export const BaseNode: React.FC<BaseNodeProps> = ({
         fontFamily:    "'Inter',-apple-system,sans-serif",
         fontSize:      11,
         color:         '#d0d0e0',
+        overflow:      'visible',       // allow NodeDrawer to expand node height
       };
 
   return (
@@ -122,7 +122,7 @@ export const BaseNode: React.FC<BaseNodeProps> = ({
 
       {/* Content — grows to fill remaining height when fillContainer */}
       <div style={fillContainer
-        ? { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }
+        ? { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'visible', minHeight: 0 }
         : {}
       }>
         {children}

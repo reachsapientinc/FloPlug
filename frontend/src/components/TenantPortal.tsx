@@ -4,7 +4,7 @@ import { useTenantAuth } from '../hooks/useTenantAuth';
 import TenantLogin from './TenantLogin';
 
 // Lazy-load the designer so it only runs after auth is confirmed
-const Designer = lazy(() => import('./Designer'));
+const Designer = lazy(() => import('./Designer.tsx'));
 
 interface Props {
   tenant: TenantConfig | null;
@@ -95,10 +95,12 @@ const Spinner: React.FC<{ label?: string }> = ({ label = 'Loading…' }) => (
 // Authenticated portal shell
 // ─────────────────────────────────────────────────────────
 const AuthenticatedShell: React.FC<{
-  tenant: TenantConfig;
-  user: import('../types/types.ts').TenantUser;
-  logout: () => void;
-}> = ({ tenant, user, logout }) => {
+  tenant:      TenantConfig;
+  user:        import('../types/types.ts').TenantUser;
+  permissions: string[];
+  isHubAdmin:  boolean;
+  logout:      () => void;
+}> = ({ tenant, user, permissions, isHubAdmin, logout }) => {
   const displayName = tenant.branding?.displayTitle || tenant.tenantName;
   const envLabel    = tenant.env.toUpperCase();
   const initials    = (user.displayName ?? user.email).slice(0, 2).toUpperCase();
@@ -177,8 +179,11 @@ const AuthenticatedShell: React.FC<{
             tenantId={tenant.tenantId}
             tenantType={tenant.tenantType}
             userId={user.uid}
+            userRole={user.role}
             workspaceIds={user.workspaceIds}
-            isAdmin={user.role.toLowerCase() === 'hub_admin' || user.role.toLowerCase() === 'admin'} 
+            isAdmin={isHubAdmin}
+            permissions={permissions}
+            onSignOut={logout}
           />
         </Suspense>
       </div>
@@ -196,7 +201,7 @@ const AuthenticatedShell: React.FC<{
 // Main TenantPortal
 // ─────────────────────────────────────────────────────────
 const TenantPortal: React.FC<Props> = ({ tenant }) => {
-  const { user, loading, error, login, logout } = useTenantAuth(tenant);
+  const { user, loading, error, login, logout, permissions, isHubAdmin } = useTenantAuth(tenant);
 
   if (!tenant) return <NotFound />;
 
@@ -215,7 +220,7 @@ const TenantPortal: React.FC<Props> = ({ tenant }) => {
     );
   }
 
-  return <AuthenticatedShell tenant={tenant} user={user} logout={logout} />;
+  return <AuthenticatedShell tenant={tenant} user={user} permissions={permissions} isHubAdmin={isHubAdmin} logout={logout} />;
 };
 
 export default TenantPortal;

@@ -783,14 +783,17 @@ interface Props {
   hubId:          string;
   tenantId:       string;
   userId:         string;
-  isAdmin:        boolean;  // boolean from parent — derived from signed token claim
-                            // PlugManager never knows what role string means admin
-  onPlugCreated?: (plug: PlugSummary) => void; // called after savePlug so Designer
-                                               // updates palette immediately
+  isAdmin:        boolean;
+  onPlugCreated?: (plug: PlugSummary) => void;
+  /** When set, forces a specific tab and hides the tab switcher header.
+   *  Used by HubAdminDashboard to show Plugs-only or Users-only. */
+  section?:       'plugs' | 'users';
+  /** When true, renders in light/white theme to match the admin dashboard */
+  lightTheme?:    boolean;
 }
 
-const PlugManager: React.FC<Props> = ({ hubId, tenantId, userId, isAdmin, onPlugCreated }) => {
-  const [tab,         setTab]         = useState<'plugs' | 'users'>('plugs');
+const PlugManager: React.FC<Props> = ({ hubId, tenantId, userId, isAdmin, onPlugCreated, section, lightTheme = false }) => {
+  const [tab,         setTab]         = useState<'plugs' | 'users'>(section ?? 'plugs');
   const [plugs,       setPlugs]       = useState<PlugSummary[]>([]);
   const [users,       setUsers]       = useState<TenantUser[]>([]);
   const [flos,        setFlos]       = useState<FloMeta[]>([]);
@@ -829,25 +832,29 @@ const PlugManager: React.FC<Props> = ({ hubId, tenantId, userId, isAdmin, onPlug
 
   return (
     <>
-      <div style={css.panel}>
-        {/* Tab header */}
-        <div style={css.panelHeader}>
-          <span style={{ fontSize: 12, fontWeight: 700, color: '#f0f0f4' }}>Hub Manager</span>
-          <div style={{ display: 'flex', gap: 2, marginLeft: 12 }}>
-            {(['plugs', 'users'] as const).map(t => (
-              <button key={t} onClick={() => setTab(t)} style={{
-                padding: '4px 12px', borderRadius: 5, border: 'none',
-                background: tab === t ? 'rgba(79,142,247,0.15)' : 'transparent',
-                color: tab === t ? '#4f8ef7' : '#6b6b80',
-                fontSize: 11, fontWeight: tab === t ? 600 : 400,
-                cursor: 'pointer', fontFamily: 'inherit', textTransform: 'capitalize',
-              }}>{t}</button>
-            ))}
+      <div style={lightTheme ? lCss.panel : css.panel}>
+        {/* Tab header — hidden when section is forced by parent (HubAdminDashboard) */}
+        {!section && (
+          <div style={lightTheme ? lCss.panelHeader : css.panelHeader}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: lightTheme ? '#111827' : '#f0f0f4' }}>Hub Manager</span>
+            <div style={{ display: 'flex', gap: 2, marginLeft: 12 }}>
+              {(['plugs', 'users'] as const).map(t => (
+                <button key={t} onClick={() => setTab(t)} style={{
+                  padding: '4px 12px', borderRadius: 5, border: 'none',
+                  background: tab === t
+                    ? (lightTheme ? '#EBF2FF' : 'rgba(79,142,247,0.15)')
+                    : 'transparent',
+                  color: tab === t ? '#1a56db' : (lightTheme ? '#6B7280' : '#6b6b80'),
+                  fontSize: 11, fontWeight: tab === t ? 600 : 400,
+                  cursor: 'pointer', fontFamily: 'inherit', textTransform: 'capitalize',
+                }}>{t}</button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Content */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px' }}>
+        <div style={lightTheme ? lCss.content : { flex: 1, overflowY: 'auto', padding: '12px 16px' }}>
           {loading ? (
             <div style={{ fontSize: 12, color: '#45455a', padding: 20, textAlign: 'center' }}>Loading…</div>
           ) : loadError ? (
@@ -870,12 +877,12 @@ const PlugManager: React.FC<Props> = ({ hubId, tenantId, userId, isAdmin, onPlug
               {plugs.map(plug => {
                 const proto = protocols.find(p => p.name === plug.authProtocol);
                 return (
-                  <div key={plug.id} style={css.card(plug.isActive)}>
+                  <div key={plug.id} style={lightTheme ? lCss.card(plug.isActive) : css.card(plug.isActive)}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                       <div style={{ width: 36, height: 36, borderRadius: 8, flexShrink: 0, background: 'rgba(79,142,247,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16 }}>🔌</div>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-                          <span style={{ fontSize: 12, fontWeight: 600, color: plug.isActive ? '#d0d0dc' : '#45455a' }}>{plug.name}</span>
+                          <span style={{ fontSize: 12, fontWeight: 600, color: plug.isActive ? (lightTheme ? '#111827' : '#d0d0dc') : (lightTheme ? '#9CA3AF' : '#45455a') }}>{plug.name}</span>
                           <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 3, background: 'rgba(255,255,255,0.05)', color: '#6b6b80' }}>{plug.connectorLabel ?? plug.connectorId}</span>
                           {!plug.isActive && <span style={{ fontSize: 8, padding: '1px 5px', borderRadius: 3, background: 'rgba(248,113,113,0.12)', color: '#f87171' }}>INACTIVE</span>}
                         </div>
@@ -921,7 +928,7 @@ const PlugManager: React.FC<Props> = ({ hubId, tenantId, userId, isAdmin, onPlug
                 const roleLabel  = ROLE_DISPLAY[(u.role as string)] ?? ROLE_DISPLAY['user'];
 
                 return (
-                  <div key={u.uid} style={css.card(u.isActive ?? true)}>
+                  <div key={u.uid} style={lightTheme ? lCss.card(u.isActive ?? true) : css.card(u.isActive ?? true)}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                       <div style={{
                         width: 34, height: 34, borderRadius: '50%', flexShrink: 0,
@@ -1032,6 +1039,20 @@ const css = {
     background: '#1a1d27',
     border: `0.5px solid ${active ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.04)'}`,
     borderRadius: 8, padding: '10px 12px', marginBottom: 8, opacity: active ? 1 : 0.6,
+  }),
+};
+
+// ── Light theme styles (for HubAdminDashboard) ───────────────────────────────
+const lCss = {
+  panel:   { display: 'flex', flexDirection: 'column', height: '100%', background: '#fff', fontFamily: "'Inter',-apple-system,sans-serif", borderRadius: 12 } as React.CSSProperties,
+  panelHeader: { height: 46, background: '#F9FAFB', borderBottom: '1px solid #E5E7EB', display: 'flex', alignItems: 'center', padding: '0 16px', gap: 10, flexShrink: 0, borderRadius: '12px 12px 0 0' } as React.CSSProperties,
+  content: { flex: 1, overflowY: 'auto', padding: '16px 20px' } as React.CSSProperties,
+  card:    (active: boolean): React.CSSProperties => ({
+    background: active ? '#fff' : '#F9FAFB',
+    border: `1px solid ${active ? '#E5E7EB' : '#F3F4F6'}`,
+    borderRadius: 10, padding: '12px 14px', marginBottom: 10,
+    opacity: active ? 1 : 0.65,
+    boxShadow: active ? '0 1px 3px rgba(0,0,0,0.06)' : 'none',
   }),
 };
 

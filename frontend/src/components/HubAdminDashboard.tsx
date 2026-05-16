@@ -24,6 +24,7 @@
 
 import React, { useState } from 'react';
 import { PERMISSIONS } from '@floplug/shared';
+import PlugManager     from './PlugManager';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 export interface HubAdminDashboardProps {
@@ -113,40 +114,44 @@ const PlaceholderSection: React.FC<{
   </div>
 );
 
-// ── Plugs placeholder ─────────────────────────────────────────────────────────
-const PlugsSection: React.FC<{ hubId: string; tenantId: string }> = () => (
-  <PlaceholderSection
-    icon="🔌"
-    title="Plug Management"
-    description="Create and manage plug configurations. Admins set up credentials once — developers use plugs on the canvas without ever seeing sensitive values."
-    badge="COMING SOON"
-    bullets={[
-      'Create plugs with SMTP, REST, SOAP, SFTP and storage connectors',
-      'Edit plug credentials and URL patterns',
-      'Deactivate plugs without deleting — removes from palette immediately',
-      'Per-plug usage stats — which flos use this plug and how often',
-      'Credential rotation with zero-downtime — update credentials while flos keep running',
-    ]}
-  />
+// ── Plugs section — uses existing PlugManager component ──────────────────────
+const PlugsSection: React.FC<{ hubId: string; tenantId: string; userId: string }> = ({ hubId, tenantId, userId }) => (
+  <div style={{
+    background: '#fff', border: '1px solid #E5E7EB',
+    borderRadius: 12, overflow: 'hidden',
+    boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+    minHeight: 500,
+  }}>
+    <PlugManager
+      hubId={hubId}
+      tenantId={tenantId}
+      userId={userId}
+      isAdmin={true}
+      section="plugs"
+      lightTheme={true}
+    />
+  </div>
 );
 
-// ── Users placeholder ─────────────────────────────────────────────────────────
-const UsersSection: React.FC<{ hubId: string; tenantId: string }> = () => (
-  <PlaceholderSection
-    icon="👥"
-    title="User Management"
-    description="Invite and manage hub users. Assign roles and workspace access. Deactivate users without losing their flo history."
-    badge="COMING SOON"
-    bullets={[
-      'Invite users by email — they receive a setup link',
-      'Assign hub_admin or user role per user',
-      'Control workspace access — which workspaces each user can see',
-      'Set per-user flo invoke permissions (run:flos, invoke:flos)',
-      'Deactivate users — blocks login while preserving audit trail',
-      'Force password reset on next login',
-    ]}
-  />
+const UsersManagementSection: React.FC<{ hubId: string; tenantId: string; userId: string }> = ({ hubId, tenantId, userId }) => (
+  <div style={{
+    background: '#fff', border: '1px solid #E5E7EB',
+    borderRadius: 12, overflow: 'hidden',
+    boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+    minHeight: 500,
+  }}>
+    <PlugManager
+      hubId={hubId}
+      tenantId={tenantId}
+      userId={userId}
+      isAdmin={true}
+      section="users"
+      lightTheme={true}
+    />
+  </div>
 );
+
+// UsersSection replaced by UsersManagementSection using PlugManager with section='users'
 
 // ── Scheduler placeholder ─────────────────────────────────────────────────────
 const SchedulerSection: React.FC = () => (
@@ -203,30 +208,7 @@ const ExecutionsSection: React.FC = () => (
   />
 );
 
-// ── Stats bar ─────────────────────────────────────────────────────────────────
-const StatsBar: React.FC<{ hubId: string; tenantId: string }> = ({ hubId, tenantId }) => (
-  <div style={{
-    display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)',
-    gap: 16, marginBottom: 32,
-  }}>
-    {[
-      { label: 'Active Plugs',      value: '—', color: '#1a56db' },
-      { label: 'Active Users',      value: '—', color: '#059669' },
-      { label: 'Runs Today',        value: '—', color: '#7C3AED' },
-      { label: 'Scheduled Flos',    value: '—', color: '#D97706' },
-    ].map(stat => (
-      <div key={stat.label} style={{
-        background: '#fff', border: '1px solid #E5E7EB',
-        borderRadius: 12, padding: '20px 24px',
-        boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
-      }}>
-        <div style={{ fontSize: 13, color: '#6B7280', marginBottom: 6, fontWeight: 500 }}>{stat.label}</div>
-        <div style={{ fontSize: 28, fontWeight: 800, color: stat.color, lineHeight: 1 }}>{stat.value}</div>
-        <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 4 }}>Live data coming soon</div>
-      </div>
-    ))}
-  </div>
-);
+
 
 // ── Main dashboard ────────────────────────────────────────────────────────────
 const HubAdminDashboard: React.FC<HubAdminDashboardProps> = ({
@@ -412,14 +394,11 @@ const HubAdminDashboard: React.FC<HubAdminDashboardProps> = ({
             </div>
           </div>
 
-          {/* Stats bar on overview tabs */}
-          {(effectiveTab === 'plugs' || effectiveTab === 'users') && (
-            <StatsBar hubId={hubId} tenantId={tenantId} />
-          )}
+          {/* Stats bars removed — each section manages its own list and counts */}
 
           {/* Section content */}
-          {effectiveTab === 'plugs'      && <PlugsSection hubId={hubId} tenantId={tenantId} />}
-          {effectiveTab === 'users'      && <UsersSection hubId={hubId} tenantId={tenantId} />}
+          {effectiveTab === 'plugs'      && <PlugsSection hubId={hubId} tenantId={tenantId} userId={userId} />}
+          {effectiveTab === 'users'      && <UsersManagementSection hubId={hubId} tenantId={tenantId} userId={userId} />}
           {effectiveTab === 'scheduler'  && <SchedulerSection />}
           {effectiveTab === 'keys'       && <KeysSection />}
           {effectiveTab === 'executions' && <ExecutionsSection />}

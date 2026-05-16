@@ -8,6 +8,8 @@ export interface DesignerProps {
   workspaceIds: string[];
   floId?:      string;
   isAdmin?:     boolean;
+  permissions?: string[];    // ← ADD
+  onSignOut?:   () => void;
 }
 
 export interface WorkspaceMeta {
