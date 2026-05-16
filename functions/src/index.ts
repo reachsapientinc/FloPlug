@@ -28,6 +28,10 @@ export { resolveActionSchema } from './utils/resolveActionSchema.js';
 export { invokeFlo } from './services/floWebhook.js';
 import { db } from './utils/firebase.js';
 import { executeFloNodes} from './engine/executeFloNodes.js';
+import { executeEmailNode } from './nodes/emailNode.js';
+import { executePlugNode }   from './nodes/plugNode.js';
+import { wrapMessage }       from './nodes/cStreamMeta.js';
+
 export { executeEmailNode } from './nodes/emailNode.js';
 
 // ── Re-exports ────────────────────────────────────────────────────────────────
@@ -281,6 +285,73 @@ export const executeOracleAction = onCall<{
     timestamp: FieldValue.serverTimestamp(), status: 'success',
   });
   return { success: true, message: `Oracle ${action} completed` };
+});
+
+// ── testPlugNode — run one plug with custom cStream input (Designer node test) ─
+export const testPlugNode = onCall<{
+  hubId:      string;
+  tenantId:   string;
+  plugId:     string;
+  inputJson:  Record<string, unknown>;
+  nodeConfig: Record<string, unknown>;
+}>(async (request) => {
+  requireAuth(request);
+  const { hubId, tenantId, plugId, inputJson = {}, nodeConfig = {} } = request.data;
+
+  if (!hubId || !tenantId || !plugId) {
+    throw new HttpsError('invalid-argument', 'hubId, tenantId, and plugId are required');
+  }
+
+  const store = { global: {} as Record<string, unknown>, local: {} as Record<string, unknown> };
+
+  // Same canonical shape as executeFloNodes start node
+  const cStream =
+    typeof inputJson === 'object' && inputJson !== null && 'message' in inputJson
+      ? (inputJson as Record<string, unknown>)
+      : (wrapMessage(inputJson, { source: 'testPlugNode' }) as Record<string, unknown>);
+
+  const isEmail =
+    nodeConfig.authProtocol === 'smtp_basic' || nodeConfig.nodeType === 'emailNode';
+
+  const nd: Record<string, unknown> = {
+    hubId,
+    tenantId,
+    plugId,
+    id:            'test-plug-node',
+    urlVariables:  nodeConfig.urlVariables,
+    emailBindings: nodeConfig.emailBindings,
+    outputTarget:  nodeConfig.outputTarget ?? 'cStream',
+    outputVarName: nodeConfig.outputVarName ?? '',
+    method:        nodeConfig.method,
+    authProtocol:  nodeConfig.authProtocol,
+    nodeType:      nodeConfig.nodeType,
+  };
+
+  try {
+    const { cStream: output, logLine } = isEmail
+      ? await executeEmailNode(cStream, nd, store)
+      : await executePlugNode(cStream, nd, store);
+
+    await db.collection(
+      `${COLLECTIONS.HUBS}/${hubId}/${HUB_COLLECTIONS.TENANTS}/${tenantId}/${HUB_COLLECTIONS.EXEC_LOG}`,
+    ).add({
+      type:      'plug_test',
+      plugId,
+      timestamp: FieldValue.serverTimestamp(),
+      status:    'success',
+    });
+
+    return {
+      success: true,
+      message: logLine,
+      logLine,
+      output,
+      store,
+    };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new HttpsError('internal', message);
+  }
 });
 
 //------------------

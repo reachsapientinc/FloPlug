@@ -17,7 +17,7 @@
  *  8. All previous fixes retained.
  */
 
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import {
   ReactFlow,
   useNodesState,
@@ -55,6 +55,10 @@ import TemplateNode                                                    from './n
 import { LoopNode }                                                    from './nodes/LoopNode';
 import { StartNode, EndNode }                                          from './nodes/StartEndNodes';
 import { NodeInspector, NodePalette }                                  from './NodePaletteAndInspector';
+import type { DesignerInspectorContext }                               from '../inspector/types';
+import { nodesForNodeTest, edgesForNodeTest }                          from '../inspector/testSubgraph';
+import { testConnectorNode }                                           from '../inspector/connectorTest';
+import { testPlugNode }                                                from '../inspector/plugTest';
 import { RunModal, type RunResult }                                    from './RunModal';
 import PlugManager                                                     from './PlugManager.tsx';
 import type { PlugConfig,
@@ -221,7 +225,7 @@ const makeDefaultNodes = (): Node[] => [
 ];
 
 // ── Node sanitiser ────────────────────────────────────────────────────────────
-const STRIP_KEYS = new Set(['functions', 'onLogEntry', 'onUpdate', 'onDelete', '__rf', 'measured', 'availablePlugs']);
+const STRIP_KEYS = new Set(['functions', 'onLogEntry', 'onUpdate', 'onDelete', '__rf', 'measured', 'availablePlugs', 'availableFlos']);
 
 function sanitizeNode(node: Node): Node {
   const cleanData: Record<string, unknown> = {};
@@ -365,6 +369,8 @@ const DesignerInner: React.FC<DesignerProps> = ({
   const [runResult,        setRunResult]                 = useState<RunResult | null>(null);
   const [adminPanelOpen,   setAdminPanelOpen]            = useState(false);
   const [plugs,            setPlugs]                     = useState<PlugConfig[]>([]);
+  const [testingNodeId,    setTestingNodeId]               = useState<string | null>(null);
+  const lastRunInputRef    = useRef<Record<string, unknown>>({});
 
   // Branding — logo URL + display name loaded from hub doc
   const [hubLogoUrl,  setHubLogoUrl]  = useState<string>('');
@@ -517,6 +523,86 @@ const DesignerInner: React.FC<DesignerProps> = ({
     );
   }, []);
 
+  const floList = useMemo(
+    () => flos.map(f => ({ id: f.id, name: f.name })),
+    [flos],
+  );
+
+  const testNode = useCallback(async (nodeId: string) => {
+    const node = nodesRef.current.find(n => n.id === nodeId);
+    if (!node || node.type === 'startNode' || node.type === 'endNode') return;
+
+    setTestingNodeId(nodeId);
+    updateNodeData(nodeId, { _loading: true, _result: 'Running…', _isError: false });
+
+    try {
+      if (await testConnectorNode(functions, hubId, tenantId, node, updateNodeData)) {
+        return;
+      }
+      if (await testPlugNode(functions, hubId, tenantId, node, updateNodeData)) {
+        return;
+      }
+
+      if (!activeFlo) {
+        updateNodeData(nodeId, {
+          _loading: false,
+          _result: 'Open a flow to test transform/logic nodes, or use connector/plug test.',
+          _isError: true,
+        });
+        return;
+      }
+
+      const subgraphNodes = nodesForNodeTest(nodesRef.current, edgesRef.current, nodeId);
+      const ids = new Set(subgraphNodes.map(n => n.id));
+      const subgraphEdges = edgesForNodeTest(edgesRef.current, ids);
+
+      const fn = httpsCallable<
+        { hubId: string; tenantId: string; wsId: string; floId: string;
+          nodes: Node[]; edges: Edge[]; inputJson: Record<string, unknown>; },
+        { log: string[]; status: string; output: Record<string, unknown> | null }
+      >(functions, 'executeFlo');
+
+      const res = await fn({
+        hubId, tenantId,
+        wsId:   activeWs?.id ?? '',
+        floId:  activeFlo.id,
+        nodes:  sanitizeNodes(subgraphNodes) as unknown as Node[],
+        edges:  sanitizeEdges(subgraphEdges) as unknown as Edge[],
+        inputJson: lastRunInputRef.current,
+      });
+
+      const log = res.data.log ?? [];
+      const snippet = log.slice(-8).join('\n');
+      const hasError = res.data.status === 'error' || log.some(l => l.startsWith('Error'));
+      updateNodeData(nodeId, {
+        _loading: false,
+        _result: hasError ? snippet : `✓ Test complete\n${snippet}`,
+        _isError: hasError,
+      });
+    } catch (err: any) {
+      updateNodeData(nodeId, {
+        _loading: false,
+        _result: err.message ?? String(err),
+        _isError: true,
+      });
+    } finally {
+      setTestingNodeId(null);
+    }
+  }, [activeFlo, activeWs, functions, hubId, tenantId, updateNodeData]);
+
+  const inspectorCtx: DesignerInspectorContext = useMemo(() => ({
+    functions,
+    hubId,
+    tenantId,
+    flos:          floList,
+    activeFloId:   activeFlo?.id ?? null,
+    nodes,
+    edges,
+    lastRunInput:  lastRunInputRef.current,
+    onTestNode:    testNode,
+    testingNodeId,
+  }), [functions, hubId, tenantId, floList, activeFlo?.id, nodes, edges, testNode, testingNodeId]);
+
   const deleteNode = useCallback((nodeId: string) => {
     setNodes(prev => {
       const node = prev.find(n => n.id === nodeId);
@@ -562,6 +648,7 @@ const DesignerInner: React.FC<DesignerProps> = ({
           ...(n.type === 'plugNode' ? {
             _placeholders: getPlugPlaceholders(n.data?.category as string),
           } : {}),
+          availableFlos: flos.map(f => ({ id: f.id, name: f.name })),
         },
       }));
 
@@ -677,6 +764,7 @@ const DesignerInner: React.FC<DesignerProps> = ({
     }
 
     setRunning(true);
+    lastRunInputRef.current = inputJson;
     try {
       const fn = httpsCallable<
         { hubId: string; tenantId: string; wsId: string; floId: string;
@@ -765,13 +853,22 @@ const DesignerInner: React.FC<DesignerProps> = ({
     e.preventDefault(); e.dataTransfer.dropEffect = 'move';
   }, []);
 
+  const COMPACT_NODE = { width: 172, height: 64 };
   const RESIZABLE_DEFAULTS: Record<string, { width: number; height: number }> = {
-    templateNode: { width: 260, height: 220 },
-    plugNode:     { width: 200, height: 120 },
-    loopNode:     { width: 280, height: 200 },
-    fifNode:      { width: 260, height: 180 },
-    functionNode: { width: 260, height: 200 },
-    endNode:      { width: 240, height: 160 },
+    startNode:         COMPACT_NODE,
+    endNode:           COMPACT_NODE,
+    plugNode:          COMPACT_NODE,
+    workdayNode:       COMPACT_NODE,
+    salesforceNode:    COMPACT_NODE,
+    sapNode:           COMPACT_NODE,
+    oracleNode:        COMPACT_NODE,
+    mapperNode:        COMPACT_NODE,
+    filterNode:        COMPACT_NODE,
+    variableStoreNode: COMPACT_NODE,
+    fifNode:           COMPACT_NODE,
+    loopNode:          COMPACT_NODE,
+    functionNode:      COMPACT_NODE,
+    templateNode:      COMPACT_NODE,
   };
 
   const onDrop = useCallback((e: React.DragEvent) => {
@@ -797,11 +894,14 @@ const DesignerInner: React.FC<DesignerProps> = ({
     });
 
     const plugMeta = meta ? JSON.parse(meta) : {};
-    const dims     = RESIZABLE_DEFAULTS[type] ?? {};
+    const dims     = RESIZABLE_DEFAULTS[type] ?? COMPACT_NODE;
 
     // For plug nodes, inject category-aware placeholders at drop time
     const categoryPlaceholders = type === 'plugNode'
-      ? { _placeholders: getPlugPlaceholders(plugMeta?.category) }
+      ? {
+          _placeholders: getPlugPlaceholders(plugMeta?.category),
+          testInputJson: JSON.stringify({ message: 'Hello FloPlug', value: 42 }, null, 2),
+        }
       : {};
 
     setNodes(prev => [...prev, {
@@ -820,9 +920,10 @@ const DesignerInner: React.FC<DesignerProps> = ({
         ),
         ...plugMeta,
         ...categoryPlaceholders,
+        availableFlos: flos.map(f => ({ id: f.id, name: f.name })),
       },
     }]);
-  }, [rfInstance, hubId, tenantId, updateNodeData, deleteNode, plugs]);
+  }, [rfInstance, hubId, tenantId, updateNodeData, deleteNode, plugs, flos]);
 
   // ── Guards ──────────────────────────────────────────────────────────────────
   if (wsLoading) {
@@ -1120,7 +1221,7 @@ const DesignerInner: React.FC<DesignerProps> = ({
 
         {/* Right panel */}
         <div style={s.rightPanel}>
-          <NodeInspector node={selectedNode} onUpdate={updateNodeData} />
+          <NodeInspector node={selectedNode} onUpdate={updateNodeData} ctx={inspectorCtx} />
           <div style={s.logPanel}>
             <div style={{ fontSize: 10, fontWeight: 600, color: '#3a3a50', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 8 }}>
               Last run
@@ -1178,7 +1279,7 @@ const s: Record<string, React.CSSProperties> = {
   btnRun:     { padding: '4px 12px', borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', border: 'none', background: '#22c55e', color: '#fff' },
   btnPub:     { padding: '4px 12px', borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', border: 'none', background: '#4f8ef7', color: '#fff' },
   body:       { display: 'flex', flex: 1, overflow: 'hidden' },
-  rightPanel: { width: 220, background: '#141720', borderLeft: '0.5px solid rgba(255,255,255,.06)', display: 'flex', flexDirection: 'column', flexShrink: 0, overflow: 'hidden' },
+  rightPanel: { width: 300, background: '#141720', borderLeft: '0.5px solid rgba(255,255,255,.06)', display: 'flex', flexDirection: 'column', flexShrink: 0, overflow: 'hidden' },
   logPanel:   { borderTop: '0.5px solid rgba(255,255,255,.06)', padding: 12, height: 220, display: 'flex', flexDirection: 'column' },
 };
 

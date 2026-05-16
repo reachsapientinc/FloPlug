@@ -20,8 +20,8 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { type NodeProps, NodeResizer, Handle, Position } from '@xyflow/react';
-import { NodeDrawer } from './NodeDrawer';
+import { type NodeProps } from '@xyflow/react';
+import { CompactNode, deriveNodeStatus, outputTargetBadge } from './CompactNode';
 
 // ── Content-type options ──────────────────────────────────────────────────────
 export const CONTENT_TYPES = [
@@ -33,14 +33,6 @@ export const CONTENT_TYPES = [
 ] as const;
 
 export type TemplateContentType = typeof CONTENT_TYPES[number]['value'];
-
-const BADGE_COLORS: Record<string, string> = {
-  'text/plain':       '#6b6b80',
-  'application/xml':  '#0891b2',
-  'application/json': '#7c3aed',
-  'text/html':        '#b45309',
-  'text/csv':         '#065f46',
-};
 
 const PLACEHOLDERS: Record<string, string> = {
   'text/plain':       'Hello {{displayName}},\nYour value is {{value}}.',
@@ -90,7 +82,7 @@ interface EditorModalProps {
   onClose:     () => void;
 }
 
-const TemplateEditorModal: React.FC<EditorModalProps> = ({
+export const TemplateEditorModal: React.FC<EditorModalProps> = ({
   value, contentType, outputMode, storeScope, storeName, onSave, onClose,
 }) => {
   const [text,      setText]      = useState(value);
@@ -394,181 +386,29 @@ const TemplateEditorModal: React.FC<EditorModalProps> = ({
   );
 };
 
-// ── TemplateNode ──────────────────────────────────────────────────────────────
-// KEY: destructure width/height from NodeProps — ReactFlow sets these when
-// the user resizes. We pass them directly to the root div as explicit pixels.
-export const TemplateNode: React.FC<NodeProps> = ({ id, data, selected, width, height }) => {
-  const template    = (data.template    as string) ?? '';
-  const outputMode  = (data.outputMode  as string) ?? 'overwrite';
-  const contentType = (data.contentType as string) ?? 'text/plain';
-  const storeScope  = (data.storeScope  as string) ?? 'global';
-  const storeName   = (data.storeName   as string) ?? '';
-  const [modalOpen, setModalOpen] = useState(false);
-
-  const update = (patch: Record<string, unknown>) =>
-    (data.onUpdate as any)?.(id, patch);
-
-  const onDelete = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    (data.onDelete as any)?.(id);
-  };
-
-  const badge      = CONTENT_TYPES.find(c => c.value === contentType)?.badge ?? 'TXT';
-  const badgeColor = BADGE_COLORS[contentType] ?? '#6b6b80';
-  const lineCount  = template ? template.split('\n').length : 0;
-  const preview    = template.slice(0, 200);
-
-  // Use explicit pixel dimensions from ReactFlow — default for first render
-  const w = (width  ?? 260);
-  const h = (height ?? 220);
-
+// ── TemplateNode — compact canvas; edit in right panel ───────────────────────
+export const TemplateNode: React.FC<NodeProps> = ({ id, data, selected }) => {
+  const d = data as Record<string, unknown>;
+  const template = String(d.template ?? '');
+  const contentType = String(d.contentType ?? 'text/plain');
+  const typeBadge = CONTENT_TYPES.find(c => c.value === contentType)?.badge ?? 'TXT';
+  const lineCount = template ? template.split('\n').length : 0;
+  const otBadge = outputTargetBadge(d);
+  const storeHint = d.outputMode === 'store'
+    ? `→${d.storeScope}.${d.storeName || '?'}`
+    : undefined;
   return (
-    <>
-      {modalOpen && (
-        <TemplateEditorModal
-          value={template}
-          contentType={contentType}
-          outputMode={outputMode}
-          storeScope={storeScope}
-          storeName={storeName}
-          onSave={(t, ct, om, sc, sn) =>
-            update({ template: t, contentType: ct, outputMode: om, storeScope: sc, storeName: sn })
-          }
-          onClose={() => setModalOpen(false)}
-        />
-      )}
-
-      {/* NodeResizer must be INSIDE the root div, not a sibling */}
-      <NodeResizer
-        isVisible={selected as boolean}
-        minWidth={200}
-        minHeight={160}
-        handleStyle={{
-          background: '#4f8ef7', border: '2px solid #0f1117',
-          width: 10, height: 10, borderRadius: 3,
-        }}
-        lineStyle={{ borderColor: 'rgba(79,142,247,0.4)' }}
-      />
-
-      {/* Delete button */}
-      {selected && (
-        <button onClick={onDelete} title="Delete node" style={{
-          position: 'absolute', top: -10, right: -10, zIndex: 10,
-          width: 20, height: 20, borderRadius: '50%',
-          background: '#f87171', border: '2px solid #0f1117',
-          color: '#fff', fontSize: 12, fontWeight: 700,
-          cursor: 'pointer', display: 'flex',
-          alignItems: 'center', justifyContent: 'center',
-          lineHeight: 1, padding: 0,
-        }}>×</button>
-      )}
-
-      {/*
-        ROOT DIV — explicit pixel width/height from ReactFlow NodeProps.
-        This is what makes all-corner resize work. When ReactFlow calls
-        onNodesChange with a resize delta it updates node.width/node.height,
-        which flos into these props. The div must match those exact pixels.
-      */}
-      <div style={{
-        width:      w,
-        height:     h,
-        minWidth:   200,
-        minHeight:  160,
-        boxSizing:  'border-box',
-        background: selected ? '#1e2130' : '#181b24',
-        border:     `0.5px solid ${selected ? '#4f8ef7' : 'rgba(255,255,255,0.12)'}`,
-        boxShadow:  selected ? '0 0 0 1px rgba(79,142,247,0.2)' : 'none',
-        borderRadius: 9,
-        padding:    '10px 12px',
-        fontFamily: "'Inter',-apple-system,sans-serif",
-        fontSize:   11,
-        color:      '#d0d0e0',
-        display:    'flex',
-        flexDirection: 'column',
-        gap:        6,
-        overflow:   'hidden',
-        position:   'relative',
-      }}>
-        <Handle type="target" position={Position.Left} style={{ width: 10, height: 10, background: '#4f8ef7', border: '2px solid #0f1117', borderRadius: '50%' }} />
-
-        {/* Header row */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0 }}>
-          <div style={{
-            width: 20, height: 20, borderRadius: 4, background: '#0f766e', flexShrink: 0,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 8, fontWeight: 800, color: '#fff',
-          }}>TN</div>
-          <span style={{ fontSize: 11, fontWeight: 600, color: '#e0e0ec', flex: 1 }}>Template</span>
-          {/* Badge */}
-          <span style={{
-            padding: '2px 6px', borderRadius: 3, flexShrink: 0,
-            background: badgeColor, color: '#fff',
-            fontSize: 8, fontWeight: 700, letterSpacing: '0.5px',
-          }}>{badge}</span>
-          <span style={{ fontSize: 9, color: '#6b6b80', flexShrink: 0 }}>
-            {lineCount > 0 ? `${lineCount}L` : 'empty'}
-          </span>
-          {outputMode === 'store' && (
-            <span style={{ fontSize: 8, color: '#fbbf24', flexShrink: 0 }}>
-              →{storeScope}.{storeName || '?'}
-            </span>
-          )}
-        </div>
-
-        {/* Template preview — flex: 1 so it fills all remaining vertical space */}
-        <div style={{
-          flex: 1,
-          minHeight: 0,         // ← critical: allows shrinking in flex column
-          background: '#0a0c12',
-          border: '0.5px solid rgba(255,255,255,0.06)',
-          borderRadius: 4,
-          padding: '5px 7px',
-          overflowY: 'auto',    // ← scrollable when content exceeds available height
-          fontSize: 8.5,
-          fontFamily: '"Fira Code","Cascadia Code","Consolas",monospace',
-          color: '#6b6b80',
-          lineHeight: 1.5,
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-word',
-          cursor: 'default',
-        }}>
-          <HighlightedTemplate text={preview + (template.length > 200 ? '\n…' : '')} />
-        </div>
-
-        {/* Edit button */}
-        <button
-          onMouseDown={e => e.stopPropagation()}
-          onClick={e => { e.stopPropagation(); setModalOpen(true); }}
-          style={{
-            flexShrink: 0,
-            padding: '5px 8px', borderRadius: 5,
-            border: '0.5px solid rgba(79,142,247,0.35)',
-            background: 'rgba(79,142,247,0.08)',
-            color: '#4f8ef7', fontSize: 10, fontWeight: 600,
-            cursor: 'pointer', fontFamily: 'inherit',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
-          }}
-        >
-          ✏ Edit Template
-        </button>
-
-        {/* Output target drawer — consistent with all other nodes */}
-        <NodeDrawer
-          id={id}
-          data={data as unknown as Record<string, unknown>}
-          label="Output settings"
-          color="#0f766e"
-          defaultOpen={false}
-        >
-          <div style={{ fontSize: 8, color: '#3a3a50', marginBottom: 4, lineHeight: 1.5 }}>
-            By default the rendered template replaces <code style={{ fontFamily: 'monospace', color: '#4f8ef7' }}>cStream.message</code>.
-            Use local/global to store without overwriting cStream.
-          </div>
-        </NodeDrawer>
-
-        <Handle type="source" position={Position.Right} style={{ width: 10, height: 10, background: '#4f8ef7', border: '2px solid #0f1117', borderRadius: '50%' }} />
-      </div>
-    </>
+    <CompactNode
+      id={id}
+      selected={!!selected}
+      color="#0f766e"
+      icon="TN"
+      title="Template"
+      subtitle={`${typeBadge} · ${lineCount > 0 ? `${lineCount} lines` : 'empty'}`}
+      badge={otBadge ?? storeHint}
+      status={deriveNodeStatus(d)}
+      onDelete={() => (d.onDelete as (nid: string) => void)?.(id)}
+    />
   );
 };
 
