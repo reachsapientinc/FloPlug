@@ -86,7 +86,7 @@ export interface ConnectorDoc {
     description: string;
     isActive: boolean;
     authOverride?: ConnectorAuthOverride;
-    eligibleForPreDefinedNodes?: boolean;
+    allowActionNodes?: boolean;
     tierControlled?: boolean;
     availableForTiers?: string[];
 }

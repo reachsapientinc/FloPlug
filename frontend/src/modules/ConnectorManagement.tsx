@@ -57,7 +57,7 @@ const emptyField = (): AuthProtocolField => ({
 const emptyForm = (): ConnectorDoc => ({
   id: '', label: '', category: 'ERP',
   supportedAuthTypes: [], description: '', isActive: true,
-  eligibleForPreDefinedNodes: false,
+  allowActionNodes: false,
   tierControlled:             false,
   availableForTiers:          [],
 });
@@ -304,7 +304,7 @@ const ConnectorManagement: React.FC = () => {
           id: connId, label: form.label.trim(), category: form.category,
           supportedAuthTypes: form.supportedAuthTypes,
           description: form.description.trim(), isActive: form.isActive,
-          eligibleForPreDefinedNodes: form.eligibleForPreDefinedNodes ?? false,
+          allowActionNodes: form.allowActionNodes ?? false,
           tierControlled:             form.tierControlled             ?? false,
           availableForTiers:          form.availableForTiers          ?? [],
           updatedAt: serverTimestamp(),
@@ -420,15 +420,15 @@ const ConnectorManagement: React.FC = () => {
                 <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
                   <div style={s.secTitle} >PreDefined Nodes &amp; Tier Control</div>
 
-                  {/* eligibleForPreDefinedNodes */}
+                  {/* allowActionNodes */}
                   <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
                     <div
-                      onClick={() => patch({ eligibleForPreDefinedNodes: !form.eligibleForPreDefinedNodes })}
-                      style={{ ...s.toggle, ...(form.eligibleForPreDefinedNodes ? s.toggleOn : {}) }}>
-                      <div style={{ ...s.toggleThumb, ...(form.eligibleForPreDefinedNodes ? s.toggleThumbOn : {}) }} />
+                      onClick={() => patch({ allowActionNodes: !form.allowActionNodes })}
+                      style={{ ...s.toggle, ...(form.allowActionNodes ? s.toggleOn : {}) }}>
+                      <div style={{ ...s.toggleThumb, ...(form.allowActionNodes ? s.toggleThumbOn : {}) }} />
                     </div>
                     <div>
-                      <div style={{ fontSize: 12, color: form.eligibleForPreDefinedNodes ? '#f0f0f4' : '#6b6b80', fontWeight: 500 }}>
+                      <div style={{ fontSize: 12, color: form.allowActionNodes ? '#f0f0f4' : '#6b6b80', fontWeight: 500 }}>
                         Eligible for PreDefined Nodes
                       </div>
                       <div style={{ fontSize: 10, color: '#45455a', marginTop: 1 }}>

@@ -116,7 +116,7 @@ export interface ConnectorDoc {
   description:        string;
   isActive:           boolean;
   authOverride?:      ConnectorAuthOverride;
-  eligibleForPreDefinedNodes?: boolean;   // enables FloKit/PreDefinedNode creation
+  allowActionNodes?: boolean;   // enables FloKit/PreDefinedNode creation
   tierControlled?:            boolean;    // access gated by hub tier
   availableForTiers?:         string[]; 
 }
