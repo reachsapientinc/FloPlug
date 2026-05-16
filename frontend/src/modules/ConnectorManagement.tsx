@@ -428,11 +428,11 @@ const ConnectorManagement: React.FC = () => {
                       <div style={{ ...s.toggleThumb, ...(form.allowActionNodes ? s.toggleThumbOn : {}) }} />
                     </div>
                     <div>
-                      <div style={{ fontSize: 12, color: form.allowActionNodes ? '#f0f0f4' : '#6b6b80', fontWeight: 500 }}>
-                        Eligible for PreDefined Nodes
+                      <div style={{ fontSize: 12, color: form.allowActionNodes ? '#2ae844' : '#6b6b80', fontWeight: 500 }}>
+                        Eligible for Action Nodes
                       </div>
-                      <div style={{ fontSize: 10, color: '#45455a', marginTop: 1 }}>
-                        Enables FloKit and PreDefinedNode creation for this connector
+                      <div style={{ fontSize: 10, color: '#0ecae7', marginTop: 1 }}>
+                        Enables FloKit and Action Node creation for this connector
                       </div>
                     </div>
                   </label>
@@ -448,7 +448,7 @@ const ConnectorManagement: React.FC = () => {
                       <div style={{ fontSize: 12, color: form.tierControlled ? '#f0f0f4' : '#6b6b80', fontWeight: 500 }}>
                         Tier Controlled
                       </div>
-                      <div style={{ fontSize: 10, color: '#45455a', marginTop: 1 }}>
+                      <div style={{ fontSize: 10, color: '#0ecae7', marginTop: 1 }}>
                         Access to this connector is gated by hub tier
                       </div>
                     </div>
@@ -457,11 +457,11 @@ const ConnectorManagement: React.FC = () => {
                   {/* availableForTiers — only shown when tierControlled is on */}
                   {form.tierControlled && (
                     <div style={{ marginLeft: 44 }}>
-                      <div style={{ fontSize: 10, color: '#9090a0', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                      <div style={{ fontSize: 10, color: '#2ae844', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
                         Available for Tiers
                       </div>
                       {availableTiers.length === 0 ? (
-                        <div style={{ fontSize: 11, color: '#45455a', fontStyle: 'italic' }}>
+                        <div style={{ fontSize: 11, color: '#0ecae7', fontStyle: 'italic' }}>
                           No tiers found — create tiers in Tier Management first.
                         </div>
                       ) : (
