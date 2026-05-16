@@ -6,9 +6,20 @@ export const COLLECTIONS = {
     HUBS: 'FloPlugHubs',
     AUTH_TYPES: 'FloPlugGlobalSettings/AuthenticationTypes',
     FLOPLUGUSERS: 'FloPlugUsers', // product-level admin users
+    GLOBALLOOKUPS: 'FloPlugGlobalSettings/GlobalLookUps',
+    TENANTTYPES: 'FloPlugGlobalSettings/GlobalLookUps/TenantTypes',
+    FLOPLUGTIERS: 'FloPlugTiers',
+    FLOPLUGROLES: 'FloPlugGlobalSettings/FloPlugRoles',
+    FLOPLUGHUBROLES: 'FloPlugGlobalSettings/HubRoles',
+    STORAGESETTING: 'FloPlugGlobalSettings/StorageSettings'
 };
 export const SUB_COLLECTIONS = {
+    TENANT_TYPES: 'TenantTypes',
     AUTH_TYPES: 'AuthenticationTypes',
+    STORAGE_SETTINGS: 'StorageSettings',
+    FLOPLUG_ROLES: 'FloPlugRoles',
+    FLOPLUGHUBROLES: 'HubRoles',
+    GLOBALLOOKUPS: 'GlobalLookUps'
 };
 // ── Sub-collection names ──────────────────────────────────────────────────────
 export const HUB_COLLECTIONS = {

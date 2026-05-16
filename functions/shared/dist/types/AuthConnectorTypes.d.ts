@@ -86,6 +86,9 @@ export interface ConnectorDoc {
     description: string;
     isActive: boolean;
     authOverride?: ConnectorAuthOverride;
+    eligibleForPreDefinedNodes?: boolean;
+    tierControlled?: boolean;
+    availableForTiers?: string[];
 }
 export type SchemaType = 'wsdl' | 'xsd' | 'openapi' | 'graphql';
 export interface ConnectorSchema {

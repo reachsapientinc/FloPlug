@@ -4,9 +4,20 @@ export declare const COLLECTIONS: {
     readonly HUBS: "FloPlugHubs";
     readonly AUTH_TYPES: "FloPlugGlobalSettings/AuthenticationTypes";
     readonly FLOPLUGUSERS: "FloPlugUsers";
+    readonly GLOBALLOOKUPS: "FloPlugGlobalSettings/GlobalLookUps";
+    readonly TENANTTYPES: "FloPlugGlobalSettings/GlobalLookUps/TenantTypes";
+    readonly FLOPLUGTIERS: "FloPlugTiers";
+    readonly FLOPLUGROLES: "FloPlugGlobalSettings/FloPlugRoles";
+    readonly FLOPLUGHUBROLES: "FloPlugGlobalSettings/HubRoles";
+    readonly STORAGESETTING: "FloPlugGlobalSettings/StorageSettings";
 };
 export declare const SUB_COLLECTIONS: {
+    readonly TENANT_TYPES: "TenantTypes";
     readonly AUTH_TYPES: "AuthenticationTypes";
+    readonly STORAGE_SETTINGS: "StorageSettings";
+    readonly FLOPLUG_ROLES: "FloPlugRoles";
+    readonly FLOPLUGHUBROLES: "HubRoles";
+    readonly GLOBALLOOKUPS: "GlobalLookUps";
 };
 export declare const HUB_COLLECTIONS: {
     readonly TENANTS: "Tenants";

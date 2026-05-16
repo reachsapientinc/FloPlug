@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../firebaseConfig';
 import { doc, setDoc, getDoc, getDocs, collection, query, where, serverTimestamp } from 'firebase/firestore';
+import {COLLECTIONS} from '@floplug/shared';
 
 const TierManagement: React.FC = () => {
   const [availableTiers, setAvailableTiers] = useState<any[]>([]);
@@ -37,31 +38,56 @@ const TierManagement: React.FC = () => {
   }, [isDirty]);
 
   useEffect(() => {
-    const init = async () => {
-      try {
-        const typeSnap = await getDocs(query(collection(db, 'FloPlugGlobalSettings', 'GlobalLookUps', 'TenantTypes'), where('isActive', '==', true)));
-        setAvailableTenantTypes(typeSnap.docs.map(d => ({ key: d.data().key, value: d.data().value })));
-        const tierSnap = await getDocs(collection(db, 'FloPlugTiers'));
-        setAvailableTiers(tierSnap.docs.map(d => ({ id: d.id, ...d.data() })));
-      } catch (err) { console.error(err); }
-      setLoading(false);
-    };
-    init();
-  }, []);
+  const init = async () => {
+    try {
+      // Fetch the collection directly to bypass query index requirements
+      const typeSnap = await getDocs(collection(db, COLLECTIONS.TENANTTYPES));
+      
+      // If the path is correct, this will print a number > 0 in your browser console
+      console.log("Total tenant type docs fetched:", typeSnap.docs.length);
+
+      const types = typeSnap.docs.map(d => {
+        const data = d.data();
+        console.log("Mapping doc:", d.id, data);
+        return { 
+          // Use document ID as fallback if 'key' field isn't set
+          key: data.key || d.id, 
+          value: data.value || d.id 
+        };
+      });
+      
+      setAvailableTenantTypes(types);
+
+      // Load existing tiers
+      const tierSnap = await getDocs(collection(db, COLLECTIONS.FLOPLUGTIERS));
+      setAvailableTiers(tierSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch (err) { 
+      console.error("Failed to initialize available tenant types:", err); 
+    }
+    setLoading(false);
+  };
+  init();
+}, []);
 
   const loadTierToEdit = async (shortCode: string) => {
-    if (!shortCode) {
-        setTier(INITIAL_STATE);
-        setIsDirty(false);
-        return;
-    }
-    const docRef = doc(db, 'FloPlugTiers', shortCode);
-    const snap = await getDoc(docRef);
-    if (snap.exists()) {
-        setTier(snap.data() as any);
-        setIsDirty(false); // Reset dirty when a fresh record is loaded
-    }
-  };
+  if (!shortCode) {
+      setTier(INITIAL_STATE);
+      setIsDirty(false);
+      return;
+  }
+  const docRef = doc(db, COLLECTIONS.FLOPLUGTIERS, shortCode);
+  const snap = await getDoc(docRef);
+  if (snap.exists()) {
+      const data = snap.data();
+      setTier({
+        ...INITIAL_STATE, // preserves default nested structures
+        ...data,
+        // FORCE fallback to an empty array if the field doesn't exist
+        eligibleTenantTypes: data.eligibleTenantTypes || [] 
+      } as any);
+      setIsDirty(false); // Reset dirty when a fresh record is loaded
+  }
+};
 
   // Helper to update and mark dirty
   const updateTier = (updates: any) => {
@@ -70,11 +96,14 @@ const TierManagement: React.FC = () => {
   };
 
   const toggleEnv = (key: string) => {
-    const current = tier.eligibleTenantTypes.includes(key)
-        ? tier.eligibleTenantTypes.filter(k => k !== key)
-        : [...tier.eligibleTenantTypes, key];
-    updateTier({ eligibleTenantTypes: current });
-  };
+  // Ensure we are working with an array safely
+  const currentTypes = Array.isArray(tier.eligibleTenantTypes) ? tier.eligibleTenantTypes : [];
+
+  const current = currentTypes.includes(key)
+      ? currentTypes.filter(k => k !== key)
+      : [...currentTypes, key];
+      updateTier({ eligibleTenantTypes: current });
+    };
 
   const handleSave = async () => {
     if (!tier.tierShortCode) {
@@ -85,7 +114,7 @@ const TierManagement: React.FC = () => {
     setStatus({ type: 'info', message: 'Deploying tier strategy...' });
 
     try {
-      await setDoc(doc(db, 'FloPlugTiers', tier.tierShortCode), { ...tier, updatedAt: serverTimestamp() });
+      await setDoc(doc(db, COLLECTIONS.FLOPLUGTIERS, tier.tierShortCode), { ...tier, updatedAt: serverTimestamp() });
       setStatus({ type: 'success', message: "Tier Policy Deployed ⚡" });
       setIsDirty(false);
       setTier(INITIAL_STATE); // Clear form after success
@@ -147,24 +176,43 @@ const TierManagement: React.FC = () => {
           </div>
           
           <div style={{ marginTop: '20px' }}>
-            <label style={{ fontSize: '0.8rem', opacity: 0.7 }}>Eligible Environments</label>
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '10px' }}>
-              {availableTenantTypes.map(t => (
-                <button 
-                  key={t.key} 
-                  type="button"
-                  onClick={() => toggleEnv(t.key)}
-                  style={{
-                    padding: '6px 12px', borderRadius: '20px', border: '1px solid var(--glass-border)', fontSize: '12px', cursor: 'pointer',
-                    background: tier.eligibleTenantTypes.includes(t.key) ? '#3b82f6' : 'rgba(255,255,255,0.05)',
-                    color: 'white'
-                  }}
-                >
-                  {t.value}
-                </button>
-              ))}
+              <label style={{ fontSize: '0.8rem', opacity: 0.7 }}>Eligible Environments</label>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '10px' }}>
+                {availableTenantTypes.map(t => {
+                  // Safe check to determine if this specific chip is currently selected
+                  const isSelected = Array.isArray(tier.eligibleTenantTypes) && tier.eligibleTenantTypes.includes(t.key);
+
+                  return (
+                    <button 
+                      key={t.key} 
+                      type="button"
+                      onClick={() => toggleEnv(t.key)}
+                      style={{
+                        padding: '8px 16px', 
+                        borderRadius: '20px', 
+                        border: isSelected ? '2px solid #3b82f6' : '1px solid #cbd5e1', 
+                        fontSize: '12px', 
+                        fontWeight: '500',
+                        cursor: 'pointer',
+                        background: isSelected ? '#3b82f6' : '#f1f5f9',
+                        color: isSelected ? '#ffffff' : '#334155',
+                        transition: 'all 0.2s ease',
+                        display: 'inline-block'
+                      }}
+                    >
+                      {/* 🌟 CHANGED: Added fallback property evaluation to guarantee text value outputs */}
+                      {t.value || t.key || "Unnamed"} 
+                    </button>
+                  );
+                })}
+                
+                {availableTenantTypes.length === 0 && (
+                  <span style={{ fontSize: '12px', opacity: 0.5, fontStyle: 'italic' }}>
+                    No global tenant types configured.
+                  </span>
+                )}
+              </div>
             </div>
-          </div>
         </section>
 
         {/* COLUMN 2: INCLUDED QUOTAS */}

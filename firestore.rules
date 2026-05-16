@@ -39,20 +39,11 @@ service cloud.firestore {
 
     // ── FloPlugGlobalSettings ─────────────────────────────────────────────────
 
-    match /FloPlugGlobalSettings/{docId} {
-      allow read:  if isSignedIn();
-      allow write: if isProductAdmin();
-
-      match /{subCol}/{subDoc} {
+// CORRECT SYNTAX: This instantly covers all documents and subcollections at any depth
+      match /FloPlugGlobalSettings/{allChildren=**} {
         allow read:  if isSignedIn();
         allow write: if isProductAdmin();
-
-        match /{deepCol}/{deepDoc} {
-          allow read:  if isSignedIn();
-          allow write: if isProductAdmin();
-        }
       }
-    }
 
     // ── FloPlugConnectors ─────────────────────────────────────────────────────
 
