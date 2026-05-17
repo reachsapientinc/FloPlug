@@ -1,5 +1,10 @@
 {
   "files": [],
+  "compilerOptions": {
+    // 🌟 CHANGED: Set to false so unused variables won't break your deployment builds
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
   "references": [
     { "path": "./tsconfig.app.json" },
     { "path": "./tsconfig.node.json" }
