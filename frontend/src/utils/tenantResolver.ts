@@ -23,7 +23,7 @@
 
 //import { db } from '../firebaseConfig';
 import { collectionGroup, query, where, getDocs } from 'firebase/firestore';
-import type {PortalMode,FloPlugEnv, TenantConfig, TenantBranding, ResolveResult} from '../../../types/types.ts';
+import type {PortalMode,FloPlugEnv, TenantConfig, TenantBranding, ResolveResult} from '@floplug/shared';
 import { db } from '../firebaseConfig.ts';
 
 // ── Public types ──────────────────────────────────────────────────────────────
