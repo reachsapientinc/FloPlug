@@ -9,3 +9,4 @@ export * from "./types/types.js";
 export * from  "./types/designer.js";
 export * from "./constants/constants.js";
 export * from './types/emailTypes.js';
+export * from './types/floKit.js';

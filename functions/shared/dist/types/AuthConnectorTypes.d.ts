@@ -148,6 +148,7 @@ export interface ActionDoc {
     createdAt?: Date;
     updatedAt?: Date;
     createdBy?: string;
+    floKitId?: string;
 }
 export type PermissionCategory = 'plugs' | 'users' | 'flos' | 'logs' | 'settings';
 export interface PermissionDoc {

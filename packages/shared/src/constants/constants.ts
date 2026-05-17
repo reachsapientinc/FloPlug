@@ -13,7 +13,9 @@ export const COLLECTIONS = {
     FLOPLUGTIERS: 'FloPlugTiers',
     FLOPLUGROLES: 'FloPlugGlobalSettings/FloPlugRoles',
     FLOPLUGHUBROLES: 'FloPlugGlobalSettings/HubRoles',
-    STORAGESETTING: 'FloPlugGlobalSettings/StorageSettings'
+    STORAGESETTING: 'FloPlugGlobalSettings/StorageSettings',
+    FLOPLUGCONNECTORS: 'FloPlugConnectors',
+
 } as const;
 
 export const SUB_COLLECTIONS = {
@@ -22,7 +24,10 @@ export const SUB_COLLECTIONS = {
   STORAGE_SETTINGS : 'StorageSettings',
   FLOPLUG_ROLES: 'FloPlugRoles',
   FLOPLUGHUBROLES : 'HubRoles',
-  GLOBALLOOKUPS: 'GlobalLookUps'
+  GLOBALLOOKUPS: 'GlobalLookUps',
+  FLOKITS: 'FloKits',
+  SCHEMAS: 'Schemas',
+  ACTIONNODES: 'ActionNodes'
 } as const;
 
 // ── Sub-collection names ──────────────────────────────────────────────────────
@@ -39,11 +44,26 @@ export const HUB_COLLECTIONS = {
   SCHEMAS:     'Schemas',
 } as const;
 
+
+export const FLOPLUG_ROLES = {
+  ADMIN:     'product_admin',
+  DEVELOPER: 'developer',
+  ADMIN_SALES:      'admin_sales',
+} as const;
+
 // ── Hub roles ─────────────────────────────────────────────────────────────────
 export const HUB_ROLES = {
   ADMIN:     'hub_admin',
   USER:      'user',
 } as const;
+
+export const ROLES = {
+  FLOPLUG_ROLES,
+  HUB_ROLES
+} as const;
+
+// FloPlugRoles
+
 
 // ── Permissions ───────────────────────────────────────────────────────────────
 export const PERMISSIONS = {
@@ -119,3 +139,20 @@ export const NODE_TYPES = {
   LOOP:          'loopNode',
   EMAIL:          'emailNode',
 } as const;
+
+export const HTTP_METHOD_GET  = 'GET';
+export const HTTP_METHOD_POST  = 'POST';
+export const HTTP_METHOD_PATCH  = 'PATH';
+export const HTTP_METHOD_PUT  = 'PUT';
+export const HTTP_METHOD_DELETE  = 'DELETE';
+
+export const HTTP_METHODS  = [HTTP_METHOD_GET, HTTP_METHOD_POST, HTTP_METHOD_PUT, HTTP_METHOD_PATCH, HTTP_METHOD_DELETE] as const;
+
+export const SCHEMA_TYPES    = ['wsdl', 'xsd', 'openapi'] as const;
+export const SCHEMA_SOURCE_OPTIONS = [
+  { value: 'wsdl',   label: 'WSDL — parse operations from uploaded schema' },
+  { value: 'xsd',    label: 'XSD  — parse element from uploaded schema' },
+  { value: 'openapi',label: 'OpenAPI — parse operation from uploaded spec' },
+  { value: 'manual', label: 'Manual — define input fields by hand' },
+];
+export const CATEGORIES = ['Human Resources', 'Finance', 'Procurement', 'CRM', 'Payroll', 'Custom'];

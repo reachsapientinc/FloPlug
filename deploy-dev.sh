@@ -45,7 +45,11 @@ else
 fi
 echo `pwd`
 if [ "$DEPLOY_MODE" = "true" ]; then
-    if [ "$FUNC_MODE" = "none" ]; then
+    if [ "$FUNC_MODE" = "rules" ]; then
+        # 🌟 ADDED OPTION: Deploy Security Rules and Indexes only
+        echo "🔒 Deploying Firestore Security Rules ONLY..."
+        firebase deploy --only firestore:rules
+    elif [ "$FUNC_MODE" = "none" ]; then
         echo "🚀 Deploying Hosting ONLY..."
         firebase deploy --only hosting
     elif [ "$FUNC_MODE" = "all" ]; then

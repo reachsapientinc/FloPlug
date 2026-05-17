@@ -31,19 +31,15 @@ import {
 // Bucket must be created in Firebase console: gs://floplug-schemas
 import type {ConnectorDoc,ActionDoc,ConnectorSchema,ParsedField } from "@floplug/shared";
 import { loadConnectors } from '../types/AuthConnectorTypes';
+import {COLLECTIONS,HUB_COLLECTIONS,
+      SUB_COLLECTIONS,ROLES,
+        HTTP_METHODS,
+        SCHEMA_TYPES,
+        SCHEMA_SOURCE_OPTIONS,
+        CATEGORIES } from '@floplug/shared';
 
 
 type SubTab = 'schemas' | 'actions' | 'preview';
-
-const ACTION_METHODS  = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const;
-const SCHEMA_TYPES    = ['wsdl', 'xsd', 'openapi'] as const;
-const SCHEMA_SOURCE_OPTIONS = [
-  { value: 'wsdl',   label: 'WSDL — parse operations from uploaded schema' },
-  { value: 'xsd',    label: 'XSD  — parse element from uploaded schema' },
-  { value: 'openapi',label: 'OpenAPI — parse operation from uploaded spec' },
-  { value: 'manual', label: 'Manual — define input fields by hand' },
-];
-const CATEGORIES = ['Human Resources', 'Finance', 'Procurement', 'CRM', 'Payroll', 'Custom'];
 
 // ── Empty factories ───────────────────────────────────────────────────────────
 const emptyAction = (connectorId: string): Omit<ActionDoc, 'id'> => ({
@@ -61,6 +57,7 @@ const emptyAction = (connectorId: string): Omit<ActionDoc, 'id'> => ({
   outputKeys:   [],
   bodyTemplate: '',
   responseMapping: [],
+  floKitId: '',
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -94,8 +91,8 @@ const ActionManagement: React.FC = () => {
     setLoading(true);
     try {
       const [schemaSnap, actionSnap] = await Promise.all([
-        getDocs(query(collection(db, 'FloPlugConnectors', connId, 'Schemas'), orderBy('label'))),
-        getDocs(query(collection(db, 'FloPlugConnectors', connId, 'Actions'), orderBy('label'))),
+        getDocs(query(collection(db, COLLECTIONS.FLOPLUGCONNECTORS, connId, SUB_COLLECTIONS.SCHEMAS), orderBy('label'))),
+        getDocs(query(collection(db, COLLECTIONS.FLOPLUGCONNECTORS, connId, 'Actions'), orderBy('label'))),
       ]);
       setSchemas(schemaSnap.docs.map(d => ({ id: d.id, ...d.data() } as ConnectorSchema)));
       setActions(actionSnap.docs.map(d => ({ id: d.id, ...d.data() } as ActionDoc)));
@@ -270,7 +267,7 @@ const SchemaTab: React.FC<SchemaTabProps> = ({ connectorId, schemas, onSaved, on
     onSaved({ 
       id: result.schemaId, connectorId, label: label.trim(),
       version: version.trim(), schemaType, storagePath: result.storagePath,
-      isActive: true, uploadedAt: new Date(), uploadedBy: "product_admin" 
+      isActive: true, uploadedAt: new Date(), uploadedBy: ROLES.FLOPLUG_ROLES.ADMIN 
     });
 
     onError("Schema uploaded ✓");   // ← was flash()
@@ -397,6 +394,17 @@ const ActionTab: React.FC<ActionTabProps> = ({ connectorId, schemas, actions, on
   const [isNew,          setIsNew]          = useState(false);
   const [form,           setForm]           = useState<Omit<ActionDoc, 'id'>>(emptyAction(connectorId));
   const [saving,         setSaving]         = useState(false);
+  const [floKits, setFloKits] = useState<{ id: string; name: string }[]>([]);
+
+// Load FloKits for this connector
+useEffect(() => {
+  getDocs(query(
+    collection(db, COLLECTIONS.FLOPLUGCONNECTORS, connectorId, SUB_COLLECTIONS.FLOKITS),
+    orderBy('name')
+  )).then(snap => {
+    setFloKits(snap.docs.map(d => ({ id: d.id, name: (d.data().name as string) ?? d.id })));
+  }).catch(console.error);
+}, [connectorId]);
 
   const patch = (p: Partial<ActionDoc>) => setForm(f => ({ ...f, ...p }));
 
@@ -418,8 +426,8 @@ const ActionTab: React.FC<ActionTabProps> = ({ connectorId, schemas, actions, on
     setSaving(true);
     try {
       const ref = selectedAction
-        ? doc(db, 'FloPlugConnectors', connectorId, 'Actions', selectedAction.id)
-        : doc(collection(db, 'FloPlugConnectors', connectorId, 'Actions'));
+        ? doc(db, COLLECTIONS.FLOPLUGCONNECTORS, connectorId, 'Actions', selectedAction.id)
+        : doc(collection(db, COLLECTIONS.FLOPLUGCONNECTORS, connectorId, 'Actions'));
       const saved: ActionDoc = { ...form, id: ref.id, connectorId, updatedAt: new Date() };
       await setDoc(ref, { ...saved, updatedAt: serverTimestamp() }, { merge: true });
       onSaved(saved);
@@ -477,6 +485,23 @@ const ActionTab: React.FC<ActionTabProps> = ({ connectorId, schemas, actions, on
                 value={form.description ?? ''} placeholder="What does this action do?"
                 onChange={e => patch({ description: e.target.value })} />
             </div>
+            {/* FloKit assignment */}
+                  <div style={{ marginTop: 10 }}>
+                    <label style={st.fl}>FloKit</label>
+                    <select style={{ ...st.input, marginTop: 4 }}
+                      value={form.floKitId ?? ''}
+                      onChange={e => patch({ floKitId: e.target.value })}>
+                      <option value="">— No FloKit (standalone action) —</option>
+                      {floKits.map(k => (
+                        <option key={k.id} value={k.id}>{k.name}</option>
+                      ))}
+                    </select>
+                    {floKits.length === 0 && (
+                      <div style={{ fontSize: 10, color: '#45455a', marginTop: 4 }}>
+                        No FloKits defined for this connector yet — create one in FloKit Management.
+                      </div>
+                    )}
+                  </div>
           </div>
 
           {/* HTTP config */}
@@ -486,7 +511,7 @@ const ActionTab: React.FC<ActionTabProps> = ({ connectorId, schemas, actions, on
               <div style={{ ...st.fg, flex: '0 0 90px' }}>
                 <label style={st.fl}>Method *</label>
                 <select style={st.input} value={form.method} onChange={e => patch({ method: e.target.value as ActionDoc['method'] })}>
-                  {ACTION_METHODS.map(m => <option key={m}>{m}</option>)}
+                  {HTTP_METHODS.map(m => <option key={m}>{m}</option>)}
                 </select>
               </div>
               <div style={st.fg}>

@@ -206,6 +206,7 @@ export interface ActionDoc {
   createdAt?:  Date;
   updatedAt?:  Date;
   createdBy?:  string;
+  floKitId?: string;
 }
 
 // ── Permission doc — FloPlugGlobalSettings/GlobalLookups/Permissions/{id} ──────

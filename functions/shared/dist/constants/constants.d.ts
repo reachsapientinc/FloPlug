@@ -10,6 +10,7 @@ export declare const COLLECTIONS: {
     readonly FLOPLUGROLES: "FloPlugGlobalSettings/FloPlugRoles";
     readonly FLOPLUGHUBROLES: "FloPlugGlobalSettings/HubRoles";
     readonly STORAGESETTING: "FloPlugGlobalSettings/StorageSettings";
+    readonly FLOPLUGCONNECTORS: "FloPlugConnectors";
 };
 export declare const SUB_COLLECTIONS: {
     readonly TENANT_TYPES: "TenantTypes";
@@ -18,6 +19,9 @@ export declare const SUB_COLLECTIONS: {
     readonly FLOPLUG_ROLES: "FloPlugRoles";
     readonly FLOPLUGHUBROLES: "HubRoles";
     readonly GLOBALLOOKUPS: "GlobalLookUps";
+    readonly FLOKITS: "FloKits";
+    readonly SCHEMAS: "Schemas";
+    readonly ACTIONNODES: "ActionNodes";
 };
 export declare const HUB_COLLECTIONS: {
     readonly TENANTS: "Tenants";
@@ -31,9 +35,25 @@ export declare const HUB_COLLECTIONS: {
     readonly EMAIL_LOG: "EmailLog";
     readonly SCHEMAS: "Schemas";
 };
+export declare const FLOPLUG_ROLES: {
+    readonly ADMIN: "product_admin";
+    readonly DEVELOPER: "developer";
+    readonly ADMIN_SALES: "admin_sales";
+};
 export declare const HUB_ROLES: {
     readonly ADMIN: "hub_admin";
     readonly USER: "user";
+};
+export declare const ROLES: {
+    readonly FLOPLUG_ROLES: {
+        readonly ADMIN: "product_admin";
+        readonly DEVELOPER: "developer";
+        readonly ADMIN_SALES: "admin_sales";
+    };
+    readonly HUB_ROLES: {
+        readonly ADMIN: "hub_admin";
+        readonly USER: "user";
+    };
 };
 export declare const PERMISSIONS: {
     readonly MANAGE_PLUGS: "manage:plugs";
@@ -81,3 +101,15 @@ export declare const NODE_TYPES: {
     readonly LOOP: "loopNode";
     readonly EMAIL: "emailNode";
 };
+export declare const HTTP_METHOD_GET = "GET";
+export declare const HTTP_METHOD_POST = "POST";
+export declare const HTTP_METHOD_PATCH = "PATH";
+export declare const HTTP_METHOD_PUT = "PUT";
+export declare const HTTP_METHOD_DELETE = "DELETE";
+export declare const HTTP_METHODS: readonly ["GET", "POST", "PUT", "PATH", "DELETE"];
+export declare const SCHEMA_TYPES: readonly ["wsdl", "xsd", "openapi"];
+export declare const SCHEMA_SOURCE_OPTIONS: {
+    value: string;
+    label: string;
+}[];
+export declare const CATEGORIES: string[];

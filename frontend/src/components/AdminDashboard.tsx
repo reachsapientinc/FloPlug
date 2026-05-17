@@ -19,6 +19,7 @@ import AuthManager       from '../modules/AuthManagement';
 import ConnectorManager  from '../modules/ConnectorManagement';
 import ActionManager     from '../modules/ActionManagement';
 import UserManagement    from '../modules/UserManagement';
+import FloKitManager from '../modules/FloKitManagement';
 import '../App.css';
 
 // ── Environment metadata ──────────────────────────────────────────────────────
@@ -30,7 +31,7 @@ const ENV_META: Record<FloPlugEnv, { label: string; color: string; bg: string; d
   prod:  { label: 'PROD',  color: '#A32D2D', bg: 'rgba(163,45,45,0.1)', description: 'Live production environment' },
 };
 
-type Module = 'hub' | 'tiers' | 'auth' | 'connectors' | 'actions' | 'users';
+type Module = 'hub' | 'tiers' | 'auth' | 'connectors' | 'actions' |  'floKits' |'users';
 
 const MODULES: { id: Module; label: string; description: string; icon: React.ReactNode }[] = [
   {
@@ -53,6 +54,10 @@ const MODULES: { id: Module; label: string; description: string; icon: React.Rea
     id: 'actions', label: 'Action management', description: 'Action management',
     icon: <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>,
   },
+  {
+  id: 'floKits', label: 'FloKit management', description: 'FloKit management',
+  icon: <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/><line x1="12" y1="12" x2="12" y2="16"/><line x1="10" y1="14" x2="14" y2="14"/></svg>,
+},
   {
     id: 'users', label: 'User management', description: 'User management',
     icon: <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>,
@@ -207,7 +212,7 @@ const AdminDashboard: React.FC<{ env?: FloPlugEnv }> = ({ env }) => {
           </div>
           <div className="sidebar-section">
             <div className="sidebar-label">Integrations</div>
-            {MODULES.slice(2, 5).map(m => (
+            {MODULES.slice(2, 6).map(m => (
               <div key={m.id} className={`nav-item ${activeModule === m.id ? 'active' : ''}`} onClick={() => setActiveModule(m.id)}>
                 {m.icon}<span>{m.label}</span>
               </div>
@@ -239,6 +244,7 @@ const AdminDashboard: React.FC<{ env?: FloPlugEnv }> = ({ env }) => {
                 {activeModule === 'auth'       && 'Manage authentication strategies available to hub administrators'}
                 {activeModule === 'connectors' && 'Register pre-built integrations available across all tenant environments'}
                 {activeModule === 'actions'    && 'Upload schemas and register operations as Actions for use in flos'}
+                {activeModule === 'floKits'    && 'Define FloKits — business-domain groupings of PreDefined Nodes per connector'}
                 {activeModule === 'users'      && 'Invite and manage product admins, developers, and hub-scoped users'}
               </p>
             </div>
@@ -247,6 +253,7 @@ const AdminDashboard: React.FC<{ env?: FloPlugEnv }> = ({ env }) => {
             {activeModule === 'auth'       && <AuthManager />}
             {activeModule === 'connectors' && <ConnectorManager />}
             {activeModule === 'actions'    && <ActionManager />}
+            {activeModule === 'floKits'    && <FloKitManager />}
             {activeModule === 'users'      && <UserManagement />}
           </div>
         </main>

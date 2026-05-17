@@ -56,7 +56,15 @@ service cloud.firestore {
         allow write: if isProductAdmin();
       }
 
+      match /FloKits/{floKitId} {
+        allow read:  if isSignedIn();
+        allow write: if isProductAdmin();
+      }
       match /Actions/{actionId} {
+        allow read:  if isSignedIn();
+        allow write: if isProductAdmin();
+      }
+      match /ActionNodes/{actionId} {
         allow read:  if isSignedIn();
         allow write: if isProductAdmin();
       }
