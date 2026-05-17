@@ -51,7 +51,7 @@ const MODULES: { id: Module; label: string; description: string; icon: React.Rea
     icon: <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>,
   },
   {
-    id: 'actions', label: 'Action management', description: 'Action management',
+    id: 'actions', label: 'Schema management', description: 'Schema & action registry',
     icon: <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>,
   },
   {
@@ -235,7 +235,7 @@ const AdminDashboard: React.FC<{ env?: FloPlugEnv }> = ({ env }) => {
         </div>
 
         <main className="main-content">
-          <div className="content-viewport">
+          <div className={`content-viewport${activeModule === 'floKits' ? ' content-viewport-wide' : ''}`}>
             <div className="page-header">
               <h2>{current.description}</h2>
               <p>
@@ -243,8 +243,8 @@ const AdminDashboard: React.FC<{ env?: FloPlugEnv }> = ({ env }) => {
                 {activeModule === 'tiers'      && 'Define subscription tiers, included quotas, and overage pricing'}
                 {activeModule === 'auth'       && 'Manage authentication strategies available to hub administrators'}
                 {activeModule === 'connectors' && 'Register pre-built integrations available across all tenant environments'}
-                {activeModule === 'actions'    && 'Upload schemas and register operations as Actions for use in flos'}
-                {activeModule === 'floKits'    && 'Define FloKits — business-domain groupings of PreDefined Nodes per connector'}
+                {activeModule === 'actions'    && 'Upload schemas (WSDL / XSD / OpenAPI) and register connector actions'}
+                {activeModule === 'floKits'    && 'Define FloKits — schema version + action set per connector, synced to Action Node templates'}
                 {activeModule === 'users'      && 'Invite and manage product admins, developers, and hub-scoped users'}
               </p>
             </div>

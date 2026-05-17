@@ -19,7 +19,13 @@ export interface PlugConfig {
     name: string;
     urlPattern: string;
     variableHints: PlugVariableHint[];
-    credentials: PlugCredentialValues;
+    /**
+     * When set, credentials are read from FloConnections/{connectionId}.
+     * Legacy plugs may still store credentials inline until migrated (Phase 4).
+     */
+    connectionId?: string;
+    /** Inline auth — used when connectionId is absent (legacy) */
+    credentials?: PlugCredentialValues;
     urlVariables?: Record<string, PlugVariableBinding>;
     isActive: boolean;
     createdBy: string;

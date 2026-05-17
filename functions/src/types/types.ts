@@ -97,6 +97,8 @@ export interface UpdateHubUserRoleData {
   forcePasswordReset?: boolean;  // ✅ added for hub users
 }
 
+import type { FloKitEntitlementRef } from '@floplug/shared';
+
 export interface EnergizeData {
   hubName:        string;
   hubSlug:        string;
@@ -107,6 +109,10 @@ export interface EnergizeData {
     displayTitle: string;
     logoBase64:   string;
     accentColor:  string;
+  };
+  entitlements: {
+    connectorIds: string[];
+    floKits:        FloKitEntitlementRef[];
   };
 }
 

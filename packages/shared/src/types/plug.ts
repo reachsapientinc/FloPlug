@@ -22,7 +22,13 @@ export interface PlugConfig {
   name:           string;
   urlPattern:     string;                        // was baseUrl
   variableHints:  PlugVariableHint[];            // admin hints per {{variable}}
-  credentials:    PlugCredentialValues;          // auth values — admin only
+  /**
+   * When set, credentials are read from FloConnections/{connectionId}.
+   * Legacy plugs may still store credentials inline until migrated (Phase 4).
+   */
+  connectionId?:  string;
+  /** Inline auth — used when connectionId is absent (legacy) */
+  credentials?:   PlugCredentialValues;
   urlVariables?:  Record<string, PlugVariableBinding>; // dev fills on node
   isActive:       boolean;
   createdBy:      string;

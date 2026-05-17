@@ -1,3 +1,5 @@
+import type { HubEntitlements } from './hubEntitlements.js';
+
 // ── Hub doc (used by HubManagement) ───────────────────────────────────────────
 
 // export type HubRole    = 'hub_admin' | 'user';
@@ -28,9 +30,13 @@ export interface HubDoc {
   isActive:       boolean;
   branding?:      HubBranding;
   tenants?:       HubTenant[];
+  /** Connectors + FloKits this hub may use (set at provision) */
+  entitlements?:  HubEntitlements;
   createdAt?:     any;
   updatedAt?:     any;
 }
+
+export type { HubEntitlements, FloKitEntitlementRef, TenantEntitlementsDoc } from './hubEntitlements.js';
 
 export interface FloInvokePermissions {
   allowedUids:  string[];   // specific user UIDs, or ['*'] for all hub users

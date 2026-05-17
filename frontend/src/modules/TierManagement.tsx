@@ -19,8 +19,8 @@ const TierManagement: React.FC = () => {
     tierName: '',
     tierShortCode: '',
     eligibleTenantTypes: [] as string[],
-    costModel: { basePrice: 0, markUpPrice: 0, pricePerFlow: 0, pricePerWorkspace: 0, pricePerUser: 0, maxSchedules: 0, pricePerSchedule: 0, pricePerTenant: 0 },
-    inclUsers: 0, inclFlos: 0, inclWorkspaces: 0, inclTenants: 0, inclSchedules: 0, inclConnectors: 0
+    costModel: { basePrice: 0, markUpPrice: 0, pricePerFlow: 0, pricePerWorkspace: 0, pricePerUser: 0, maxSchedules: 0, pricePerSchedule: 0, pricePerConnector:0,pricePerTenant: 0,pricePerFloKit:0,pricePerFloKitAction:0 },
+    inclUsers: 0, inclFlos: 0, inclWorkspaces: 0, inclTenants: 0, inclSchedules: 0, inclConnectors: 0, inclFloKits:0,inclFloKitActions:0
   };
 
   const [tier, setTier] = useState(INITIAL_STATE);
@@ -223,7 +223,10 @@ const TierManagement: React.FC = () => {
             { label: 'Tenants', key: 'inclTenants' },
             { label: 'Workspaces', key: 'inclWorkspaces' },
             { label: 'Flos', key: 'inclFlos' },
-            { label: 'Schedules', key: 'inclSchedules' }
+            { label: 'Schedules', key: 'inclSchedules' },
+            { label: 'Tier-Controlled Connectors', key: 'inclConnectors' },
+            { label: 'Tier-Controlled FloKits', key: 'inclFloKits' },
+            { label: 'Tier-Controlled FloKitsActions', key: 'inclFloKitActions' },
           ].map(item => (
             <div className="input-group" key={item.key} style={{ marginBottom: '12px' }}>
               <label>{item.label}</label>
@@ -247,7 +250,10 @@ const TierManagement: React.FC = () => {
             { label: 'Per Addl. User', key: 'pricePerUser' },
             { label: 'Per Addl. Tenant', key: 'pricePerTenant' },
             { label: 'Per Addl. Flow', key: 'pricePerFlow' },
-            { label: 'Per Addl. Schedule', key: 'pricePerSchedule' }
+            { label: 'Per Addl. Schedule', key: 'pricePerSchedule' },
+            { label: 'Per Addl. FloConnector', key: 'pricePerConnector' },
+            { label: 'Per Addl. FloKit', key: 'pricePerFloKit' },
+            { label: 'Per Addl. FloKitAction', key: 'pricePerFloKitAction' },
           ].map(item => (
             <div className="input-group" key={item.key} style={{ marginBottom: '12px' }}>
               <label>{item.label}</label>

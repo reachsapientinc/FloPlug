@@ -265,6 +265,10 @@ html, body, #root {
   margin: 0 auto;
 }
 
+.content-viewport-wide {
+  max-width: none;
+}
+
 /* ── Bottom bar ── */
 .bottom-bar {
   flex: 0 0 36px;

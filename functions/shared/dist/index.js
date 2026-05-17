@@ -1,6 +1,9 @@
 export * from "./types/schema.js";
 export * from "./types/AuthConnectorTypes.js";
 export * from "./types/hubTypes.js";
+export * from "./types/hubEntitlements.js";
+export * from "./utils/entitlements.js";
+export * from "./utils/kitEntitlements.js";
 export * from "./types/storage.js";
 export * from "./types/plug.js";
 export * from "./types/nodeTypes.js";
@@ -10,3 +13,6 @@ export * from "./types/designer.js";
 export * from "./constants/constants.js";
 export * from './types/emailTypes.js';
 export * from './types/floKit.js';
+export * from './types/floConnection.js';
+export * from './types/actionNode.js';
+export * from './types/schemaOperations.js';

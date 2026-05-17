@@ -1,0 +1,55 @@
+import type React from 'react';
+
+export const ACCENT_PRESETS = [
+  '#4f8ef7', '#cc0000', '#0066cc', '#16a34a',
+  '#d97706', '#7c3aed', '#0f766e', '#db2777',
+];
+
+export const TIER_LABELS: Record<string, string> = {
+  gold_tier:   'Gold — Premium',
+  silver_tier: 'Silver — Standard',
+  bronze_tier: 'Bronze — Basic',
+};
+
+export const hubMgmtStyles: Record<string, React.CSSProperties> = {
+  root:         { padding: '28px 32px', color: '#f0f0f4', fontFamily: "'Inter',-apple-system,sans-serif", maxWidth: 1100 },
+  header:       { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 },
+  title:        { fontSize: 20, fontWeight: 700, color: '#f0f0f4', marginBottom: 4 },
+  subtitle:     { fontSize: 12, color: '#6b6b80', maxWidth: 580, lineHeight: 1.5 },
+  body:         { display: 'flex', gap: 20, alignItems: 'flex-start' },
+  list:         { flex: '0 0 240px', display: 'flex', flexDirection: 'column', gap: 6 },
+  listItem:     { background: '#181b24', border: '0.5px solid rgba(255,255,255,0.07)', borderRadius: 8, padding: '10px 12px', cursor: 'pointer' },
+  listOn:       { background: '#1e2130', borderColor: '#4f8ef7' },
+  chip:         { fontSize: 9, padding: '2px 7px', borderRadius: 20, fontWeight: 600, border: '0.5px solid transparent' },
+  chipGreen:    { background: 'rgba(34,197,94,0.12)', color: '#22c55e', borderColor: 'rgba(34,197,94,0.3)' },
+  chipRed:      { background: 'rgba(239,68,68,0.1)',  color: '#f87171', borderColor: 'rgba(239,68,68,0.2)' },
+  empty:        { fontSize: 12, color: '#45455a', lineHeight: 1.5 },
+  section:      { background: 'rgba(255,255,255,0.02)', border: '0.5px solid rgba(255,255,255,0.06)', borderRadius: 8, padding: '16px 18px', marginBottom: 16 },
+  secTitle:     { fontSize: 10, fontWeight: 700, color: '#9090a0', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 },
+  immutableBadge: { fontSize: 9, padding: '1px 6px', borderRadius: 4, background: 'rgba(255,255,255,0.04)', color: '#45455a', border: '0.5px solid rgba(255,255,255,0.06)' },
+  brandingPanel: { display: 'flex', flexDirection: 'column', gap: 0 },
+  roLabel:      { fontSize: 10, color: '#6b6b80', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: 3 },
+  roValue:      { fontSize: 13, color: '#c0c0cc', fontFamily: 'inherit', padding: '8px 0' },
+  fg:           { display: 'flex', flexDirection: 'column', gap: 5 },
+  fl:           { fontSize: 10, fontWeight: 500, color: '#9090a0', textTransform: 'uppercase', letterSpacing: '0.4px' },
+  input:        { padding: '8px 10px', borderRadius: 6, border: '0.5px solid rgba(255,255,255,0.12)', background: '#0d0f17', color: '#f0f0f4', fontSize: 12, fontFamily: 'inherit', outline: 'none', width: '100%', boxSizing: 'border-box' },
+  uploadZone:   { border: '1px dashed rgba(255,255,255,0.12)', borderRadius: 8, padding: '20px', cursor: 'pointer', background: 'rgba(255,255,255,0.01)', minHeight: 70, display: 'flex', alignItems: 'center', justifyContent: 'center', marginTop: 4 },
+  primaryBtn:   { padding: '8px 18px', borderRadius: 7, border: 'none', background: '#4f8ef7', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' },
+  cancelBtn:    { padding: '8px 18px', borderRadius: 7, border: '0.5px solid rgba(255,255,255,0.1)', background: 'transparent', color: '#9090a0', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' },
+  errBanner:    { padding: '10px 14px', borderRadius: 7, marginBottom: 14, background: 'rgba(220,38,38,0.1)', border: '0.5px solid rgba(220,38,38,0.25)', color: '#f87171', fontSize: 12 },
+  okBanner:     { padding: '10px 14px', borderRadius: 7, marginBottom: 14, background: 'rgba(34,197,94,0.08)', border: '0.5px solid rgba(34,197,94,0.25)', color: '#22c55e', fontSize: 12 },
+  infoBanner:   { padding: '10px 14px', borderRadius: 7, marginBottom: 14, background: 'rgba(79,142,247,0.08)', border: '0.5px solid rgba(79,142,247,0.2)', color: '#4f8ef7', fontSize: 12 },
+  checkList:    { display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 200, overflowY: 'auto', padding: '8px 10px', borderRadius: 6, border: '0.5px solid rgba(255,255,255,0.08)', background: '#0d0f17', marginTop: 4 },
+  checkRow:     { display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#c0c0cc', cursor: 'pointer' },
+  checkRowLocked: { opacity: 0.85, cursor: 'default' },
+  tierBadge:    { marginLeft: 8, fontSize: 9, padding: '1px 6px', borderRadius: 4, background: 'rgba(217,119,6,0.15)', color: '#d97706', border: '0.5px solid rgba(217,119,6,0.3)' },
+  standardBadge: { marginLeft: 8, fontSize: 9, padding: '1px 6px', borderRadius: 4, background: 'rgba(34,197,94,0.12)', color: '#22c55e', border: '0.5px solid rgba(34,197,94,0.25)' },
+  partialBadge:  { marginLeft: 6, fontSize: 9, padding: '1px 6px', borderRadius: 4, background: 'rgba(79,142,247,0.12)', color: '#4f8ef7', border: '0.5px solid rgba(79,142,247,0.25)' },
+  kitList:       { display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 320, overflowY: 'auto', padding: '8px 10px', borderRadius: 6, border: '0.5px solid rgba(255,255,255,0.08)', background: '#0d0f17' },
+  kitBlock:      { marginBottom: 4, borderRadius: 6, border: '0.5px solid rgba(255,255,255,0.06)', background: 'rgba(255,255,255,0.02)' },
+  kitHeader:     { display: 'flex', alignItems: 'center', gap: 6, padding: '6px 8px' },
+  expandBtn:     { width: 22, height: 22, padding: 0, border: 'none', background: 'transparent', color: '#9090a0', cursor: 'pointer', fontSize: 12, flexShrink: 0 },
+  kitTitleBtn:   { flex: 1, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 4, padding: 0, border: 'none', background: 'transparent', color: '#c0c0cc', cursor: 'pointer', textAlign: 'left', fontSize: 12, fontFamily: 'inherit' },
+  kitActionsPanel: { marginLeft: 28, marginRight: 8, marginBottom: 8, paddingLeft: 8, borderLeft: '2px solid rgba(79,142,247,0.25)', display: 'flex', flexDirection: 'column', gap: 4 },
+  linkBtn:       { padding: 0, border: 'none', background: 'none', color: '#4f8ef7', fontSize: 10, cursor: 'pointer', fontFamily: 'inherit' },
+};

@@ -29,7 +29,8 @@ import {
 // Keeping these in a separate bucket avoids Firestore document size limits
 // (1MB per doc) and keeps large binary files out of the database entirely.
 // Bucket must be created in Firebase console: gs://floplug-schemas
-import type {ConnectorDoc,ActionDoc,ConnectorSchema,ParsedField } from "@floplug/shared";
+import type {ConnectorDoc,ActionDoc,ConnectorSchema,ParsedField, SchemaOperationRef } from "@floplug/shared";
+import { fetchSchemaOperations } from '../lib/schemaOperations';
 import { loadConnectors } from '../types/AuthConnectorTypes';
 import {COLLECTIONS,HUB_COLLECTIONS,
       SUB_COLLECTIONS,ROLES,
@@ -92,7 +93,7 @@ const ActionManagement: React.FC = () => {
     try {
       const [schemaSnap, actionSnap] = await Promise.all([
         getDocs(query(collection(db, COLLECTIONS.FLOPLUGCONNECTORS, connId, SUB_COLLECTIONS.SCHEMAS), orderBy('label'))),
-        getDocs(query(collection(db, COLLECTIONS.FLOPLUGCONNECTORS, connId, 'Actions'), orderBy('label'))),
+        getDocs(query(collection(db, COLLECTIONS.FLOPLUGCONNECTORS, connId, SUB_COLLECTIONS.ACTIONS), orderBy('label'))),
       ]);
       setSchemas(schemaSnap.docs.map(d => ({ id: d.id, ...d.data() } as ConnectorSchema)));
       setActions(actionSnap.docs.map(d => ({ id: d.id, ...d.data() } as ActionDoc)));
@@ -113,7 +114,7 @@ const ActionManagement: React.FC = () => {
       {/* Header */}
       <div style={st.header}>
         <div>
-          <div style={st.title}>Action Management</div>
+          <div style={st.title}>Schema Management</div>
           <div style={st.subtitle}>
             Upload connector schemas (WSDL / XSD / OpenAPI), then register operations as
             Actions. Developers select Actions in the flow designer — FloPlug handles
@@ -264,12 +265,15 @@ const SchemaTab: React.FC<SchemaTabProps> = ({ connectorId, schemas, onSaved, on
       label: label.trim(),
     }) as any;
 
+    const opCount = result.operationCount ?? result.operations?.length ?? 0;
     onSaved({ 
       id: result.schemaId, connectorId, label: label.trim(),
       version: version.trim(), schemaType, storagePath: result.storagePath,
-      isActive: true, uploadedAt: new Date(), uploadedBy: ROLES.FLOPLUG_ROLES.ADMIN 
+      isActive: true, uploadedAt: new Date(), uploadedBy: ROLES.FLOPLUG_ROLES.ADMIN,
+      operations: result.operations,
     });
 
+    setParseResult(opCount > 0 ? `${opCount} operations parsed from file` : null);
     onError("Schema uploaded ✓");   // ← was flash()
     setShowForm(false); setFile(null); setLabel(""); setVersion("");
   } catch (e: any) { onError(e.message, true); }
@@ -395,6 +399,8 @@ const ActionTab: React.FC<ActionTabProps> = ({ connectorId, schemas, actions, on
   const [form,           setForm]           = useState<Omit<ActionDoc, 'id'>>(emptyAction(connectorId));
   const [saving,         setSaving]         = useState(false);
   const [floKits, setFloKits] = useState<{ id: string; name: string }[]>([]);
+  const [schemaOps, setSchemaOps] = useState<SchemaOperationRef[]>([]);
+  const [loadingOps, setLoadingOps] = useState(false);
 
 // Load FloKits for this connector
 useEffect(() => {
@@ -407,6 +413,27 @@ useEffect(() => {
 }, [connectorId]);
 
   const patch = (p: Partial<ActionDoc>) => setForm(f => ({ ...f, ...p }));
+
+  useEffect(() => {
+    if (form.schemaSource === 'manual' || !form.schemaRef) {
+      setSchemaOps([]);
+      return;
+    }
+    const schema = schemas.find(s => s.id === form.schemaRef);
+    if (schema?.operationsMeta?.length) {
+      setSchemaOps(schema.operationsMeta);
+      return;
+    }
+    if (schema?.operations?.length) {
+      setSchemaOps(schema.operations.map(name => ({ name, label: name })));
+      return;
+    }
+    setLoadingOps(true);
+    fetchSchemaOperations(connectorId, form.schemaRef)
+      .then(({ operations }) => setSchemaOps(operations))
+      .catch(() => setSchemaOps([]))
+      .finally(() => setLoadingOps(false));
+  }, [connectorId, form.schemaRef, form.schemaSource, schemas]);
 
   const handleNew = () => {
     setForm(emptyAction(connectorId));
@@ -426,8 +453,8 @@ useEffect(() => {
     setSaving(true);
     try {
       const ref = selectedAction
-        ? doc(db, COLLECTIONS.FLOPLUGCONNECTORS, connectorId, 'Actions', selectedAction.id)
-        : doc(collection(db, COLLECTIONS.FLOPLUGCONNECTORS, connectorId, 'Actions'));
+        ? doc(db, COLLECTIONS.FLOPLUGCONNECTORS, connectorId, SUB_COLLECTIONS.ACTIONS, selectedAction.id)
+        : doc(collection(db, COLLECTIONS.FLOPLUGCONNECTORS, connectorId, SUB_COLLECTIONS.ACTIONS));
       const saved: ActionDoc = { ...form, id: ref.id, connectorId, updatedAt: new Date() };
       await setDoc(ref, { ...saved, updatedAt: serverTimestamp() }, { merge: true });
       onSaved(saved);
@@ -564,10 +591,34 @@ useEffect(() => {
                   )}
                 </div>
                 <div style={st.fg}>
-                  <label style={st.fl}>Operation Name *</label>
-                  <input style={st.input} value={form.operationName ?? ''}
-                    placeholder="Put_Worker  or  createEmployee"
-                    onChange={e => patch({ operationName: e.target.value })} />
+                  <label style={st.fl}>Operation *</label>
+                  {loadingOps ? (
+                    <div style={{ fontSize: 11, color: '#6b6b80', marginTop: 6 }}>Loading operations from schema…</div>
+                  ) : schemaOps.length > 0 ? (
+                    <select
+                      style={st.input}
+                      value={form.operationName ?? ''}
+                      onChange={e => {
+                        const op = schemaOps.find(o => o.name === e.target.value);
+                        patch({
+                          operationName: e.target.value,
+                          label: form.label || op?.label || e.target.value,
+                          ...(op?.method ? { method: op.method as ActionDoc['method'] } : {}),
+                          ...(op?.endpoint ? { endpoint: op.endpoint } : {}),
+                        });
+                      }}>
+                      <option value="">— Select operation from schema —</option>
+                      {schemaOps.map(o => (
+                        <option key={o.name} value={o.name}>
+                          {o.label}{o.method ? ` · ${o.method}` : ''}{o.endpoint ? ` ${o.endpoint}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <div style={{ fontSize: 10, color: '#f59e0b', marginTop: 4 }}>
+                      No operations in schema — re-parse in Schemas tab or pick another file.
+                    </div>
+                  )}
                 </div>
               </div>
             )}

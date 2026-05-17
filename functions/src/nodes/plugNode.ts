@@ -11,9 +11,33 @@
 
 import { applyAuth }              from '../engine/applyAuth.js';
 import { getFirestore }           from 'firebase-admin/firestore';
-import type { PlugConfig, AuthProtocol, PlugVariableBinding } from '@floplug/shared';
+import type { PlugConfig, AuthProtocol, PlugVariableBinding, PlugCredentialValues } from '@floplug/shared';
 import { COLLECTIONS, HUB_COLLECTIONS, SUB_COLLECTIONS }     from '@floplug/shared';
 import { wrapMessage, getMessage, resolveUrl, type ValueBinding } from './cStreamMeta.js';
+
+async function resolvePlugCredentials(
+  plug: PlugConfig,
+  hubId: string,
+  tenantId: string,
+): Promise<PlugCredentialValues> {
+  if (plug.credentials && Object.keys(plug.credentials).length > 0) {
+    return plug.credentials;
+  }
+  if (plug.connectionId) {
+    const connSnap = await getFirestore()
+      .collection(COLLECTIONS.HUBS).doc(hubId)
+      .collection(HUB_COLLECTIONS.TENANTS).doc(tenantId)
+      .collection(HUB_COLLECTIONS.FLO_CONNECTIONS).doc(plug.connectionId)
+      .get();
+    if (!connSnap.exists) {
+      throw new Error(`FloConnection not found: ${plug.connectionId}`);
+    }
+    const creds = (connSnap.data() as { credentials?: PlugCredentialValues }).credentials;
+    if (creds && Object.keys(creds).length > 0) return creds;
+    throw new Error(`FloConnection "${plug.connectionId}" has no credentials configured`);
+  }
+  throw new Error(`Plug "${plug.name}" has no credentials — configure inline credentials or a FloConnection`);
+}
 
 export const executePlugNode = async (
   cStream: unknown,
@@ -65,7 +89,8 @@ export const executePlugNode = async (
   console.log(`[plugNode] Resolved URL: ${url}`);
 
   // ── 5. Apply auth ───────────────────────────────────────────────────────────
-  const auth = await applyAuth(authProtocol, plug.credentials);
+  const credentials = await resolvePlugCredentials(plug, hubId, tenantId);
+  const auth = await applyAuth(authProtocol, credentials);
 
   // ── 6. Build request body ───────────────────────────────────────────────────
   // Priority: cStream.message (canonical) → cStream.value (legacy TemplateNode) → full cStream

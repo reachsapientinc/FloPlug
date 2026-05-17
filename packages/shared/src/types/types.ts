@@ -95,17 +95,32 @@ export interface UpdateHubUserRoleData {
   isActive?:     boolean;
 }
 
+import type { FloKitEntitlementRef } from './hubEntitlements.js';
+
 export interface EnergizeData {
   hubName: string;
   hubSlug: string;
   tierId: string;
   authMethod: string;
-  contactEmailId:string;
+  contactEmailId: string;
   branding: {
-    displayTitle: string,
-    logoBase64: string,
-    accentColor: string
-  }
+    displayTitle: string;
+    logoBase64: string;
+    accentColor: string;
+  };
+  entitlements: {
+    connectorIds: string[];
+    floKits: FloKitEntitlementRef[];
+  };
+}
+
+/** Tier document fields used during hub provision */
+export interface FloPlugTierDoc {
+  tierName?: string;
+  tierShortCode?: string;
+  eligibleTenantTypes?: string[];
+  /** Max tier-controlled connectors per hub (0 = unlimited) */
+  inclConnectors?: number;
 }
 
 export interface AppSettings {

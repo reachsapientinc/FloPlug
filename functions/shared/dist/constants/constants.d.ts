@@ -21,6 +21,8 @@ export declare const SUB_COLLECTIONS: {
     readonly GLOBALLOOKUPS: "GlobalLookUps";
     readonly FLOKITS: "FloKits";
     readonly SCHEMAS: "Schemas";
+    readonly ACTIONS: "Actions";
+    /** Product templates under FloPlugConnectors/{id}/FloKits/{kitId}/ActionNodes */
     readonly ACTIONNODES: "ActionNodes";
 };
 export declare const HUB_COLLECTIONS: {
@@ -29,12 +31,17 @@ export declare const HUB_COLLECTIONS: {
     readonly FLOWS: "Flows";
     readonly FLOS: "Flos";
     readonly PLUGS: "Plugs";
+    readonly FLO_CONNECTIONS: "FloConnections";
+    readonly ACTION_NODES: "ActionNodes";
     readonly USERS: "Users";
     readonly EXEC_LOG: "ExecutionLog";
     readonly CONNECTORS: "ConnectorCredentials";
     readonly EMAIL_LOG: "EmailLog";
     readonly SCHEMAS: "Schemas";
+    readonly ENTITLEMENTS: "Entitlements";
 };
+/** Document id for hub-wide entitlements under each tenant */
+export declare const HUB_ENTITLEMENTS_DOC_ID: "hub";
 export declare const FLOPLUG_ROLES: {
     readonly ADMIN: "product_admin";
     readonly DEVELOPER: "developer";

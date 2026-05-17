@@ -1,3 +1,4 @@
+import type { HubEntitlements } from './hubEntitlements.js';
 export interface HubBranding {
     displayTitle?: string;
     logoBase64?: string;
@@ -19,9 +20,12 @@ export interface HubDoc {
     isActive: boolean;
     branding?: HubBranding;
     tenants?: HubTenant[];
+    /** Connectors + FloKits this hub may use (set at provision) */
+    entitlements?: HubEntitlements;
     createdAt?: any;
     updatedAt?: any;
 }
+export type { HubEntitlements, FloKitEntitlementRef, TenantEntitlementsDoc } from './hubEntitlements.js';
 export interface FloInvokePermissions {
     allowedUids: string[];
     allowedRoles: string[];

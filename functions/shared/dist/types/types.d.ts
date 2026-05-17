@@ -75,6 +75,7 @@ export interface UpdateHubUserRoleData {
     workspaceIds?: string[];
     isActive?: boolean;
 }
+import type { FloKitEntitlementRef } from './hubEntitlements.js';
 export interface EnergizeData {
     hubName: string;
     hubSlug: string;
@@ -86,6 +87,18 @@ export interface EnergizeData {
         logoBase64: string;
         accentColor: string;
     };
+    entitlements: {
+        connectorIds: string[];
+        floKits: FloKitEntitlementRef[];
+    };
+}
+/** Tier document fields used during hub provision */
+export interface FloPlugTierDoc {
+    tierName?: string;
+    tierShortCode?: string;
+    eligibleTenantTypes?: string[];
+    /** Max tier-controlled connectors per hub (0 = unlimited) */
+    inclConnectors?: number;
 }
 export interface AppSettings {
     isInternal: boolean;

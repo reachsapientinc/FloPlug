@@ -15,6 +15,7 @@ import type { DocumentData }          from 'firebase-admin/firestore';
 
 import { EnergizeData, TenantUser } from './types/types.js';
 import { provisionHubAndTenants }              from './services/provisioning.js';
+export { updateHubDetails } from './services/hubUpdate.js';
 
 import type { RunContext } from '@floplug/shared';
 import {toHubRole, ROLE_PERMISSIONS} from  '@floplug/shared';
@@ -22,6 +23,7 @@ import {toHubRole, ROLE_PERMISSIONS} from  '@floplug/shared';
 // Storage
 export { storageUpload, storageGetUrl, storageDelete, storageList } from "./helpers/storageHandlers.js";
 export { uploadSchema } from "./helpers/uploadSchema.js";
+export { listSchemaOperations } from "./helpers/listSchemaOperations.js";
 
 // Any other existing functions you already have
 export { resolveActionSchema } from './utils/resolveActionSchema.js';

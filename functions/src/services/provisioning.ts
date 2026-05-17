@@ -1,11 +1,23 @@
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
+import {
+  buildHubEntitlements,
+  floKitKey,
+  normalizeConnectorIds,
+  validateProvisionEntitlements,
+  type ConnectorDoc,
+  type FloKitDoc,
+  type FloPlugTierDoc,
+  HUB_ENTITLEMENTS_DOC_ID,
+  HUB_COLLECTIONS,
+  COLLECTIONS,
+  SUB_COLLECTIONS,
+} from '@floplug/shared';
 import { EnergizeData, AppSettings } from '../types/types.js';
 import { createAudit } from '../utils/audit.js';
 import { guardUniqueId } from '../utils/uniqueGuard.js';
 import { getGlobalSetting } from '../helpers/settingsHelper.js';
 import { sendEmail } from '../services/emailService.js';
-//import {COLLECTIONS} from '../constants.js';
 
 // ── Default Start + End nodes placed in every new flow ────────────────────────
 const DEFAULT_FLOW_NODES = [
@@ -23,6 +35,34 @@ const DEFAULT_FLOW_NODES = [
   },
 ];
 
+async function loadProductCatalog(db: ReturnType<typeof getFirestore>) {
+  const connectorSnap = await db.collection(COLLECTIONS.CONNECTORS).get();
+  const connectorsById = new Map<string, ConnectorDoc>();
+  const connectors: ConnectorDoc[] = [];
+  for (const docSnap of connectorSnap.docs) {
+    const c = { id: docSnap.id, ...docSnap.data() } as ConnectorDoc;
+    connectorsById.set(docSnap.id, c);
+    connectors.push(c);
+  }
+
+  const floKitsByKey = new Map<string, FloKitDoc>();
+  await Promise.all(
+    [...connectorsById.keys()].map(async connectorId => {
+      const kitSnap = await db
+        .collection(COLLECTIONS.CONNECTORS)
+        .doc(connectorId)
+        .collection(SUB_COLLECTIONS.FLOKITS)
+        .get();
+      for (const kitDoc of kitSnap.docs) {
+        const kit = { id: kitDoc.id, ...kitDoc.data() } as FloKitDoc;
+        floKitsByKey.set(floKitKey(connectorId, kit.id), kit);
+      }
+    }),
+  );
+
+  return { connectors, connectorsById, floKitsByKey };
+}
+
 export const provisionHubAndTenants = async (userId: string, data: EnergizeData) => {
   const db    = getFirestore();
   const auth  = getAuth();
@@ -34,13 +74,44 @@ export const provisionHubAndTenants = async (userId: string, data: EnergizeData)
   const hIntId     = `int-hub-${hSlug}`;
   const adminEmail = `admin@${hSlug}.floplug.xyz`;
 
+  if (!data.entitlements?.connectorIds?.length || !data.entitlements?.floKits?.length) {
+    throw new Error('Hub entitlements (connectors and FloKits) are required.');
+  }
+
   try {
     // 1. Fetch Tier & Global Lookups
-    const tierSnap = await db.collection('FloPlugTiers').doc(data.tierId).get();
+    const tierSnap = await db.collection(COLLECTIONS.FLOPLUGTIERS).doc(data.tierId).get();
     if (!tierSnap.exists) throw new Error(`Tier '${data.tierId}' not found.`);
 
+    const tier = tierSnap.data() as FloPlugTierDoc;
+    const maxTierControlledConnectors = tier.inclConnectors ?? 0;
+
+    const { connectors, connectorsById, floKitsByKey } = await loadProductCatalog(db);
+    const connectorIds = normalizeConnectorIds(
+      data.entitlements.connectorIds,
+      connectors,
+      data.tierId,
+    );
+
+    const validationError = validateProvisionEntitlements({
+      tierId: data.tierId,
+      connectorIds,
+      floKits: data.entitlements.floKits,
+      connectorsById,
+      floKitsByKey,
+      maxTierControlledConnectors,
+    });
+    if (validationError) throw new Error(validationError);
+
+    const hubEntitlements = buildHubEntitlements(
+      data.tierId,
+      connectorIds,
+      data.entitlements.floKits,
+      floKitsByKey,
+    );
+
     const globalTenantsSnap = await db
-      .collection('FloPlugGlobalSettings')
+      .collection(COLLECTIONS.GLOBAL_SETTINGS)
       .doc('GlobalLookUps')
       .collection('TenantTypes')
       .where('isActive', '==', true)
@@ -63,7 +134,7 @@ export const provisionHubAndTenants = async (userId: string, data: EnergizeData)
     });
     const adminUid = userRecord.uid;
 
-    const hubRef      = db.collection('FloPlugHubs').doc(hSlug);
+    const hubRef      = db.collection(COLLECTIONS.HUBS).doc(hSlug);
     const tenantUrls: Record<string, string> = {};
 
     // 4. Provision each environment (Tenant)
@@ -77,7 +148,7 @@ export const provisionHubAndTenants = async (userId: string, data: EnergizeData)
       const tUrl       = `https://${root}/${hSlug}/`;
       tenantUrls[env.key] = tUrl;
 
-      const tenantRef = hubRef.collection('Tenants').doc(tSlug);
+      const tenantRef = hubRef.collection(HUB_COLLECTIONS.TENANTS).doc(tSlug);
 
       // Guard both shortCode and integrationId for tenant
       await guardUniqueId(batch, hubRef, 'tenant', 'shortCode',     tShortCode);
@@ -92,65 +163,68 @@ export const provisionHubAndTenants = async (userId: string, data: EnergizeData)
         isActive:   !isProd,
       }));
 
+      const entitlementsRef = tenantRef
+        .collection(HUB_COLLECTIONS.ENTITLEMENTS)
+        .doc(HUB_ENTITLEMENTS_DOC_ID);
+      batch.set(entitlementsRef, createAudit(userId, `ENT-${tSlug.toUpperCase()}`, `int-ent-${tSlug}-${hSlug}`, hSlug, {
+        ...hubEntitlements,
+      }));
+
       // ── Default Workspace ───────────────────────────────────────────────────
-      // Auto-ID doc — Firestore generates the ID; we store it back as `id`
-      // so the frontend and all cross-references can use a single source of truth.
       const wsShortCode = `WS-${tSlug.toUpperCase()}-DEFAULT-${adminUid}`;
       const wsIntId     = `int-${wsShortCode.toLowerCase()}`;
 
       await guardUniqueId(batch, tenantRef, 'workspace', 'shortCode',     wsShortCode);
       await guardUniqueId(batch, tenantRef, 'workspace', 'integrationId', wsIntId);
 
-      // Use a pre-allocated ref so we have the ID before batch.commit()
-      const wsRef = tenantRef.collection('Workspaces').doc();   // ← auto-ID
-      const wsId  = wsRef.id;                                   // stable from here on
+      const wsRef = tenantRef.collection(HUB_COLLECTIONS.WORKSPACES).doc();
+      const wsId  = wsRef.id;
 
       batch.set(wsRef, createAudit(userId, wsShortCode, wsIntId, hSlug, {
-        id:            wsId,              // stored for easy cross-reference
+        id:            wsId,
         workspaceName: `Default ${env.label} Workspace`,
         shortCode:     wsShortCode,
         integrationId: wsIntId,
-        isDefault:     true,             // protected flag — Designer hides delete
-        defaultToLoad: true,             // Designer loads this workspace on mount
+        isDefault:     true,
+        defaultToLoad: true,
         isActive:      !isProd,
         ownerUid:      adminUid,
       }));
 
       // ── Default Flow ────────────────────────────────────────────────────────
-      // Auto-ID doc inside the workspace's Flos subcollection.
       const flShortCode = `FL-${tSlug.toUpperCase()}-DEFAULT-${adminUid}`;
       const flIntId     = `int-${flShortCode.toLowerCase()}`;
 
       await guardUniqueId(batch, tenantRef, 'flo', 'shortCode',     flShortCode);
       await guardUniqueId(batch, tenantRef, 'flo', 'integrationId', flIntId);
 
-      const flowRef = wsRef.collection('Flos').doc();          // ← auto-ID
+      const flowRef = wsRef.collection(HUB_COLLECTIONS.FLOS).doc();
       const flowId  = flowRef.id;
 
       batch.set(flowRef, createAudit(userId, flShortCode, flIntId, hSlug, {
-        id:            flowId,            // stored for easy cross-reference
+        id:            flowId,
         name:          'Default Flow',
         shortCode:     flShortCode,
         integrationId: flIntId,
         ownerUid:      adminUid,
-        workspaceId:   wsId,              // ← ref to the actual Firestore doc ID
+        workspaceId:   wsId,
         hubId:         hSlug,
         tenantId:      tSlug,
         nodes:         DEFAULT_FLOW_NODES,
         edges:         [],
         status:        'idle',
         isDefault:     true,
-        defaultToLoad: true,              // Designer loads this flow on mount
+        defaultToLoad: true,
       }));
 
       // ── User Profile ────────────────────────────────────────────────────────
-      const userProfileRef = tenantRef.collection('Users').doc(adminUid);
+      const userProfileRef = tenantRef.collection(HUB_COLLECTIONS.USERS).doc(adminUid);
       batch.set(userProfileRef, createAudit(userId, `USR-${tSlug.toUpperCase()}`, `int-usr-${tSlug}`, hSlug, {
         email:        adminEmail,
         uid:          adminUid,
         role:         'hub_admin',
         isActive:     !isProd,
-        workspaceIds: [wsId],             // ← actual Firestore doc ID, not a slug
+        workspaceIds: [wsId],
       }));
     }
 
@@ -160,6 +234,7 @@ export const provisionHubAndTenants = async (userId: string, data: EnergizeData)
       hubSlug:         hSlug,
       tierId:          data.tierId,
       branding:        data.branding,
+      entitlements:    hubEntitlements,
       adminEmail,
       contactEmailId:  data.contactEmailId ?? null,
       tenantEndpoints: tenantUrls,
@@ -193,11 +268,19 @@ export const provisionHubAndTenants = async (userId: string, data: EnergizeData)
         'Hub environments provisioned:',
         ...Object.entries(tenantUrls).map(([env, url]) => `  ${env}: ${url}`),
         '',
+        `Entitled connectors: ${hubEntitlements.connectorIds.length}`,
+        `Entitled FloKits: ${hubEntitlements.floKits.length}`,
+        '',
         'This is an automated message from FloPlug.',
       ].join('\n'),
     });
 
-    return { status: 'success', hubId: hSlug, endpoints: tenantUrls };
+    return {
+      status: 'success',
+      hubId: hSlug,
+      endpoints: tenantUrls,
+      entitlements: hubEntitlements,
+    };
 
   } catch (error: any) {
     console.error('Provisioning Error:', error);

@@ -27,7 +27,9 @@ export const SUB_COLLECTIONS = {
   GLOBALLOOKUPS: 'GlobalLookUps',
   FLOKITS: 'FloKits',
   SCHEMAS: 'Schemas',
-  ACTIONNODES: 'ActionNodes'
+  ACTIONS: 'Actions',
+  /** Product templates under FloPlugConnectors/{id}/FloKits/{kitId}/ActionNodes */
+  ACTIONNODES: 'ActionNodes',
 } as const;
 
 // ── Sub-collection names ──────────────────────────────────────────────────────
@@ -36,13 +38,19 @@ export const HUB_COLLECTIONS = {
   WORKSPACES:  'Workspaces',
   FLOWS:       'Flows',   //Deprecated do not use.
   FLOS:        'Flos',
-  PLUGS:       'Plugs',
+  PLUGS:           'Plugs',
+  FLO_CONNECTIONS: 'FloConnections',
+  ACTION_NODES:    'ActionNodes',
   USERS:       'Users',
   EXEC_LOG:    'ExecutionLog',
   CONNECTORS:  'ConnectorCredentials',
   EMAIL_LOG:   'EmailLog',
   SCHEMAS:     'Schemas',
+  ENTITLEMENTS: 'Entitlements',
 } as const;
+
+/** Document id for hub-wide entitlements under each tenant */
+export const HUB_ENTITLEMENTS_DOC_ID = 'hub' as const;
 
 
 export const FLOPLUG_ROLES = {

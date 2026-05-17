@@ -101,8 +101,16 @@ export interface ConnectorSchema {
     isActive: boolean;
     uploadedAt?: Date;
     uploadedBy?: string;
-    /** Operations extracted at upload time — names only, no field details */
+    /** Operations extracted at upload / listSchemaOperations — names only */
     operations?: string[];
+    /** Rich metadata per operation (method, path) for OpenAPI and UI */
+    operationsMeta?: Array<{
+        name: string;
+        label: string;
+        method?: string;
+        endpoint?: string;
+    }>;
+    operationsParsedAt?: unknown;
 }
 export interface ParsedField {
     path: string;
