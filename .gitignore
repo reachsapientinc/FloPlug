@@ -76,6 +76,7 @@ functions/src/scripts/floplug-prod-serviceAccountKey.json
 functions/src/scripts/*.json
 firebaseAdmin/
 
+
 # ── Firebase config files with hardcoded keys ─────────────────────────────────
 firebaseConfig.js
 
@@ -92,3 +93,4 @@ backup/
 Workday/
 gsutil/
 files/
+functions/src/scripts
