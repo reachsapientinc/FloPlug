@@ -1,9 +1,12 @@
 name: Deploy to Stage
 
+# on:
+#   push:
+#     branches:
+#       - stage
+
 on:
-  push:
-    branches:
-      - stage
+  workflow_dispatch:
 
 jobs:
   deploy:

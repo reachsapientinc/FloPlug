@@ -1,10 +1,13 @@
 name: Deploy to Dev
 
+# 🌟 CHANGED: Remove the automatic push trigger block below
+# on:
+#   push:
+#     branches:
+#       - dev
 on:
-  push:
-    branches:
-      - dev
-
+  workflow_dispatch:
+  
 jobs:
   deploy:
     runs-on: ubuntu-latest
