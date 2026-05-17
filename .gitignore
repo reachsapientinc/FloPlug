@@ -93,4 +93,4 @@ backup/
 Workday/
 gsutil/
 files/
-functions/src/scripts
+functions/src/scripts/
