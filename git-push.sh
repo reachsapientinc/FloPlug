@@ -136,6 +136,7 @@ PROTECTED=(
   "packages/shared/dist/"
   "functions/node_modules/"
   "frontend/node_modules/"
+  "functions/src/scripts"
   "node_modules/"
 )
 
