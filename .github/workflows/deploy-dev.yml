@@ -7,7 +7,7 @@ name: Deploy to Dev
 #       - dev
 on:
   workflow_dispatch:
-  
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -48,6 +48,41 @@ jobs:
       - name: Write functions .env
         run: echo "WEB_API_KEY=${{ secrets.DEV_WEB_API_KEY }}" > functions/.env
 
+     # 🌟 CHANGED: Step to check for file modifications inside the functions src path
+      - name: Get Changed Functions Files
+        id: changed-functions
+        uses: tj-actions/changed-files@v44
+        with:
+          files: functions/src/**
+          separator: ","
+
+      # 🌟 CHANGED: Step to parse file updates into explicit Firebase targeting parameters (e.g. functions:getUser)
+      - name: Set Firebase Deploy Target String
+        id: parse-targets
+        run: |
+          CHANGED_FILES="${{ steps.changed-functions.outputs.all_changed_files }}"
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "FUNCTION_TARGETS=" >> $GITHUB_ENV
+            echo "No function modifications discovered."
+          else
+            TARGETS=""
+            IFS=',' read -ra ADDR <<< "$CHANGED_FILES"
+            for file in "${ADDR[@]}"; do
+              FILENAME=$(basename -- "$file")
+              FUNC_NAME="${FILENAME%.*}"
+              
+              if [ -z "$TARGETS" ]; then
+                TARGETS="functions:$FUNC_NAME"
+              else
+                TARGETS="$TARGETS,functions:$FUNC_NAME"
+              fi
+            done
+            echo "FUNCTION_TARGETS=$TARGETS" >> $GITHUB_ENV
+            echo "Targeting specific updates: $TARGETS"
+          fi
+
+      # This step handles your Frontend static delivery as before
+
       - name: Deploy to Firebase Dev
         uses: FirebaseExtended/action-hosting-deploy@v0
         with:
@@ -55,3 +90,10 @@ jobs:
           firebaseServiceAccount: ${{ secrets.DEV_FIREBASE_SERVICE_ACCOUNT }}
           projectId: floplug-dev
           channelId: live
+
+      # 🌟 CHANGED: Conditional deployment step targeting only modified Cloud Functions
+      - name: Deploy Modified Cloud Functions Only
+        if: env.FUNCTION_TARGETS != ''
+        run: npx firebase-tools deploy --only ${{ env.FUNCTION_TARGETS }} --project floplug-dev
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
