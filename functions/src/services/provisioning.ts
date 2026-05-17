@@ -2,8 +2,12 @@ import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
 import {
   buildHubEntitlements,
+  countEntitledFloKits,
+  entitledConnectorIds,
   floKitKey,
+  normalizeConnectorEntitlements,
   normalizeConnectorIds,
+  normalizeProvisionEntitlementsInput,
   validateProvisionEntitlements,
   type ConnectorDoc,
   type FloKitDoc,
@@ -74,8 +78,11 @@ export const provisionHubAndTenants = async (userId: string, data: EnergizeData)
   const hIntId     = `int-hub-${hSlug}`;
   const adminEmail = `admin@${hSlug}.floplug.xyz`;
 
-  if (!data.entitlements?.connectorIds?.length || !data.entitlements?.floKits?.length) {
-    throw new Error('Hub entitlements (connectors and FloKits) are required.');
+  const connectorsInput = normalizeProvisionEntitlementsInput(data.entitlements);
+  const inputConnectorIds = Object.keys(connectorsInput);
+  const inputKitCount = Object.values(connectorsInput).reduce((n, c) => n + c.floKits.length, 0);
+  if (inputConnectorIds.length === 0 || inputKitCount === 0) {
+    throw new Error('Hub entitlements (connectors and at least one FloKit) are required.');
   }
 
   try {
@@ -88,15 +95,16 @@ export const provisionHubAndTenants = async (userId: string, data: EnergizeData)
 
     const { connectors, connectorsById, floKitsByKey } = await loadProductCatalog(db);
     const connectorIds = normalizeConnectorIds(
-      data.entitlements.connectorIds,
+      inputConnectorIds,
       connectors,
       data.tierId,
     );
+    const connectorsEnt = normalizeConnectorEntitlements(connectorsInput, connectorIds);
 
     const validationError = validateProvisionEntitlements({
       tierId: data.tierId,
       connectorIds,
-      floKits: data.entitlements.floKits,
+      connectors: connectorsEnt,
       connectorsById,
       floKitsByKey,
       maxTierControlledConnectors,
@@ -106,7 +114,7 @@ export const provisionHubAndTenants = async (userId: string, data: EnergizeData)
     const hubEntitlements = buildHubEntitlements(
       data.tierId,
       connectorIds,
-      data.entitlements.floKits,
+      connectorsEnt,
       floKitsByKey,
     );
 
@@ -268,8 +276,8 @@ export const provisionHubAndTenants = async (userId: string, data: EnergizeData)
         'Hub environments provisioned:',
         ...Object.entries(tenantUrls).map(([env, url]) => `  ${env}: ${url}`),
         '',
-        `Entitled connectors: ${hubEntitlements.connectorIds.length}`,
-        `Entitled FloKits: ${hubEntitlements.floKits.length}`,
+        `Entitled connectors: ${entitledConnectorIds(hubEntitlements).length}`,
+        `Entitled FloKits: ${countEntitledFloKits(hubEntitlements)}`,
         '',
         'This is an automated message from FloPlug.',
       ].join('\n'),

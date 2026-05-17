@@ -169,7 +169,7 @@ export interface ParsedField {
 // Action types (FloPlugConnectors/{id}/Actions/{id})
 // ─────────────────────────────────────────────────────────────────────────────
  
-export type ActionSchemaSource = 'wsdl' | 'xsd' | 'openapi' | 'manual';
+export type ActionSchemaSource = 'wsdl' | 'xsd' | 'openapi' | 'graphql' | 'manual';
  
 export interface ActionDoc {
   id:              string;

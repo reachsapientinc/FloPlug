@@ -1,5 +1,14 @@
 import type { FloKitDoc } from '../types/floKit.js';
-import type { FloKitEntitlementRef, HubEntitlements } from '../types/hubEntitlements.js';
+import type {
+  ConnectorFloKitEntitlements,
+  FloKitActionEntitlement,
+  FloKitEntitlementRef,
+  HubEntitlements,
+  LegacyHubEntitlementsFields,
+  ProvisionEntitlementsInput,
+  ProvisionEntitlementsInputLegacy,
+} from '../types/hubEntitlements.js';
+
 export function floKitKey(connectorId: string, floKitId: string): string {
   return `${connectorId}::${floKitId}`;
 }
@@ -20,13 +29,103 @@ export function kitCheckState(selected: string[], all: string[]): KitCheckState 
   return 'partial';
 }
 
+/** Normalize stored or legacy entitlements to the per-connector map shape. */
+export function normalizeHubEntitlements(
+  raw: (Partial<HubEntitlements> & LegacyHubEntitlementsFields) | undefined,
+): HubEntitlements | undefined {
+  if (!raw?.tierId) return undefined;
+
+  if (raw.connectors && Object.keys(raw.connectors).length > 0) {
+    return {
+      tierId: raw.tierId,
+      connectors: raw.connectors,
+      actionIds: raw.actionIds ?? [],
+    };
+  }
+
+  const connectors: Record<string, ConnectorFloKitEntitlements> = {};
+  for (const id of raw.connectorIds ?? []) {
+    if (!connectors[id]) connectors[id] = { floKits: [] };
+  }
+  for (const ref of raw.floKits ?? []) {
+    if (!connectors[ref.connectorId]) {
+      connectors[ref.connectorId] = { floKits: [] };
+    }
+    connectors[ref.connectorId].floKits.push({
+      floKitId: ref.floKitId,
+      ...(ref.actionIds?.length ? { actionIds: [...ref.actionIds] } : {}),
+    });
+  }
+
+  return {
+    tierId: raw.tierId,
+    connectors,
+    actionIds: raw.actionIds ?? [],
+  };
+}
+
+export function entitledConnectorIds(entitlements: HubEntitlements | undefined): string[] {
+  const normalized = normalizeHubEntitlements(entitlements);
+  if (!normalized) return [];
+  return Object.keys(normalized.connectors);
+}
+
+export function flattenFloKitEntitlements(
+  entitlements: HubEntitlements | undefined,
+): FloKitEntitlementRef[] {
+  const normalized = normalizeHubEntitlements(entitlements);
+  if (!normalized) return [];
+  const refs: FloKitEntitlementRef[] = [];
+  for (const [connectorId, block] of Object.entries(normalized.connectors)) {
+    for (const kit of block.floKits) {
+      refs.push({
+        connectorId,
+        floKitId: kit.floKitId,
+        ...(kit.actionIds?.length ? { actionIds: kit.actionIds } : {}),
+      });
+    }
+  }
+  return refs;
+}
+
+export function countEntitledFloKits(entitlements: HubEntitlements | undefined): number {
+  const normalized = normalizeHubEntitlements(entitlements);
+  if (!normalized) return 0;
+  return Object.values(normalized.connectors).reduce((n, c) => n + c.floKits.length, 0);
+}
+
+/** Accept new per-connector map or legacy flat payload from clients. */
+export function normalizeProvisionEntitlementsInput(
+  input: ProvisionEntitlementsInput | ProvisionEntitlementsInputLegacy,
+): Record<string, ConnectorFloKitEntitlements> {
+  if ('connectors' in input && input.connectors) {
+    return input.connectors;
+  }
+  const legacy = input as ProvisionEntitlementsInputLegacy;
+  const connectors: Record<string, ConnectorFloKitEntitlements> = {};
+  for (const id of legacy.connectorIds ?? []) {
+    if (!connectors[id]) connectors[id] = { floKits: [] };
+  }
+  for (const ref of legacy.floKits ?? []) {
+    if (!connectors[ref.connectorId]) {
+      connectors[ref.connectorId] = { floKits: [] };
+    }
+    connectors[ref.connectorId].floKits.push({
+      floKitId: ref.floKitId,
+      ...(ref.actionIds?.length ? { actionIds: [...ref.actionIds] } : {}),
+    });
+  }
+  return connectors;
+}
+
 /** Hub entitlements → per-kit selected action ids (for the UI). */
 export function entitlementsToKitSelections(
   entitlements: HubEntitlements | undefined,
   floKitsByKey: Map<string, FloKitDoc>,
 ): KitActionSelectionMap {
   const map: KitActionSelectionMap = {};
-  const refs = entitlements?.floKits ?? [];
+  const normalized = normalizeHubEntitlements(entitlements);
+  const refs = normalized ? flattenFloKitEntitlements(normalized) : [];
 
   if (refs.length > 0) {
     for (const ref of refs) {
@@ -43,7 +142,7 @@ export function entitlementsToKitSelections(
     return map;
   }
 
-  const actionSet = new Set(entitlements?.actionIds ?? []);
+  const actionSet = new Set(normalized?.actionIds ?? entitlements?.actionIds ?? []);
   for (const [key, kit] of floKitsByKey) {
     const picked = (kit.actionIds ?? []).filter(id => actionSet.has(id));
     if (picked.length) map[key] = picked;
@@ -51,7 +150,29 @@ export function entitlementsToKitSelections(
   return map;
 }
 
-/** UI state → API payload refs (only kits with ≥1 action). */
+/** UI state → per-connector entitlement map (only kits with ≥1 action). */
+export function kitSelectionsToConnectorEntitlements(
+  selections: KitActionSelectionMap,
+  entitledConnectorIds: string[],
+): Record<string, ConnectorFloKitEntitlements> {
+  const connectors: Record<string, ConnectorFloKitEntitlements> = {};
+  for (const connId of entitledConnectorIds) {
+    const floKits: FloKitActionEntitlement[] = [];
+    for (const [key, actionIds] of Object.entries(selections)) {
+      if (actionIds.length === 0) continue;
+      const { connectorId, floKitId } = parseFloKitKey(key);
+      if (connectorId !== connId) continue;
+      floKits.push({
+        floKitId,
+        actionIds: [...actionIds].sort(),
+      });
+    }
+    connectors[connId] = { floKits };
+  }
+  return connectors;
+}
+
+/** @deprecated Use kitSelectionsToConnectorEntitlements */
 export function kitSelectionsToFloKitRefs(
   selections: KitActionSelectionMap,
 ): FloKitEntitlementRef[] {
@@ -72,7 +193,7 @@ export function countSelectedActions(selections: KitActionSelectionMap): number 
 }
 
 export function resolveEntitledActionIds(
-  ref: FloKitEntitlementRef,
+  ref: FloKitActionEntitlement | FloKitEntitlementRef,
   kit: FloKitDoc | undefined,
 ): string[] {
   const all = kit?.actionIds ?? [];

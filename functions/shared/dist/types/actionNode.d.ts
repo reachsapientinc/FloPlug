@@ -8,8 +8,18 @@ export interface FloKitActionNodeDoc {
     connectorId: string;
     actionId: string;
     actionLabel: string;
-    schemaId: string;
-    schemaVersion: string;
+    servicesSchemaId: string;
+    servicesSchemaVersion: string;
+    dataModelSchemaId: string;
+    dataModelSchemaVersion: string;
+    /** @deprecated Use servicesSchemaId */
+    wsdlSchemaId?: string;
+    /** @deprecated Use servicesSchemaVersion */
+    wsdlSchemaVersion?: string;
+    /** @deprecated Use servicesSchemaId */
+    schemaId?: string;
+    /** @deprecated Use servicesSchemaVersion */
+    schemaVersion?: string;
     kitVersion: string;
     category?: string;
     isActive: boolean;

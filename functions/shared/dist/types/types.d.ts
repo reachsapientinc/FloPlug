@@ -75,7 +75,7 @@ export interface UpdateHubUserRoleData {
     workspaceIds?: string[];
     isActive?: boolean;
 }
-import type { FloKitEntitlementRef } from './hubEntitlements.js';
+import type { ProvisionEntitlementsInput, ProvisionEntitlementsInputLegacy } from './hubEntitlements.js';
 export interface EnergizeData {
     hubName: string;
     hubSlug: string;
@@ -87,10 +87,7 @@ export interface EnergizeData {
         logoBase64: string;
         accentColor: string;
     };
-    entitlements: {
-        connectorIds: string[];
-        floKits: FloKitEntitlementRef[];
-    };
+    entitlements: ProvisionEntitlementsInput | ProvisionEntitlementsInputLegacy;
 }
 /** Tier document fields used during hub provision */
 export interface FloPlugTierDoc {

@@ -11,24 +11,39 @@ import {
   COLLECTIONS, SUB_COLLECTIONS,
   filterConnectorsForTier, filterFloKitsForTier, countTierControlledConnectors,
   standardConnectorIds, normalizeConnectorIds,
-  floKitKey, kitCheckState, type KitActionSelectionMap,
+  floKitKey, kitCheckState, isFloKitConfigured, type KitActionSelectionMap,
 } from '@floplug/shared';
 
 export function connIdsKey(ids: string[]): string {
   return [...ids].sort().join('|');
 }
 
-async function fetchKitActions(connectorId: string, actionIds: string[]): Promise<ActionDoc[]> {
+async function fetchKitActions(
+  connectorId: string,
+  floKitId: string,
+  actionIds: string[],
+): Promise<ActionDoc[]> {
   if (actionIds.length === 0) return [];
-  const snaps = await Promise.all(
-    actionIds.map(id =>
-      getDoc(doc(db, COLLECTIONS.FLOPLUGCONNECTORS, connectorId, SUB_COLLECTIONS.ACTIONS, id)),
-    ),
-  );
-  return snaps
-    .filter(s => s.exists())
-    .map(s => ({ id: s.id, ...s.data() } as ActionDoc))
-    .filter(a => a.isActive !== false);
+  const loadOne = async (id: string): Promise<ActionDoc | null> => {
+    const kitRef = doc(
+      db,
+      COLLECTIONS.FLOPLUGCONNECTORS, connectorId,
+      SUB_COLLECTIONS.FLOKITS, floKitId,
+      SUB_COLLECTIONS.FLOKITACTIONS, id,
+    );
+    const kitSnap = await getDoc(kitRef);
+    if (kitSnap.exists()) {
+      return { id: kitSnap.id, ...kitSnap.data(), floKitId } as ActionDoc;
+    }
+    const legacyRef = doc(
+      db, COLLECTIONS.FLOPLUGCONNECTORS, connectorId, SUB_COLLECTIONS.ACTIONS, id,
+    );
+    const legacySnap = await getDoc(legacyRef);
+    if (!legacySnap.exists()) return null;
+    return { id: legacySnap.id, ...legacySnap.data(), floKitId } as ActionDoc;
+  };
+  const results = await Promise.all(actionIds.map(loadOne));
+  return results.filter((a): a is ActionDoc => !!a && a.isActive !== false);
 }
 
 export function useEntitlementCatalog(tierId: string) {
@@ -83,7 +98,7 @@ export function useEntitlementCatalog(tierId: string) {
           );
           const kits = kitSnap.docs
             .map(d => ({ id: d.id, ...d.data() } as FloKitDoc))
-            .filter(k => k.isActive !== false && k.schemaId && (k.actionIds?.length ?? 0) > 0);
+            .filter(k => k.isActive !== false && isFloKitConfigured(k));
           return [connId, filterFloKitsForTier(kits, tierId)] as const;
         }),
       );
@@ -105,7 +120,7 @@ export function useEntitlementCatalog(tierId: string) {
     kitActionsInflightRef.current.add(key);
     setKitActionsLoading(prev => ({ ...prev, [key]: true }));
     try {
-      const actions = await fetchKitActions(connectorId, kit.actionIds ?? []);
+      const actions = await fetchKitActions(connectorId, kit.id, kit.actionIds ?? []);
       kitActionsCacheRef.current = { ...kitActionsCacheRef.current, [key]: actions };
       setKitActionsByKey(kitActionsCacheRef.current);
       return actions;

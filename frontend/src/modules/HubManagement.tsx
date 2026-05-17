@@ -6,7 +6,7 @@ import React, { useState, useCallback } from 'react';
 import { collection, getDocs } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import type { HubDoc } from '@floplug/shared';
-import { COLLECTIONS } from '@floplug/shared';
+import { COLLECTIONS, countEntitledFloKits } from '@floplug/shared';
 import HubEditor from './HubEditor';
 import ProvisionHubForm from './ProvisionHubForm';
 import { hubMgmtStyles as s, TIER_LABELS } from './hubManagementStyles';
@@ -85,7 +85,8 @@ const HubManagement: React.FC = () => {
               </div>
               <div style={{ fontSize: 10, color: '#45455a' }}>
                 {h.hubSlug} · {TIER_LABELS[h.tierId] ?? h.tierId}
-                {h.entitlements?.floKits?.length != null && ` · ${h.entitlements.floKits.length} kits`}
+                {h.entitlements && countEntitledFloKits(h.entitlements) > 0 &&
+                  ` · ${countEntitledFloKits(h.entitlements)} kits`}
               </div>
             </div>
           ))}

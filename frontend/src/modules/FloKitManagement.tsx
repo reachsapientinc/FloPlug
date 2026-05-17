@@ -16,7 +16,10 @@ import type {
   ConnectorDoc, FloKitDoc, ConnectorSchema, ActionDoc, FloKitActionNodeDoc,
   SchemaOperationRef,
 } from '@floplug/shared';
-import { validateFloKitIdentity, validateFloKitConfiguration } from '@floplug/shared';
+import {
+  validateFloKitIdentity, validateFloKitConfiguration,
+  isFloKitConfigured, resolveKitServicesSchemaId,
+} from '@floplug/shared';
 import { loadConnectors } from '../types/AuthConnectorTypes';
 import { COLLECTIONS, SUB_COLLECTIONS } from '@floplug/shared';
 import { fetchSchemaOperations } from '../lib/schemaOperations';
@@ -32,7 +35,8 @@ function slugify(name: string): string {
 const emptyKit = (connectorId: string): FloKitDoc => ({
   id: '', name: '', description: '',
   connectorId,
-  schemaId: '', schemaVersion: '',
+  servicesSchemaId: '', servicesSchemaVersion: '',
+  dataModelSchemaId: '', dataModelSchemaVersion: '',
   actionIds: [],
   kitVersion: '1.0.0',
   availableForTiers: [],
@@ -44,7 +48,31 @@ function operationDocId(operationName: string): string {
 }
 
 function kitNeedsConfiguration(kit: FloKitDoc): boolean {
-  return !kit.schemaId?.trim() || !(kit.actionIds?.length);
+  return !isFloKitConfigured(kit);
+}
+
+function hydrateKitFromFirestore(kit: FloKitDoc, connectorId: string): FloKitDoc {
+  const servicesSchemaId = resolveKitServicesSchemaId(kit);
+  return {
+    ...emptyKit(connectorId),
+    ...kit,
+    connectorId,
+    servicesSchemaId,
+    servicesSchemaVersion:
+      kit.servicesSchemaVersion ?? kit.wsdlSchemaVersion ?? kit.schemaVersion ?? '',
+    dataModelSchemaId: kit.dataModelSchemaId ?? '',
+    dataModelSchemaVersion: kit.dataModelSchemaVersion ?? '',
+    actionIds: kit.actionIds ?? [],
+    kitVersion: kit.kitVersion ?? '1.0.0',
+  };
+}
+
+function floKitActionsPath(connId: string, kitId: string) {
+  return [
+    COLLECTIONS.FLOPLUGCONNECTORS, connId,
+    SUB_COLLECTIONS.FLOKITS, kitId,
+    SUB_COLLECTIONS.FLOKITACTIONS,
+  ] as const;
 }
 
 const FloKitManagement: React.FC = () => {
@@ -99,13 +127,9 @@ const FloKitManagement: React.FC = () => {
   const loadConnectorCatalog = useCallback(async (connId: string) => {
     setDataLoading(true);
     try {
-      const [schemaSnap, actionSnap, kitSnap] = await Promise.all([
+      const [schemaSnap, kitSnap] = await Promise.all([
         getDocs(query(
           collection(db, COLLECTIONS.FLOPLUGCONNECTORS, connId, SUB_COLLECTIONS.SCHEMAS),
-          orderBy('label'),
-        )),
-        getDocs(query(
-          collection(db, COLLECTIONS.FLOPLUGCONNECTORS, connId, SUB_COLLECTIONS.ACTIONS),
           orderBy('label'),
         )),
         getDocs(query(
@@ -114,7 +138,7 @@ const FloKitManagement: React.FC = () => {
         )),
       ]);
       setSchemas(schemaSnap.docs.map(d => ({ id: d.id, ...d.data() } as ConnectorSchema)));
-      setActions(actionSnap.docs.map(d => ({ id: d.id, ...d.data() } as ActionDoc)));
+      setActions([]);
       setFloKits(kitSnap.docs.map(d => ({ id: d.id, ...d.data() } as FloKitDoc)));
     } catch (e: unknown) { flash(e instanceof Error ? e.message : String(e), true); }
     finally { setDataLoading(false); }
@@ -131,17 +155,24 @@ const FloKitManagement: React.FC = () => {
     loadConnectorCatalog(connId);
   };
 
+  const loadKitActions = useCallback(async (connId: string, kitId: string) => {
+    if (!kitId) { setActions([]); return; }
+    try {
+      const snap = await getDocs(
+        query(collection(db, ...floKitActionsPath(connId, kitId)), orderBy('label')),
+      );
+      setActions(snap.docs.map(d => ({ id: d.id, ...d.data(), floKitId: kitId } as ActionDoc)));
+    } catch {
+      setActions([]);
+    }
+  }, []);
+
   const applyKitToForm = (kit: FloKitDoc) => {
-    setForm({
-      ...emptyKit(kit.connectorId || selectedConn || ''),
-      ...kit,
-      actionIds: kit.actionIds ?? [],
-      schemaId: kit.schemaId ?? '',
-      schemaVersion: kit.schemaVersion ?? '',
-      kitVersion: kit.kitVersion ?? '1.0.0',
-    });
+    const connId = kit.connectorId || selectedConn || '';
+    setForm(hydrateKitFromFirestore(kit, connId));
     setKitPersisted(true);
     setEditorTab(kitNeedsConfiguration(kit) ? 'configure' : 'details');
+    if (connId && kit.id) void loadKitActions(connId, kit.id);
   };
 
   const handleSelectKit = (kit: FloKitDoc) => {
@@ -169,9 +200,24 @@ const FloKitManagement: React.FC = () => {
     patch({ name, ...(isNew ? { id: slugify(name) } : {}) });
   };
 
-  const selectedSchema = useMemo(
-    () => schemas.find(s => s.id === form.schemaId),
-    [schemas, form.schemaId],
+  const serviceSchemas = useMemo(
+    () => schemas.filter(s =>
+      s.isActive !== false &&
+      (s.schemaType === 'wsdl' || s.schemaType === 'openapi' || s.schemaType === 'graphql'),
+    ),
+    [schemas],
+  );
+  const dataModelSchemas = useMemo(
+    () => schemas.filter(s => s.isActive !== false && s.schemaType === 'xsd'),
+    [schemas],
+  );
+  const selectedServicesSchema = useMemo(
+    () => schemas.find(s => s.id === form.servicesSchemaId),
+    [schemas, form.servicesSchemaId],
+  );
+  const selectedDataModelSchema = useMemo(
+    () => schemas.find(s => s.id === form.dataModelSchemaId),
+    [schemas, form.dataModelSchemaId],
   );
 
   const filteredSchemaOps = useMemo(() => {
@@ -235,21 +281,29 @@ const FloKitManagement: React.FC = () => {
   }, [selectedConn, schemas, form.actionIds, actions, form.name]);
 
   useEffect(() => {
-    if (editorTab === 'configure' && form.schemaId && kitSaved) {
-      loadSchemaOperations(form.schemaId);
+    if (editorTab === 'configure' && form.servicesSchemaId && kitSaved) {
+      loadSchemaOperations(form.servicesSchemaId);
     }
-  }, [editorTab, form.schemaId, kitSaved, loadSchemaOperations]);
+  }, [editorTab, form.servicesSchemaId, kitSaved, loadSchemaOperations]);
 
-  const handleSchemaChange = (schemaId: string) => {
+  const handleServicesSchemaChange = (schemaId: string) => {
     const schema = schemas.find(s => s.id === schemaId);
     patch({
-      schemaId,
-      schemaVersion: schema?.version ?? '',
+      servicesSchemaId: schemaId,
+      servicesSchemaVersion: schema?.version ?? '',
       actionIds: [],
     });
     setSelectedOperations([]);
     if (schemaId) loadSchemaOperations(schemaId);
     else setSchemaOps([]);
+  };
+
+  const handleDataModelSchemaChange = (schemaId: string) => {
+    const schema = schemas.find(s => s.id === schemaId);
+    patch({
+      dataModelSchemaId: schemaId,
+      dataModelSchemaVersion: schema?.version ?? '',
+    });
   };
 
   const toggleOperation = (operationName: string) => {
@@ -272,12 +326,20 @@ const FloKitManagement: React.FC = () => {
     ops: SchemaOperationRef[],
     selectedNames: string[],
   ): Promise<ActionDoc[]> => {
-    if (!selectedConn || !selectedSchema) return [];
-    const schemaSource = selectedSchema.schemaType === 'openapi'
+    if (!selectedConn || !selectedServicesSchema || !form.id) return [];
+    const schemaSource = selectedServicesSchema.schemaType === 'openapi'
       ? 'openapi'
-      : selectedSchema.schemaType === 'xsd'
-        ? 'xsd'
+      : selectedServicesSchema.schemaType === 'graphql'
+        ? 'graphql'
         : 'wsdl';
+
+    const actionsCol = collection(db, ...floKitActionsPath(selectedConn, form.id));
+    const existingSnap = await getDocs(actionsCol);
+    const keepIds = new Set(selectedNames.map(operationDocId));
+    const batch = writeBatch(db);
+    for (const d of existingSnap.docs) {
+      if (!keepIds.has(d.id)) batch.delete(d.ref);
+    }
 
     const saved: ActionDoc[] = [];
     for (const name of selectedNames) {
@@ -294,22 +356,15 @@ const FloKitManagement: React.FC = () => {
         method:      (op.method ?? 'POST') as ActionDoc['method'],
         endpoint:    op.endpoint ?? '/',
         schemaSource,
-        schemaRef:   form.schemaId,
+        schemaRef:   form.servicesSchemaId,
         operationName: name,
         floKitId:    form.id,
       };
-      await setDoc(
-        doc(db, COLLECTIONS.FLOPLUGCONNECTORS, selectedConn, SUB_COLLECTIONS.ACTIONS, id),
-        { ...action, updatedAt: serverTimestamp() },
-        { merge: true },
-      );
+      batch.set(doc(actionsCol, id), { ...action, updatedAt: serverTimestamp() }, { merge: true });
       saved.push(action);
     }
-    setActions(prev => {
-      const map = new Map(prev.map(a => [a.id, a]));
-      saved.forEach(a => map.set(a.id, a));
-      return [...map.values()].sort((a, b) => a.label.localeCompare(b.label));
-    });
+    await batch.commit();
+    setActions(saved.sort((a, b) => a.label.localeCompare(b.label)));
     return saved;
   };
 
@@ -333,14 +388,21 @@ const FloKitManagement: React.FC = () => {
 
     const now = serverTimestamp();
     for (const action of selectedActions) {
+      const servicesId = resolveKitServicesSchemaId(kit);
       const node: FloKitActionNodeDoc = {
         id:            action.id,
         floKitId:      kitId,
         connectorId:   connId,
         actionId:      action.id,
         actionLabel:   action.label,
-        schemaId:      kit.schemaId,
-        schemaVersion: kit.schemaVersion,
+        servicesSchemaId:        servicesId,
+        servicesSchemaVersion:   kit.servicesSchemaVersion ?? kit.wsdlSchemaVersion ?? kit.schemaVersion ?? '',
+        dataModelSchemaId:       kit.dataModelSchemaId,
+        dataModelSchemaVersion:  kit.dataModelSchemaVersion ?? '',
+        wsdlSchemaId:      servicesId,
+        wsdlSchemaVersion: kit.servicesSchemaVersion ?? kit.wsdlSchemaVersion ?? kit.schemaVersion ?? '',
+        schemaId:          servicesId,
+        schemaVersion:     kit.servicesSchemaVersion ?? kit.wsdlSchemaVersion ?? kit.schemaVersion ?? '',
         kitVersion:    kit.kitVersion,
         category:      action.category,
         isActive:      true,
@@ -407,15 +469,22 @@ const FloKitManagement: React.FC = () => {
     const validationError = validateFloKitConfiguration(
       selectedOperations,
       allowedNames,
-      form.schemaId,
+      form.servicesSchemaId,
+      form.dataModelSchemaId,
     );
     if (validationError) { flash(validationError, true); return; }
 
     const actionIds = selectedOperations.map(operationDocId);
+    const servicesVer = selectedServicesSchema?.version ?? form.servicesSchemaVersion;
     const payload: FloKitDoc = {
       ...form,
       connectorId:   selectedConn,
-      schemaVersion: selectedSchema?.version ?? form.schemaVersion,
+      servicesSchemaVersion: servicesVer,
+      dataModelSchemaVersion: selectedDataModelSchema?.version ?? form.dataModelSchemaVersion,
+      wsdlSchemaId:      form.servicesSchemaId,
+      wsdlSchemaVersion: servicesVer,
+      schemaId:          form.servicesSchemaId,
+      schemaVersion:     servicesVer,
       actionIds,
     };
 
@@ -430,7 +499,6 @@ const FloKitManagement: React.FC = () => {
   };
 
   const conn = connectors.find(c => c.id === selectedConn);
-  const activeSchemas = schemas.filter(s => s.isActive !== false);
   const showEditor = (isNew || selectedKit) && selectedConn;
 
   return (
@@ -440,7 +508,7 @@ const FloKitManagement: React.FC = () => {
           <div style={s.title}>FloKit Management</div>
           <div style={s.subtitle}>
             <strong>Step 1:</strong> Create the kit (name &amp; id).
-            <strong> Step 2:</strong> Open <em>Schema &amp; Actions</em> to pick a schema version and select operations.
+            <strong> Step 2:</strong> Pick <em>services schema</em> + <em>data model schema</em>, then select operations (stored under this FloKit).
           </div>
         </div>
       </div>
@@ -646,23 +714,21 @@ const FloKitManagement: React.FC = () => {
             {editorTab === 'configure' && kitSaved && (
               <>
                 <div style={s.section}>
-                  <div style={s.secTitle}>Schema *</div>
+                  <div style={s.secTitle}>1. Services schema *</div>
                   <div style={{ fontSize: 11, color: '#45455a', marginBottom: 10 }}>
-                    Operations are parsed from the schema file in Cloud Storage (WSDL, OpenAPI, or XSD).
+                    WSDL, OpenAPI, or GraphQL — operations are parsed from this services schema only.
                   </div>
                   {dataLoading ? (
                     <div style={s.empty}>Loading schemas…</div>
-                  ) : activeSchemas.length === 0 ? (
-                    <div style={s.empty}>
-                      No schemas for this connector. Upload one in Schema Management → Schemas tab.
-                    </div>
+                  ) : serviceSchemas.length === 0 ? (
+                    <div style={s.empty}>No services schemas. Upload WSDL or OpenAPI in Schema Management.</div>
                   ) : (
                     <select
                       style={s.input}
-                      value={form.schemaId}
-                      onChange={e => handleSchemaChange(e.target.value)}>
-                      <option value="">— Select schema —</option>
-                      {activeSchemas.map(sc => (
+                      value={form.servicesSchemaId}
+                      onChange={e => handleServicesSchemaChange(e.target.value)}>
+                      <option value="">— Select services schema —</option>
+                      {serviceSchemas.map(sc => (
                         <option key={sc.id} value={sc.id}>
                           {sc.label} ({sc.version}) · {sc.schemaType}
                           {sc.operations?.length ? ` · ${sc.operations.length} ops` : ''}
@@ -670,21 +736,17 @@ const FloKitManagement: React.FC = () => {
                       ))}
                     </select>
                   )}
-                  {selectedSchema && (
+                  {selectedServicesSchema && (
                     <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' as const }}>
                       <span style={{ fontSize: 11, color: '#6b6b80' }}>
-                        Version <span style={{ fontFamily: 'monospace', color: '#9090a0' }}>{selectedSchema.version}</span>
+                        Version <span style={{ fontFamily: 'monospace', color: '#9090a0' }}>{selectedServicesSchema.version}</span>
                         {schemaOps.length > 0 && (
                           <> · <strong style={{ color: '#22c55e' }}>{schemaOps.length}</strong> operations parsed</>
                         )}
                       </span>
-                      {form.schemaId && (
-                        <button
-                          type="button"
-                          style={s.linkBtn}
-                          disabled={loadingSchemaOps}
-                          onClick={() => loadSchemaOperations(form.schemaId, true)}
-                        >
+                      {form.servicesSchemaId && (
+                        <button type="button" style={s.linkBtn} disabled={loadingSchemaOps}
+                          onClick={() => loadSchemaOperations(form.servicesSchemaId, true)}>
                           {loadingSchemaOps ? 'Parsing…' : 'Re-parse from file'}
                         </button>
                       )}
@@ -693,45 +755,60 @@ const FloKitManagement: React.FC = () => {
                 </div>
 
                 <div style={s.section}>
+                  <div style={s.secTitle}>2. Data model schema *</div>
+                  <div style={{ fontSize: 11, color: '#45455a', marginBottom: 10 }}>
+                    XSD (or related) — used for field mapping in the designer.
+                  </div>
+                  {dataLoading ? (
+                    <div style={s.empty}>Loading schemas…</div>
+                  ) : dataModelSchemas.length === 0 ? (
+                    <div style={s.empty}>No data model schemas. Upload XSD in Schema Management.</div>
+                  ) : (
+                    <select style={s.input} value={form.dataModelSchemaId}
+                      onChange={e => handleDataModelSchemaChange(e.target.value)}>
+                      <option value="">— Select data model schema —</option>
+                      {dataModelSchemas.map(sc => (
+                        <option key={sc.id} value={sc.id}>{sc.label} ({sc.version}) · {sc.schemaType}</option>
+                      ))}
+                    </select>
+                  )}
+                  {selectedDataModelSchema && (
+                    <div style={{ marginTop: 8, fontSize: 11, color: '#6b6b80' }}>
+                      Version <span style={{ fontFamily: 'monospace', color: '#9090a0' }}>{selectedDataModelSchema.version}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div style={s.section}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                    <div style={s.secTitle}>Schema operations * ({selectedOperations.length} selected)</div>
+                    <div style={s.secTitle}>3. Operations from services schema * ({selectedOperations.length} selected)</div>
                     <div style={{ display: 'flex', gap: 8 }}>
-                      <button type="button" style={s.linkBtn} disabled={!form.schemaId || schemaOps.length === 0} onClick={selectAllVisible}>
-                        Select all
-                      </button>
+                      <button type="button" style={s.linkBtn} disabled={!form.servicesSchemaId || schemaOps.length === 0} onClick={selectAllVisible}>Select all</button>
                       <button type="button" style={s.linkBtn} onClick={clearOperations}>Clear</button>
                     </div>
                   </div>
 
-                  {!form.schemaId ? (
-                    <div style={s.empty}>Select a schema above to load operations.</div>
+                  {!form.servicesSchemaId ? (
+                    <div style={s.empty}>Select a services schema (step 1) to load operations.</div>
+                  ) : !form.dataModelSchemaId ? (
+                    <div style={s.empty}>Select a data model schema (step 2) before choosing operations.</div>
                   ) : loadingSchemaOps ? (
-                    <div style={s.empty}>Parsing schema file…</div>
+                    <div style={s.empty}>Parsing services schema…</div>
                   ) : schemaOps.length === 0 ? (
-                    <div style={s.empty}>
-                      No operations found. Click <strong>Re-parse from file</strong> or re-upload the schema.
-                    </div>
+                    <div style={s.empty}>No operations found. Re-parse the services schema or re-upload it.</div>
                   ) : filteredSchemaOps.length === 0 ? (
                     <div style={s.empty}>No operations match your filter.</div>
                   ) : (
                     <>
-                      <input
-                        style={{ ...s.input, marginBottom: 10 }}
-                        placeholder="Filter operations…"
-                        value={actionFilter}
-                        onChange={e => setActionFilter(e.target.value)}
-                      />
+                      <input style={{ ...s.input, marginBottom: 10 }} placeholder="Filter operations…"
+                        value={actionFilter} onChange={e => setActionFilter(e.target.value)} />
                       <div style={s.actionList}>
                         {filteredSchemaOps.map(op => {
                           const checked = selectedOperations.includes(op.name);
                           return (
                             <label key={op.name} style={{ ...s.actionRow, ...(checked ? s.actionRowOn : {}) }}>
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={() => toggleOperation(op.name)}
-                                style={{ width: 14, height: 14, accentColor: '#4f8ef7', flexShrink: 0 }}
-                              />
+                              <input type="checkbox" checked={checked} onChange={() => toggleOperation(op.name)}
+                                style={{ width: 14, height: 14, accentColor: '#4f8ef7', flexShrink: 0 }} />
                               <div style={{ flex: 1, minWidth: 0 }}>
                                 <div style={{ fontSize: 12, fontWeight: 600, color: '#f0f0f4' }}>{op.label}</div>
                                 <div style={{ fontSize: 10, color: '#45455a', fontFamily: 'monospace' }}>
@@ -746,18 +823,17 @@ const FloKitManagement: React.FC = () => {
                       </div>
                     </>
                   )}
+                  <div style={{ marginTop: 10, fontSize: 10, color: '#45455a' }}>
+                    Saved under FloPlugConnectors/…/FloKits/{form.id}/FloKitActions
+                  </div>
                 </div>
 
                 <div style={s.footerRow}>
                   <button type="button" style={s.cancelBtn} onClick={() => setEditorTab('details')}>
                     ← Back to details
                   </button>
-                  <button
-                    type="button"
-                    style={s.primaryBtn}
-                    onClick={handleSaveConfiguration}
-                    disabled={saving || dataLoading || loadingSchemaOps || selectedOperations.length === 0}
-                  >
+                  <button type="button" style={s.primaryBtn} onClick={handleSaveConfiguration}
+                    disabled={saving || dataLoading || loadingSchemaOps || !form.servicesSchemaId || !form.dataModelSchemaId || selectedOperations.length === 0}>
                     {saving ? 'Saving…' : 'Save schema & operations'}
                   </button>
                 </div>

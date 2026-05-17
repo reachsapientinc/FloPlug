@@ -93,7 +93,7 @@ const ActionManagement: React.FC = () => {
     try {
       const [schemaSnap, actionSnap] = await Promise.all([
         getDocs(query(collection(db, COLLECTIONS.FLOPLUGCONNECTORS, connId, SUB_COLLECTIONS.SCHEMAS), orderBy('label'))),
-        getDocs(query(collection(db, COLLECTIONS.FLOPLUGCONNECTORS, connId, SUB_COLLECTIONS.ACTIONS), orderBy('label'))),
+        getDocs(query(collection(db, COLLECTIONS.FLOPLUGCONNECTORS, connId, SUB_COLLECTIONS.FLOKITACTIONS), orderBy('label'))),
       ]);
       setSchemas(schemaSnap.docs.map(d => ({ id: d.id, ...d.data() } as ConnectorSchema)));
       setActions(actionSnap.docs.map(d => ({ id: d.id, ...d.data() } as ActionDoc)));
@@ -453,8 +453,8 @@ useEffect(() => {
     setSaving(true);
     try {
       const ref = selectedAction
-        ? doc(db, COLLECTIONS.FLOPLUGCONNECTORS, connectorId, SUB_COLLECTIONS.ACTIONS, selectedAction.id)
-        : doc(collection(db, COLLECTIONS.FLOPLUGCONNECTORS, connectorId, SUB_COLLECTIONS.ACTIONS));
+        ? doc(db, COLLECTIONS.FLOPLUGCONNECTORS, connectorId, SUB_COLLECTIONS.FLOKITACTIONS, selectedAction.id)
+        : doc(collection(db, COLLECTIONS.FLOPLUGCONNECTORS, connectorId, SUB_COLLECTIONS.FLOKITACTIONS));
       const saved: ActionDoc = { ...form, id: ref.id, connectorId, updatedAt: new Date() };
       await setDoc(ref, { ...saved, updatedAt: serverTimestamp() }, { merge: true });
       onSaved(saved);

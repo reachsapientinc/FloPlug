@@ -3,18 +3,28 @@
  * Path: FloPlugConnectors/{connectorId}/FloKits/{floKitId}/ActionNodes/{actionId}
  */
 export interface FloKitActionNodeDoc {
-  id:              string;
-  floKitId:        string;
-  connectorId:     string;
-  actionId:        string;
-  actionLabel:     string;
-  schemaId:        string;
-  schemaVersion:   string;
-  kitVersion:      string;
-  category?:       string;
-  isActive:        boolean;
-  createdAt?:      unknown;
-  updatedAt?:      unknown;
+  id:                  string;
+  floKitId:            string;
+  connectorId:         string;
+  actionId:            string;
+  actionLabel:         string;
+  servicesSchemaId:        string;
+  servicesSchemaVersion:   string;
+  dataModelSchemaId:       string;
+  dataModelSchemaVersion:  string;
+  /** @deprecated Use servicesSchemaId */
+  wsdlSchemaId?:           string;
+  /** @deprecated Use servicesSchemaVersion */
+  wsdlSchemaVersion?:      string;
+  /** @deprecated Use servicesSchemaId */
+  schemaId?:               string;
+  /** @deprecated Use servicesSchemaVersion */
+  schemaVersion?:          string;
+  kitVersion:          string;
+  category?:           string;
+  isActive:            boolean;
+  createdAt?:          unknown;
+  updatedAt?:          unknown;
 }
 
 /**

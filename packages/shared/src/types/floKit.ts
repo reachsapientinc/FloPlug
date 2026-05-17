@@ -1,19 +1,29 @@
 /**
- * FloKit — product-level kit grouping schema version + actions for a connector.
+ * FloKit — product-level kit: services schema (operations) + data model schema (field mapping).
  * Path: FloPlugConnectors/{connectorId}/FloKits/{floKitId}
+ * Actions path: .../FloKits/{floKitId}/FloKitActions/{actionId}
  */
 export interface FloKitDoc {
   id:                string;
   name:              string;
   description:       string;
   connectorId:       string;
-  /** ConnectorSchema.id — all kit actions must reference this schema */
-  schemaId:          string;
-  /** Denormalized from schema.version for display / hub pinning */
-  schemaVersion:     string;
-  /** ActionDoc ids included in this kit */
+  /** WSDL / OpenAPI / GraphQL — operations parsed from this services schema */
+  servicesSchemaId:      string;
+  servicesSchemaVersion?: string;
+  /** XSD (or other data model) — designer field mapping for kit operations */
+  dataModelSchemaId:     string;
+  dataModelSchemaVersion?: string;
+  /** @deprecated Use servicesSchemaId */
+  wsdlSchemaId?:         string;
+  /** @deprecated Use servicesSchemaVersion */
+  wsdlSchemaVersion?:    string;
+  /** @deprecated Use servicesSchemaId */
+  schemaId?:             string;
+  /** @deprecated Use servicesSchemaVersion */
+  schemaVersion?:        string;
+  /** FloKitActions doc ids under this kit */
   actionIds:         string[];
-  /** Semantic version of the kit definition (e.g. "1.0.0") */
   kitVersion:        string;
   availableForTiers: string[];
   isActive:          boolean;
@@ -21,15 +31,28 @@ export interface FloKitDoc {
   updatedAt?:        unknown;
 }
 
-type ActionLike = {
-  id: string;
-  schemaRef?: string;
-  floKitId?: string;
-  connectorId: string;
-  isActive?: boolean;
-};
+export function resolveKitServicesSchemaId(
+  kit: Pick<FloKitDoc, 'servicesSchemaId' | 'wsdlSchemaId' | 'schemaId'>,
+): string {
+  return (kit.servicesSchemaId ?? kit.wsdlSchemaId ?? kit.schemaId ?? '').trim();
+}
 
-/** Step 1 — kit identity only (schema/actions configured in step 2). */
+/** @deprecated Use resolveKitServicesSchemaId */
+export const resolveKitWsdlSchemaId = resolveKitServicesSchemaId;
+
+export function resolveKitDataModelSchemaId(kit: Pick<FloKitDoc, 'dataModelSchemaId'>): string {
+  return (kit.dataModelSchemaId ?? '').trim();
+}
+
+export function isFloKitConfigured(kit: FloKitDoc): boolean {
+  return (
+    !!resolveKitServicesSchemaId(kit) &&
+    !!resolveKitDataModelSchemaId(kit) &&
+    (kit.actionIds?.length ?? 0) > 0
+  );
+}
+
+/** Step 1 — kit identity only (schemas/actions configured in step 2). */
 export function validateFloKitIdentity(
   kit: Pick<FloKitDoc, 'name' | 'id' | 'kitVersion'>,
 ): string | null {
@@ -39,23 +62,29 @@ export function validateFloKitIdentity(
   return null;
 }
 
-/** Step 2 — schema + schema-derived operation selection. */
+/** Step 2 — services-schema operations + mandatory data model schema. */
 export function validateFloKitConfiguration(
   selectedOperationNames: string[],
   allowedOperationNames: string[],
-  schemaId: string,
+  servicesSchemaId: string,
+  dataModelSchemaId: string,
 ): string | null {
-  if (!schemaId.trim()) return 'Select a schema for this FloKit.';
+  if (!servicesSchemaId.trim()) {
+    return 'Select a services schema (WSDL, OpenAPI, etc.) for operations.';
+  }
+  if (!dataModelSchemaId.trim()) {
+    return 'Select a data model schema (XSD, etc.) for field mapping in the designer.';
+  }
   if (allowedOperationNames.length === 0) {
-    return 'No operations found in this schema — re-parse the schema file or upload again.';
+    return 'No operations found in the services schema — re-parse the file or upload again.';
   }
   if (selectedOperationNames.length === 0) {
-    return 'Select at least one operation from the schema.';
+    return 'Select at least one operation from the services schema.';
   }
   const allowed = new Set(allowedOperationNames);
   for (const name of selectedOperationNames) {
     if (!allowed.has(name)) {
-      return `Operation "${name}" is not defined in the selected schema.`;
+      return `Operation "${name}" is not defined in the selected services schema.`;
     }
   }
   return null;

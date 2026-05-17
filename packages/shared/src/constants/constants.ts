@@ -27,7 +27,10 @@ export const SUB_COLLECTIONS = {
   GLOBALLOOKUPS: 'GlobalLookUps',
   FLOKITS: 'FloKits',
   SCHEMAS: 'Schemas',
+  /** Connector-level actions (manual / legacy) */
   ACTIONS: 'Actions',
+  /** Kit-scoped operations — FloPlugConnectors/{id}/FloKits/{kitId}/FloKitActions */
+  FLOKITACTIONS: 'FloKitActions',
   /** Product templates under FloPlugConnectors/{id}/FloKits/{kitId}/ActionNodes */
   ACTIONNODES: 'ActionNodes',
 } as const;
@@ -50,7 +53,7 @@ export const HUB_COLLECTIONS = {
 } as const;
 
 /** Document id for hub-wide entitlements under each tenant */
-export const HUB_ENTITLEMENTS_DOC_ID = 'hub' as const;
+export const HUB_ENTITLEMENTS_DOC_ID = 'HubFloActions' as const;
 
 
 export const FLOPLUG_ROLES = {

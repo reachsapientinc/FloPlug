@@ -3,7 +3,7 @@ import { getFunctions, httpsCallable } from 'firebase/functions';
 import type { HubDoc, FloKitDoc } from '@floplug/shared';
 import {
   floKitKey, countTierControlledConnectors,
-  kitSelectionsToFloKitRefs, countSelectedActions,
+  kitSelectionsToConnectorEntitlements, countSelectedActions,
   type KitActionSelectionMap,
 } from '@floplug/shared';
 import { EntitlementsSection, useEntitlementCatalog, connIdsKey } from './hubEntitlementsUi';
@@ -93,7 +93,7 @@ const ProvisionHubForm: React.FC<Props> = ({ onProvisioned }) => {
       setStatus({ type: 'error', msg: 'Valid email required.' }); return;
     }
     const connIds = catalog.normalizeIds(selectedConnIds);
-    const floKits = kitSelectionsToFloKitRefs(kitSelections);
+    const connectors = kitSelectionsToConnectorEntitlements(kitSelections, connIds);
     if (countSelectedActions(kitSelections) === 0) {
       setStatus({ type: 'error', msg: 'Select at least one action (via FloKit or individually).' }); return;
     }
@@ -115,7 +115,7 @@ const ProvisionHubForm: React.FC<Props> = ({ onProvisioned }) => {
           logoBase64:   branding.logoBase64   || null,
           accentColor:  branding.accentColor  || null,
         },
-        entitlements: { connectorIds: connIds, floKits },
+        entitlements: { connectors },
       }) as { data?: { hubId?: string; entitlements?: HubDoc['entitlements'] } };
 
       setStatus({ type: 'success', msg: `Hub "${form.name}" provisioned!` });

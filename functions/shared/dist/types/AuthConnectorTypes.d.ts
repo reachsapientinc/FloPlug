@@ -121,7 +121,7 @@ export interface ParsedField {
     enumValues?: string[];
     helpText?: string;
 }
-export type ActionSchemaSource = 'wsdl' | 'xsd' | 'openapi' | 'manual';
+export type ActionSchemaSource = 'wsdl' | 'xsd' | 'openapi' | 'graphql' | 'manual';
 export interface ActionDoc {
     id: string;
     connectorId: string;

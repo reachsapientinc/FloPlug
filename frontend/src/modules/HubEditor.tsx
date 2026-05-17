@@ -6,7 +6,8 @@ import { getFunctions, httpsCallable } from 'firebase/functions';
 import type { HubDoc, HubBranding, FloKitDoc } from '@floplug/shared';
 import {
   countTierControlledConnectors, floKitKey,
-  entitlementsToKitSelections, kitSelectionsToFloKitRefs, countSelectedActions,
+  entitlementsToKitSelections, kitSelectionsToConnectorEntitlements, countSelectedActions,
+  normalizeHubEntitlements, entitledConnectorIds,
   type KitActionSelectionMap,
 } from '@floplug/shared';
 import { EntitlementsSection, useEntitlementCatalog, connIdsKey } from './hubEntitlementsUi';
@@ -55,11 +56,13 @@ const HubEditor: React.FC<HubEditorProps> = ({ hub, onSaved }) => {
     if (catalog.catalogLoading) return;
     if (hubInitRef.current === hub.id) return;
     hubInitRef.current = hub.id;
-    const connIds = hub.entitlements?.connectorIds?.length
-      ? catalog.normalizeIds(hub.entitlements.connectorIds)
+    const normalized = normalizeHubEntitlements(hub.entitlements);
+    const storedConnIds = entitledConnectorIds(normalized);
+    const connIds = storedConnIds.length
+      ? catalog.normalizeIds(storedConnIds)
       : catalog.standardIds();
     setSelectedConnIds(connIds);
-    setKitSelections(entitlementsToKitSelections(hub.entitlements, catalog.floKitsByKey));
+    setKitSelections(entitlementsToKitSelections(normalized, catalog.floKitsByKey));
   }, [hub.id, hub.entitlements, catalog.catalogLoading, catalog.floKitsByKey]);
 
   useEffect(() => {
@@ -119,7 +122,7 @@ const HubEditor: React.FC<HubEditorProps> = ({ hub, onSaved }) => {
       return;
     }
     const connIds = catalog.normalizeIds(selectedConnIds);
-    const floKits = kitSelectionsToFloKitRefs(kitSelections);
+    const connectors = kitSelectionsToConnectorEntitlements(kitSelections, connIds);
     if (countSelectedActions(kitSelections) === 0) {
       setError('Select at least one action (check a FloKit or expand and pick actions).');
       return;
@@ -144,7 +147,7 @@ const HubEditor: React.FC<HubEditorProps> = ({ hub, onSaved }) => {
           logoBase64:   logoBase64 || null,
           accentColor:  accentColor || null,
         },
-        entitlements: { connectorIds: connIds, floKits },
+        entitlements: { connectors },
       }) as { data?: { entitlements?: HubDoc['entitlements'] } };
 
       const branding: HubBranding = {
@@ -160,8 +163,7 @@ const HubEditor: React.FC<HubEditorProps> = ({ hub, onSaved }) => {
         branding,
         entitlements: result.data?.entitlements ?? {
           tierId: hub.tierId,
-          connectorIds: connIds,
-          floKits,
+          connectors,
           actionIds: hub.entitlements?.actionIds ?? [],
         },
       });

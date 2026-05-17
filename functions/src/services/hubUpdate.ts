@@ -3,12 +3,15 @@ import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import {
   buildHubEntitlements,
   floKitKey,
+  normalizeConnectorEntitlements,
   normalizeConnectorIds,
+  normalizeProvisionEntitlementsInput,
   validateProvisionEntitlements,
   type ConnectorDoc,
   type FloKitDoc,
-  type FloKitEntitlementRef,
   type FloPlugTierDoc,
+  type ProvisionEntitlementsInput,
+  type ProvisionEntitlementsInputLegacy,
   COLLECTIONS,
   SUB_COLLECTIONS,
   HUB_COLLECTIONS,
@@ -26,10 +29,7 @@ export interface UpdateHubDetailsData {
     logoBase64:   string | null;
     accentColor:  string | null;
   };
-  entitlements: {
-    connectorIds: string[];
-    floKits:        FloKitEntitlementRef[];
-  };
+  entitlements: ProvisionEntitlementsInput | ProvisionEntitlementsInputLegacy;
 }
 
 async function requireProductAdmin(uid: string): Promise<void> {
@@ -88,8 +88,11 @@ export const updateHubDetails = onCall<UpdateHubDetailsData>(async (request) => 
   if (!contactEmailId?.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmailId)) {
     throw new HttpsError('invalid-argument', 'Valid contactEmailId is required');
   }
-  if (!entitlements?.connectorIds?.length || !entitlements?.floKits?.length) {
-    throw new HttpsError('invalid-argument', 'Connectors and FloKits are required');
+  const connectorsInput = normalizeProvisionEntitlementsInput(entitlements);
+  const inputConnectorIds = Object.keys(connectorsInput);
+  const inputKitCount = Object.values(connectorsInput).reduce((n, c) => n + c.floKits.length, 0);
+  if (inputConnectorIds.length === 0 || inputKitCount === 0) {
+    throw new HttpsError('invalid-argument', 'Connectors and at least one FloKit are required');
   }
 
   const hubRef = db.collection(COLLECTIONS.HUBS).doc(hubId);
@@ -105,15 +108,16 @@ export const updateHubDetails = onCall<UpdateHubDetailsData>(async (request) => 
 
   const { connectors, connectorsById, floKitsByKey } = await loadProductCatalog();
   const connectorIds = normalizeConnectorIds(
-    entitlements.connectorIds,
+    inputConnectorIds,
     connectors,
     tierId,
   );
+  const connectorsEnt = normalizeConnectorEntitlements(connectorsInput, connectorIds);
 
   const validationError = validateProvisionEntitlements({
     tierId,
     connectorIds,
-    floKits: entitlements.floKits,
+    connectors: connectorsEnt,
     connectorsById,
     floKitsByKey,
     maxTierControlledConnectors,
@@ -123,7 +127,7 @@ export const updateHubDetails = onCall<UpdateHubDetailsData>(async (request) => 
   const hubEntitlements = buildHubEntitlements(
     tierId,
     connectorIds,
-    entitlements.floKits,
+    connectorsEnt,
     floKitsByKey,
   );
 

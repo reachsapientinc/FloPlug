@@ -21,7 +21,10 @@ export declare const SUB_COLLECTIONS: {
     readonly GLOBALLOOKUPS: "GlobalLookUps";
     readonly FLOKITS: "FloKits";
     readonly SCHEMAS: "Schemas";
+    /** Connector-level actions (manual / legacy) */
     readonly ACTIONS: "Actions";
+    /** Kit-scoped operations — FloPlugConnectors/{id}/FloKits/{kitId}/FloKitActions */
+    readonly FLOKITACTIONS: "FloKitActions";
     /** Product templates under FloPlugConnectors/{id}/FloKits/{kitId}/ActionNodes */
     readonly ACTIONNODES: "ActionNodes";
 };
@@ -41,7 +44,7 @@ export declare const HUB_COLLECTIONS: {
     readonly ENTITLEMENTS: "Entitlements";
 };
 /** Document id for hub-wide entitlements under each tenant */
-export declare const HUB_ENTITLEMENTS_DOC_ID: "hub";
+export declare const HUB_ENTITLEMENTS_DOC_ID: "HubFloActions";
 export declare const FLOPLUG_ROLES: {
     readonly ADMIN: "product_admin";
     readonly DEVELOPER: "developer";

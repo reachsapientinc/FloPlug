@@ -1,4 +1,5 @@
 /**
- * Hub entitlements — connectors and FloKits a hub may use (provisioned in Phase 3).
+ * Hub entitlements — entitled connectors, each with FloKits and optional action subsets.
+ * Stored on FloPlugHubs/{hub} and Tenants/{env}/Entitlements/hub.
  */
 export {};
