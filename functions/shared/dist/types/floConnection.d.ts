@@ -1,9 +1,18 @@
 import type { PlugCredentialValues } from './plug.js';
 /**
- * FloConnection — hub-scoped credentials + endpoint context for a connector.
- * Path: FloPlugHubs/{hubId}/Tenants/{tenantId}/FloConnections/{connectionId}
+ * FloConnectionDoc
  *
- * Plugs reference a connection via PlugConfig.connectionId instead of embedding credentials.
+ * Stored at TWO locations (written atomically in a batch):
+ *   Main doc : FloPlugHubs/{hubId}/Tenants/{tenantId}/FloConnections/{connectionId}
+ *   Registry : FloPlugHubs/{hubId}/Tenants/{tenantId}/Registry/flc_{connectionId}
+ *
+ * The Registry entry (FloConnectionRegistryEntry) is a lightweight projection —
+ * it never contains credentials. It lets the designer's connection dropdown
+ * and NodePalette tooltip resolve a name+protocol without reading the full doc.
+ *
+ * connectionId is the Firestore docId in FloConnections AND the suffix in the
+ * Registry key — guaranteeing no duplicates across either collection.
+ * Prefix "flc_" isolates FloConnection entries from other Registry entity types.
  */
 export interface FloConnectionDoc {
     id: string;
@@ -26,15 +35,13 @@ export interface FloConnectionDoc {
     updatedAt?: unknown;
 }
 /**
- * What the frontend receives — credentials are always stripped server-side.
- */
-export type FloConnectionSummary = Omit<FloConnectionDoc, 'credentials'>;
-/**
- * Registry entry written alongside the FloConnection doc.
- * Path: FloPlugHubs/{hubId}/Tenants/{tenantId}/Registry/flc_{connectionId}
+ * FloConnectionRegistryEntry
+ *
+ * Lightweight projection stored in the Registry collection.
+ * Never contains credentials.
+ * Stored at: FloPlugHubs/{hubId}/Tenants/{tenantId}/Registry/flc_{connectionId}
  */
 export interface FloConnectionRegistryEntry {
-    /** Same as the connectionId — without the flc_ prefix */
     connectionId: string;
     connectorId: string;
     authProtocol: string;
@@ -44,3 +51,19 @@ export interface FloConnectionRegistryEntry {
     isActive: boolean;
     createdAt?: unknown;
 }
+/**
+ * Safe projection returned to the browser — credentials always stripped.
+ */
+export type FloConnectionSafe = Omit<FloConnectionDoc, 'credentials'>;
+/**
+ * Build the Registry document key for a FloConnection.
+ * Always use this helper instead of constructing the key ad-hoc.
+ *
+ * @example floConnectionRegistryKey('abc123') → 'flc_abc123'
+ */
+export declare const floConnectionRegistryKey: (connectionId: string) => string;
+/**
+ * Extract the bare connectionId from a Registry key.
+ * Returns null if the key doesn't carry the flc_ prefix.
+ */
+export declare const connectionIdFromRegistryKey: (key: string) => string | null;

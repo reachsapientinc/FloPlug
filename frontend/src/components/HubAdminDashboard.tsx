@@ -24,7 +24,10 @@
 
 import React, { useState } from 'react';
 import { PERMISSIONS } from '@floplug/shared';
-import FloConnectionsSection from './FloConnectionManager.tsx';
+import type {FloConnectionSafe} from '@floplug/shared';
+import {
+  usePlugManagerActions,
+}                                                 from './../handlers/hubActionHandler';
 import PlugManager     from './PlugManager';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -132,6 +135,7 @@ const PlugsSection: React.FC<{ hubId: string; tenantId: string; userId: string }
       section="plugs"
       lightTheme={true}
     />
+    
   </div>
 );
 
@@ -218,6 +222,8 @@ const HubAdminDashboard: React.FC<HubAdminDashboardProps> = ({
   hubName = 'FloPlug', hubLogoUrl, onBack,
 }) => {
   const [activeTab, setActiveTab] = useState<TabId>('plugs');
+  const [floConnections, setFloConnections] = useState<FloConnectionSafe[]>([]);
+  const actions = usePlugManagerActions({ ..., setFloConnections });
 
   // Filter tabs by permission
   const visibleTabs = TABS.filter(t => {
@@ -404,7 +410,16 @@ const HubAdminDashboard: React.FC<HubAdminDashboardProps> = ({
           {effectiveTab === 'scheduler'  && <SchedulerSection />}
           {effectiveTab === 'keys'       && <KeysSection />}
           {effectiveTab === 'executions' && <ExecutionsSection />}
-          {/* {effectiveTab === 'connections' && <FloConnectionsSection hubId={hubId} tenantId={tenantId} userId={userId} />} */}
+          {effectiveTab === 'connections' && <FloActionManager
+                                              connectors={entitledConnectors}
+                                              floKits={floKitsByConnectorId}
+                                              actions={actionsByFloKitId}
+                                              connections={floConnections}
+                                              protocols={protocols}
+                                              onAddActionNode={async (params) => {
+                                                // call saveActionNode CF with params
+                                              }}
+                                            />}
         </div>
       </div>
     </div>

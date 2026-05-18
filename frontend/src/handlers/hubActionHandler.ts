@@ -2,24 +2,26 @@
  * hubActionHandler.ts
  *
  * Custom hook — usePlugManagerActions
- * Centralises all Cloud Function calls for PlugManager.
+ * Centralises all Cloud Function calls for PlugManager and FloConnectionManager.
  *
  * Auth model:
  *  - requireAdmin() guards mutations client-side (defence-in-depth)
  *  - Cloud Functions are the authoritative enforcement point
- *  - isAdmin is a boolean derived from the signed Firebase token claim —
- *    this file never compares role strings
+ *  - isAdmin is a boolean derived from the signed Firebase token claim
  */
 
-import { useCallback }           from 'react';
+import { useCallback }               from 'react';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { loadAuthProtocols, loadConnectors } from '../types/AuthConnectorTypes';
-import type { TenantUser }       from '@floplug/shared';
+import type { TenantUser }           from '@floplug/shared';
 import type {
-  AuthProtocol, ConnectorDoc, PlugConfig,
-}                                from '@floplug/shared';
+  AuthProtocol,
+  ConnectorDoc,
+  PlugConfig,
+  FloConnectionSafe,
+}                                    from '@floplug/shared';
 
-// ── Types (re-exported so PlugManager can import from one place) ──────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface FloMeta {
   id:          string;
@@ -30,7 +32,7 @@ export interface FloMeta {
 
 export type PlugSummary = Omit<PlugConfig, 'credentials'>;
 
-// ── Internal CF caller (scoped to this module) ────────────────────────────────
+// ── Internal CF caller ────────────────────────────────────────────────────────
 
 const cf = <Req, Res>(name: string) =>
   httpsCallable<Req, Res>(getFunctions(), name);
@@ -38,58 +40,78 @@ const cf = <Req, Res>(name: string) =>
 // ── Hook return shape ─────────────────────────────────────────────────────────
 
 export interface PlugManagerActions {
-  fetchAll:             () => Promise<void>;
-  handleDeactivatePlug: (plug: PlugSummary) => Promise<void>;
-  handleDeactivateUser: (u: TenantUser)     => Promise<void>;
-  handleReactivateUser: (u: TenantUser)     => Promise<void>;
-  handleUserInvited:    (u: TenantUser)     => void;
-  handleUserSaved:      (u: TenantUser)     => void;
-  handlePlugSaved:      (plug: PlugSummary) => void;
+  // ── existing ──────────────────────────────────────────────────────────────
+  fetchAll:                    () => Promise<void>;
+  handleDeactivatePlug:        (plug: PlugSummary) => Promise<void>;
+  handleDeactivateUser:        (u: TenantUser)     => Promise<void>;
+  handleReactivateUser:        (u: TenantUser)     => Promise<void>;
+  handleUserInvited:           (u: TenantUser)     => void;
+  handleUserSaved:             (u: TenantUser)     => void;
+  handlePlugSaved:             (plug: PlugSummary) => void;
+
+  // ── FloConnection ─────────────────────────────────────────────────────────
+  handleSaveFloConnection:     (conn: SaveFloConnectionPayload) => Promise<FloConnectionSafe>;
+  handleDeactivateFloConnection: (connectionId: string) => Promise<void>;
 }
 
 // ── Hook params ───────────────────────────────────────────────────────────────
 
 export interface UsePlugManagerActionsParams {
-  hubId:         string;
-  tenantId:      string;
-  isAdmin:       boolean;
-  setPlugs:      React.Dispatch<React.SetStateAction<PlugSummary[]>>;
-  setUsers:      React.Dispatch<React.SetStateAction<TenantUser[]>>;
-  setFlos:      React.Dispatch<React.SetStateAction<FloMeta[]>>;
-  setConnectors: React.Dispatch<React.SetStateAction<ConnectorDoc[]>>;
-  setProtocols:  React.Dispatch<React.SetStateAction<AuthProtocol[]>>;
-  setLoading:    React.Dispatch<React.SetStateAction<boolean>>;
-  setLoadError:  React.Dispatch<React.SetStateAction<string>>;
+  hubId:            string;
+  tenantId:         string;
+  isAdmin:          boolean;
+  userId:           string;                 // needed for audit fields on CF calls
+  setPlugs:         React.Dispatch<React.SetStateAction<PlugSummary[]>>;
+  setUsers:         React.Dispatch<React.SetStateAction<TenantUser[]>>;
+  setFlos:          React.Dispatch<React.SetStateAction<FloMeta[]>>;
+  setConnectors:    React.Dispatch<React.SetStateAction<ConnectorDoc[]>>;
+  setProtocols:     React.Dispatch<React.SetStateAction<AuthProtocol[]>>;
+  setFloConnections: React.Dispatch<React.SetStateAction<FloConnectionSafe[]>>;
+  setLoading:       React.Dispatch<React.SetStateAction<boolean>>;
+  setLoadError:     React.Dispatch<React.SetStateAction<string>>;
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
+// ── SaveFloConnectionPayload (what the form sends to the handler) ──────────────
+
+export interface SaveFloConnectionPayload {
+  connectionId?:    string;   // omit on create — handler will generate one
+  connectorId:      string;
+  connectorLabel?:  string;
+  authProtocol:     string;
+  name:             string;
+  environmentLabel?: string;
+  hostname?:        string;
+  tenantKey?:       string;
+  credentials:      Record<string, string>;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // usePlugManagerActions
-// ═════════════════════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────────────────────
 
 export function usePlugManagerActions({
   hubId,
   tenantId,
   isAdmin,
+  userId,
   setPlugs,
   setUsers,
   setFlos,
   setConnectors,
   setProtocols,
+  setFloConnections,
   setLoading,
   setLoadError,
 }: UsePlugManagerActionsParams): PlugManagerActions {
 
-  // ── Client-side auth guard ─────────────────────────────────────────────────
-  // Throws before the network call so the CF never receives an unauthorised request.
-  // The Cloud Function still enforces its own check — this is defence-in-depth.
+  // ── Client-side auth guard ────────────────────────────────────────────────
   const requireAdmin = useCallback((action: string) => {
     if (!isAdmin) {
       throw new Error(`Unauthorised: '${action}' requires hub_admin role.`);
     }
   }, [isAdmin]);
 
-  // ── fetchAll ───────────────────────────────────────────────────────────────
-  // All three CFs strip sensitive fields server-side before returning.
+  // ── fetchAll ──────────────────────────────────────────────────────────────
   const fetchAll = useCallback(async () => {
     if (!isAdmin) {
       setLoadError('Unauthorised: only hub admins can load Hub Manager data.');
@@ -98,26 +120,43 @@ export function usePlugManagerActions({
     setLoading(true);
     setLoadError('');
     try {
-      const [plugRes, userRes, flowRes, loadedConnectors, loadedProtocols] = await Promise.all([
-        cf<{ hubId: string; tenantId: string }, { plugs: PlugSummary[] }>('getHubPlugs')({ hubId, tenantId }),
-        cf<{ hubId: string; tenantId: string }, { users: TenantUser[] }>('getHubUsers')({ hubId, tenantId }),
-        cf<{ hubId: string; tenantId: string }, { flos: FloMeta[] }>('getHubFlos')({ hubId, tenantId }),
+      const [
+        plugRes, userRes, flowRes,
+        loadedConnectors, loadedProtocols,
+        connRes,
+      ] = await Promise.all([
+        cf<{ hubId: string; tenantId: string }, { plugs: PlugSummary[] }>
+          ('getHubPlugs')({ hubId, tenantId }),
+        cf<{ hubId: string; tenantId: string }, { users: TenantUser[] }>
+          ('getHubUsers')({ hubId, tenantId }),
+        cf<{ hubId: string; tenantId: string }, { flos: FloMeta[] }>
+          ('getHubFlos')({ hubId, tenantId }),
         loadConnectors(),
         loadAuthProtocols(),
+        cf<{ hubId: string; tenantId: string }, { connections: FloConnectionSafe[] }>
+          ('getFloConnections')({ hubId, tenantId }),
       ]);
-      setPlugs(plugRes.data.plugs     ?? []);
-      setUsers(userRes.data.users     ?? []);
-      setFlos(flowRes.data.flos     ?? []);
+
+      setPlugs(plugRes.data.plugs              ?? []);
+      setUsers(userRes.data.users              ?? []);
+      setFlos(flowRes.data.flos                ?? []);
       setConnectors(loadedConnectors);
       setProtocols(loadedProtocols);
+      setFloConnections(connRes.data.connections ?? []);
     } catch (e: any) {
       setLoadError(e?.message ?? 'Failed to load hub data');
     } finally {
       setLoading(false);
     }
-  }, [hubId, tenantId, isAdmin, setPlugs, setUsers, setFlos, setConnectors, setProtocols, setLoading, setLoadError]);
+  }, [
+    hubId, tenantId, isAdmin,
+    setPlugs, setUsers, setFlos,
+    setConnectors, setProtocols,
+    setFloConnections,
+    setLoading, setLoadError,
+  ]);
 
-  // ── deactivatePlug — admin-only ────────────────────────────────────────────
+  // ── deactivatePlug ────────────────────────────────────────────────────────
   const handleDeactivatePlug = useCallback(async (plug: PlugSummary) => {
     try {
       requireAdmin('deactivatePlug');
@@ -129,7 +168,7 @@ export function usePlugManagerActions({
     }
   }, [hubId, tenantId, requireAdmin, setPlugs]);
 
-  // ── deactivateHubUser — admin-only ─────────────────────────────────────────
+  // ── deactivateHubUser ─────────────────────────────────────────────────────
   const handleDeactivateUser = useCallback(async (u: TenantUser) => {
     try {
       requireAdmin('deactivateHubUser');
@@ -141,7 +180,7 @@ export function usePlugManagerActions({
     }
   }, [hubId, tenantId, requireAdmin, setUsers]);
 
-  // ── reactivateHubUser — admin-only ─────────────────────────────────────────
+  // ── reactivateHubUser ─────────────────────────────────────────────────────
   const handleReactivateUser = useCallback(async (u: TenantUser) => {
     try {
       requireAdmin('reactivateHubUser');
@@ -153,11 +192,7 @@ export function usePlugManagerActions({
     }
   }, [hubId, tenantId, requireAdmin, setUsers]);
 
-  // ── Modal state-sync callbacks ─────────────────────────────────────────────
-  // inviteHubUser and updateHubUserRole are called inside InviteUserModal /
-  // EditUserModal. The CFs enforce hub_admin there. These callbacks simply
-  // sync the returned data back into the parent collection state.
-
+  // ── Modal state-sync callbacks ────────────────────────────────────────────
   const handleUserInvited = useCallback((u: TenantUser) => {
     setUsers(prev => [...prev, u]);
   }, [setUsers]);
@@ -175,6 +210,60 @@ export function usePlugManagerActions({
     });
   }, [setPlugs]);
 
+  // ── FloConnection: save (create or update) ────────────────────────────────
+  const handleSaveFloConnection = useCallback(async (
+    payload: SaveFloConnectionPayload,
+  ): Promise<FloConnectionSafe> => {
+    requireAdmin('saveFloConnection');
+
+    // Generate a connectionId on the client when creating a new connection.
+    // Uses slugified name + timestamp suffix to guarantee uniqueness.
+    const connectionId = payload.connectionId
+      ?? `${payload.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}-${Date.now()}`;
+
+    await cf<Record<string, unknown>, { connectionId: string; created: boolean }>(
+      'saveFloConnection',
+    )({
+      hubId,
+      tenantId,
+      userId,
+      connectionId,
+      ...payload,
+    });
+
+    // Re-fetch all connections to get the server-side timestamps and merged state
+    const res = await cf<
+      { hubId: string; tenantId: string },
+      { connections: FloConnectionSafe[] }
+    >('getFloConnections')({ hubId, tenantId });
+
+    const updated = res.data.connections ?? [];
+    setFloConnections(updated);
+
+    const saved = updated.find(c => c.id === connectionId);
+    if (!saved) throw new Error('Connection saved but not found in refresh — check Firestore.');
+    return saved;
+  }, [hubId, tenantId, userId, requireAdmin, setFloConnections]);
+
+  // ── FloConnection: deactivate ─────────────────────────────────────────────
+  const handleDeactivateFloConnection = useCallback(async (
+    connectionId: string,
+  ): Promise<void> => {
+    try {
+      requireAdmin('deactivateFloConnection');
+      await cf<
+        { hubId: string; tenantId: string; connectionId: string },
+        { connectionId: string; deactivated: boolean }
+      >('deactivateFloConnection')({ hubId, tenantId, connectionId });
+
+      setFloConnections(prev =>
+        prev.map(c => c.id === connectionId ? { ...c, isActive: false } : c),
+      );
+    } catch (e: any) {
+      alert(e?.message ?? 'Failed to deactivate connection');
+    }
+  }, [hubId, tenantId, requireAdmin, setFloConnections]);
+
   return {
     fetchAll,
     handleDeactivatePlug,
@@ -183,5 +272,7 @@ export function usePlugManagerActions({
     handleUserInvited,
     handleUserSaved,
     handlePlugSaved,
+    handleSaveFloConnection,
+    handleDeactivateFloConnection,
   };
 }
