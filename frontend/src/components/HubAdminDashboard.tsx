@@ -24,6 +24,7 @@
 
 import React, { useState } from 'react';
 import { PERMISSIONS } from '@floplug/shared';
+import FloConnectionsSection from './FloConnectionManager.tsx';
 import PlugManager     from './PlugManager';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -38,7 +39,7 @@ export interface HubAdminDashboardProps {
   onBack:      () => void;
 }
 
-type TabId = 'plugs' | 'users' | 'scheduler' | 'keys' | 'executions';
+type TabId = 'plugs' | 'users' | 'scheduler' | 'keys' | 'executions' | 'connections';
 
 interface Tab {
   id:         TabId;
@@ -54,6 +55,7 @@ const TABS: Tab[] = [
   { id: 'scheduler',  label: 'Scheduler',        icon: '⏰', adminOnly: false, permission: PERMISSIONS.INVOKE_FLOS   },
   { id: 'keys',       label: 'Key Vault',        icon: '🔑', adminOnly: true,  permission: PERMISSIONS.MANAGE_SETTINGS },
   { id: 'executions', label: 'Execution Viewer', icon: '📊', adminOnly: false, permission: PERMISSIONS.VIEW_LOGS     },
+  { id: 'connections', label: 'Connections',     icon: '🔗', adminOnly: true, permission: PERMISSIONS.MANAGE_PLUGS }
 ];
 
 // ── Placeholder section ───────────────────────────────────────────────────────
@@ -402,6 +404,7 @@ const HubAdminDashboard: React.FC<HubAdminDashboardProps> = ({
           {effectiveTab === 'scheduler'  && <SchedulerSection />}
           {effectiveTab === 'keys'       && <KeysSection />}
           {effectiveTab === 'executions' && <ExecutionsSection />}
+          {/* {effectiveTab === 'connections' && <FloConnectionsSection hubId={hubId} tenantId={tenantId} userId={userId} />} */}
         </div>
       </div>
     </div>

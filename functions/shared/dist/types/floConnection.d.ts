@@ -25,3 +25,22 @@ export interface FloConnectionDoc {
     createdAt?: unknown;
     updatedAt?: unknown;
 }
+/**
+ * What the frontend receives — credentials are always stripped server-side.
+ */
+export type FloConnectionSummary = Omit<FloConnectionDoc, 'credentials'>;
+/**
+ * Registry entry written alongside the FloConnection doc.
+ * Path: FloPlugHubs/{hubId}/Tenants/{tenantId}/Registry/flc_{connectionId}
+ */
+export interface FloConnectionRegistryEntry {
+    /** Same as the connectionId — without the flc_ prefix */
+    connectionId: string;
+    connectorId: string;
+    authProtocol: string;
+    name: string;
+    tenantId: string;
+    hubId: string;
+    isActive: boolean;
+    createdAt?: unknown;
+}

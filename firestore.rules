@@ -99,11 +99,11 @@ service cloud.firestore {
           allow read:  if belongsToHub(hubId, tenantId);
           allow write: if isHubAdmin() && belongsToHub(hubId, tenantId);
 
-        match /Flows/{flowId} {
-          allow read:  if belongsToHub(hubId, tenantId);
-          allow write: if belongsToHub(hubId, tenantId) &&
-                          hasPermission('design:flows');
+        match /FloConnections/{connectionId} {
+            allow read: if belongsToHub(hubId, tenantId);
+            allow write: if isProductAdmin() || (isHubAdmin() && belongsToHub(hubId, tenantId));
           }
+
           match /Flos/{floId} {
             allow read:  if belongsToHub(hubId, tenantId);
             allow write: if belongsToHub(hubId, tenantId) && hasPermission('design:flows');

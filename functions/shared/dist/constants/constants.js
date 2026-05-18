@@ -45,7 +45,20 @@ export const HUB_COLLECTIONS = {
     EMAIL_LOG: 'EmailLog',
     SCHEMAS: 'Schemas',
     ENTITLEMENTS: 'Entitlements',
+    /**
+     * Tenant-scoped registry for dedup checks.
+     * Path: FloPlugHubs/{hubId}/Tenants/{tenantId}/Registry
+     * All FloConnection entries are stored with key prefix "flc_" e.g. "flc_prod-gmail-smtp"
+     */
+    REGISTRY: 'Registry',
 };
+/**
+ * Prefix applied to FloConnection ids before writing to the tenant Registry.
+ * Example: connectionId "prod-gmail-smtp" → registry docId "flc_prod-gmail-smtp"
+ */
+export const FLC_REGISTRY_PREFIX = 'flc_';
+export const FL_REGISTRY_PREFIX = 'fl_';
+export const WS_REGISTRY_PREFIX = 'ws_';
 /** Document id for hub-wide entitlements under each tenant */
 export const HUB_ENTITLEMENTS_DOC_ID = 'HubFloActions';
 export const FLOPLUG_ROLES = {
