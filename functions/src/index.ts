@@ -59,7 +59,16 @@ export {
   updateHubUserRole,
   deactivateHubUser,
   reactivateHubUser,
+  saveHubActionNode,
+  getHubActionNodes,
 } from './services/hubFunctions.js';
+
+export {
+  saveFloConnection,
+  getFloConnections,
+  getFloConnectionsForPlug,
+  deactivateFloConnection,
+} from './services/floConnectionService.js';
 
 
 

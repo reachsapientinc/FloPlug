@@ -17,7 +17,7 @@ export const OutputTargetSection: React.FC<Props> = ({
   return (
     <div style={{ marginTop: 12, paddingTop: 12, borderTop: `0.5px solid ${t.panelBorder}` }}>
       <Field label="Output target">
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <Sel
             value={outputTarget}
             onChange={e => onChange({ outputTarget: e.target.value, outputVarName: '' })}
@@ -32,7 +32,7 @@ export const OutputTargetSection: React.FC<Props> = ({
               value={outputVarName}
               placeholder={`${outputTarget} var name`}
               onChange={e => onChange({ outputVarName: e.target.value })}
-              style={{ flex: 1 }}
+             // style={{ flex: 1 }}
             />
           )}
         </div>

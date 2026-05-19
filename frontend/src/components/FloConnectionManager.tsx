@@ -64,9 +64,23 @@ export interface FloConnectionManagerProps {
   protocols:      AuthProtocol[];
   onSave:         (payload: SaveFloConnectionPayload) => Promise<FloConnectionSafe>;
   onDeactivate:   (connectionId: string) => Promise<void>;
+  /** Match HubAdminDashboard white shell */
+  lightTheme?:    boolean;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
+
+const lightC = {
+  bg:        '#fff',
+  surface:   '#fff',
+  border:    '#E5E7EB',
+  accent:    '#1a56db',
+  text:      '#374151',
+  textMuted: '#6B7280',
+  textStrong:'#111827',
+  danger:    '#DC2626',
+  warning:   '#D97706',
+} as const;
 
 export const FloConnectionManager: React.FC<FloConnectionManagerProps> = ({
   connections,
@@ -74,7 +88,9 @@ export const FloConnectionManager: React.FC<FloConnectionManagerProps> = ({
   protocols,
   onSave,
   onDeactivate,
+  lightTheme = false,
 }) => {
+  const T = lightTheme ? lightC : C;
   const [showModal,       setShowModal]       = useState(false);
   const [editTarget,      setEditTarget]      = useState<FloConnectionSafe | undefined>();
   const [filterProtocol,  setFilterProtocol]  = useState('');
@@ -126,7 +142,7 @@ export const FloConnectionManager: React.FC<FloConnectionManagerProps> = ({
   return (
     <div style={{
       display: 'flex', flexDirection: 'column', height: '100%',
-      fontFamily: "'Inter', -apple-system, sans-serif", color: C.text,
+      fontFamily: "'Inter', -apple-system, sans-serif", color: T.text,
     }}>
       {/* ── Toolbar ── */}
       <div style={{
@@ -136,8 +152,8 @@ export const FloConnectionManager: React.FC<FloConnectionManagerProps> = ({
         {/* Search */}
         <input
           style={{
-            background: '#16161f', border: `1px solid ${C.border}`,
-            borderRadius: 6, color: C.textStrong, padding: '6px 10px',
+            background: lightTheme ? '#F9FAFB' : '#16161f', border: `1px solid ${T.border}`,
+            borderRadius: 6, color: T.textStrong, padding: '6px 10px',
             fontSize: 12, outline: 'none', minWidth: 180,
           }}
           placeholder="Search connections…"
@@ -148,8 +164,8 @@ export const FloConnectionManager: React.FC<FloConnectionManagerProps> = ({
         {/* Protocol filter */}
         <select
           style={{
-            background: '#16161f', border: `1px solid ${C.border}`,
-            borderRadius: 6, color: C.text, padding: '6px 10px',
+            background: lightTheme ? '#F9FAFB' : '#16161f', border: `1px solid ${T.border}`,
+            borderRadius: 6, color: T.text, padding: '6px 10px',
             fontSize: 11, outline: 'none', cursor: 'pointer',
           }}
           value={filterProtocol}
@@ -164,8 +180,8 @@ export const FloConnectionManager: React.FC<FloConnectionManagerProps> = ({
         {/* Connector filter */}
         <select
           style={{
-            background: '#16161f', border: `1px solid ${C.border}`,
-            borderRadius: 6, color: C.text, padding: '6px 10px',
+            background: lightTheme ? '#F9FAFB' : '#16161f', border: `1px solid ${T.border}`,
+            borderRadius: 6, color: T.text, padding: '6px 10px',
             fontSize: 11, outline: 'none', cursor: 'pointer',
           }}
           value={filterConnector}
@@ -180,7 +196,7 @@ export const FloConnectionManager: React.FC<FloConnectionManagerProps> = ({
         <div style={{ flex: 1 }} />
 
         {/* Summary */}
-        <div style={{ fontSize: 10, color: C.textMuted }}>
+        <div style={{ fontSize: 10, color: T.textMuted }}>
           {visible.length} / {connections.filter(c => c.isActive).length} connections
         </div>
 
@@ -188,7 +204,7 @@ export const FloConnectionManager: React.FC<FloConnectionManagerProps> = ({
         <button
           onClick={openCreate}
           style={{
-            background: C.accent, border: 'none', borderRadius: 6,
+            background: T.accent, border: 'none', borderRadius: 6,
             color: '#fff', padding: '7px 14px', fontSize: 12,
             fontWeight: 600, cursor: 'pointer',
           }}
@@ -202,7 +218,7 @@ export const FloConnectionManager: React.FC<FloConnectionManagerProps> = ({
         {visible.length === 0 ? (
           <div style={{
             textAlign: 'center', padding: '60px 0',
-            color: C.textMuted, fontSize: 12,
+            color: T.textMuted, fontSize: 12,
           }}>
             {connections.length === 0
               ? 'No connections yet. Create one to get started.'
@@ -213,11 +229,11 @@ export const FloConnectionManager: React.FC<FloConnectionManagerProps> = ({
             width: '100%', borderCollapse: 'collapse', fontSize: 12,
           }}>
             <thead>
-              <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+              <tr style={{ borderBottom: `1px solid ${T.border}` }}>
                 {['Name', 'Connector', 'Protocol', 'Environment', 'Actions'].map(h => (
                   <th key={h} style={{
                     padding: '6px 10px', textAlign: 'left', fontSize: 10,
-                    fontWeight: 700, color: C.textMuted, letterSpacing: '0.08em',
+                    fontWeight: 700, color: T.textMuted, letterSpacing: '0.08em',
                     textTransform: 'uppercase', whiteSpace: 'nowrap',
                   }}>{h}</th>
                 ))}
@@ -228,23 +244,23 @@ export const FloConnectionManager: React.FC<FloConnectionManagerProps> = ({
                 <tr
                   key={conn.id}
                   style={{
-                    borderBottom: `1px solid ${C.border}`,
-                    background: i % 2 === 0 ? 'transparent' : '#13131c',
+                    borderBottom: `1px solid ${T.border}`,
+                    background: i % 2 === 0 ? 'transparent' : lightTheme ? '#F9FAFB' : '#13131c',
                     transition: 'background 0.1s',
                   }}
-                  onMouseEnter={e => (e.currentTarget.style.background = '#1c1c2a')}
-                  onMouseLeave={e => (e.currentTarget.style.background = i % 2 === 0 ? 'transparent' : '#13131c')}
+                  onMouseEnter={e => (e.currentTarget.style.background = lightTheme ? '#F3F4F6' : '#1c1c2a')}
+                  onMouseLeave={e => (e.currentTarget.style.background = i % 2 === 0 ? 'transparent' : lightTheme ? '#F9FAFB' : '#13131c')}
                 >
                   {/* Name + ID */}
                   <td style={{ padding: '10px 10px' }}>
-                    <div style={{ fontWeight: 600, color: C.textStrong }}>{conn.name}</div>
-                    <div style={{ fontSize: 9, color: C.textMuted, marginTop: 2, fontFamily: 'monospace' }}>
+                    <div style={{ fontWeight: 600, color: T.textStrong }}>{conn.name}</div>
+                    <div style={{ fontSize: 9, color: T.textMuted, marginTop: 2, fontFamily: 'monospace' }}>
                       {conn.id}
                     </div>
                   </td>
 
                   {/* Connector */}
-                  <td style={{ padding: '10px 10px', color: C.text }}>
+                  <td style={{ padding: '10px 10px', color: T.text }}>
                     {connectorLabel(conn.connectorId)}
                   </td>
 
@@ -256,7 +272,7 @@ export const FloConnectionManager: React.FC<FloConnectionManagerProps> = ({
                   </td>
 
                   {/* Environment */}
-                  <td style={{ padding: '10px 10px', color: C.textMuted, fontSize: 11 }}>
+                  <td style={{ padding: '10px 10px', color: T.textMuted, fontSize: 11 }}>
                     {conn.environmentLabel || '—'}
                   </td>
 
@@ -266,8 +282,8 @@ export const FloConnectionManager: React.FC<FloConnectionManagerProps> = ({
                       <button
                         onClick={() => openEdit(conn)}
                         style={{
-                          background: 'transparent', border: `1px solid ${C.border}`,
-                          borderRadius: 5, color: C.text, padding: '4px 10px',
+                          background: 'transparent', border: `1px solid ${T.border}`,
+                          borderRadius: 5, color: T.text, padding: '4px 10px',
                           fontSize: 11, cursor: 'pointer',
                         }}
                       >
@@ -276,8 +292,8 @@ export const FloConnectionManager: React.FC<FloConnectionManagerProps> = ({
                       <button
                         onClick={() => setConfirmDeactivate(conn)}
                         style={{
-                          background: 'transparent', border: `1px solid ${C.danger}44`,
-                          borderRadius: 5, color: C.danger, padding: '4px 10px',
+                          background: 'transparent', border: `1px solid ${T.danger}44`,
+                          borderRadius: 5, color: T.danger, padding: '4px 10px',
                           fontSize: 11, cursor: 'pointer',
                         }}
                       >
@@ -311,18 +327,18 @@ export const FloConnectionManager: React.FC<FloConnectionManagerProps> = ({
           zIndex: 10000,
         }}>
           <div style={{
-            background: C.surface, border: `1px solid ${C.border}`,
+            background: T.surface, border: `1px solid ${T.border}`,
             borderRadius: 10, width: 400, padding: 24,
             fontFamily: "'Inter', -apple-system, sans-serif",
           }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: C.textStrong, marginBottom: 10 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: T.textStrong, marginBottom: 10 }}>
               Deactivate Connection
             </div>
-            <div style={{ fontSize: 12, color: C.text, marginBottom: 6 }}>
+            <div style={{ fontSize: 12, color: T.text, marginBottom: 6 }}>
               Are you sure you want to deactivate{' '}
-              <strong style={{ color: C.textStrong }}>{confirmDeactivate.name}</strong>?
+              <strong style={{ color: T.textStrong }}>{confirmDeactivate.name}</strong>?
             </div>
-            <div style={{ fontSize: 11, color: C.warning, marginBottom: 20 }}>
+            <div style={{ fontSize: 11, color: T.warning, marginBottom: 20 }}>
               Any plugs referencing this connection will stop resolving credentials
               until reassigned.
             </div>
@@ -330,8 +346,8 @@ export const FloConnectionManager: React.FC<FloConnectionManagerProps> = ({
               <button
                 onClick={() => setConfirmDeactivate(null)}
                 style={{
-                  background: 'transparent', border: `1px solid ${C.border}`,
-                  borderRadius: 6, color: C.text, padding: '7px 16px',
+                  background: 'transparent', border: `1px solid ${T.border}`,
+                  borderRadius: 6, color: T.text, padding: '7px 16px',
                   fontSize: 12, cursor: 'pointer',
                 }}
               >
@@ -341,7 +357,7 @@ export const FloConnectionManager: React.FC<FloConnectionManagerProps> = ({
                 onClick={handleDeactivate}
                 disabled={deactivating}
                 style={{
-                  background: C.danger, border: 'none', borderRadius: 6,
+                  background: T.danger, border: 'none', borderRadius: 6,
                   color: '#fff', padding: '7px 16px', fontSize: 12,
                   fontWeight: 600, cursor: 'pointer', opacity: deactivating ? 0.7 : 1,
                 }}

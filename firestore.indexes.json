@@ -39,6 +39,23 @@
       "density": "SPARSE_ALL"
     },
     {
+  "collectionGroup": "FloConnections",
+  "queryScope": "COLLECTION",
+  "fields": [
+    { "fieldPath": "isActive",     "order": "ASCENDING" },
+    { "fieldPath": "name",         "order": "ASCENDING" }
+  ]
+},
+{
+  "collectionGroup": "FloConnections",
+  "queryScope": "COLLECTION",
+  "fields": [
+    { "fieldPath": "authProtocol", "order": "ASCENDING" },
+    { "fieldPath": "isActive",     "order": "ASCENDING" },
+    { "fieldPath": "name",         "order": "ASCENDING" }
+  ]
+},
+    {
       "collectionGroup": "Tenants",
       "queryScope": "COLLECTION_GROUP",
       "fields": [

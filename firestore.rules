@@ -59,6 +59,7 @@ service cloud.firestore {
       match /FloKits/{floKitId} {
         allow read:  if isSignedIn();
         allow write: if isProductAdmin();
+
         match /FloKitActions/{actionId} {
         allow read:  if isSignedIn();
         allow write: if isProductAdmin();
@@ -80,8 +81,8 @@ service cloud.firestore {
 
     //---FloPlugTiers
     match /FloPlugTiers/{tierId} {
-      allow read:  if isProductAdmin() || request.auth.uid == uid;
-      allow write: if isProductAdmin();
+        allow read:  if isSignedIn() && (isHubAdmin() || isProductAdmin());
+        allow write: if isProductAdmin();
     }
 
     // ── FloPlugHubs ───────────────────────────────────────────────────────────
@@ -94,6 +95,11 @@ service cloud.firestore {
       match /Tenants/{tenantId} {
         allow read:  if true;
         allow write: if isProductAdmin();
+
+        match /Entitlements/{docId} {
+          allow read:  if isHubAdmin() && belongsToHub(hubId, tenantId);
+          allow write: if isProductAdmin();
+        }
 
         match /Workspaces/{wsId} {
           allow read:  if belongsToHub(hubId, tenantId);

@@ -1,5 +1,6 @@
 import type { Functions } from 'firebase/functions';
 import type { Node, Edge } from '@xyflow/react';
+import type {FloActionPaletteItem} from '@floplug/shared';
 
 export interface FloListItem {
   id:   string;
@@ -17,6 +18,7 @@ export interface DesignerInspectorContext {
   lastRunInput:  Record<string, unknown> | null;
   onTestNode:    (nodeId: string) => Promise<void>;
   testingNodeId: string | null;
+  floActions?: FloActionPaletteItem[];
 }
 
 export type InspectorOnUpdate = (nodeId: string, data: Record<string, unknown>) => void;

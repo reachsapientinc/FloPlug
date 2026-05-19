@@ -67,9 +67,13 @@ import type { PlugConfig,
   NewFloForm,
   FloMeta,
   WorkspaceMeta,
+  HubActionNodeDoc,
+  FloActionPaletteItem,
 } from '@floplug/shared';
+import { toFloActionPaletteItem } from '@floplug/shared';
 import { COLLECTIONS, HUB_COLLECTIONS, NODE_TYPES as NODE_TYPE_KEYS } from '@floplug/shared';
 import PlugNodeComponent from './nodes/PlugNode';
+import FloActionNodeComponent from './nodes/FloActionNode';
 import ProfileDrawer, { type DashboardSection } from './ProfileDrawer';
 import HubAdminDashboard                        from './HubAdminDashboard';
 
@@ -92,6 +96,7 @@ const NODE_TYPES: Record<string, React.ComponentType<any>> = {
   [NODE_TYPE_KEYS.LOOP]:       LoopNode,
   [NODE_TYPE_KEYS.TEMPLATE]:   TemplateNode,
   [NODE_TYPE_KEYS.PLUG]:       PlugNodeComponent,
+  floActionNode:               FloActionNodeComponent,
 };
 
 // ── Custom deletable edge ────────────────────────────────────────────────────
@@ -225,7 +230,11 @@ const makeDefaultNodes = (): Node[] => [
 ];
 
 // ── Node sanitiser ────────────────────────────────────────────────────────────
-const STRIP_KEYS = new Set(['functions', 'onLogEntry', 'onUpdate', 'onDelete', '__rf', 'measured', 'availablePlugs', 'availableFlos']);
+const STRIP_KEYS = new Set([
+  'functions', 'onLogEntry', 'onUpdate', 'onDelete', '__rf', 'measured', 'availablePlugs', 'availableFlos',
+  // floActionNode UI-only fields — kept in memory for inspector, never persisted
+  'actionIds', 'allowedConnectionIds', 'templateActionId', 'defaultConnectionId', 'floActionName','connectorId', 'flaLabel'
+]);
 
 function sanitizeNode(node: Node): Node {
   const cleanData: Record<string, unknown> = {};
@@ -369,8 +378,11 @@ const DesignerInner: React.FC<DesignerProps> = ({
   const [runResult,        setRunResult]                 = useState<RunResult | null>(null);
   const [adminPanelOpen,   setAdminPanelOpen]            = useState(false);
   const [plugs,            setPlugs]                     = useState<PlugConfig[]>([]);
+  const [floActions,       setFloActions]               = useState<FloActionPaletteItem[]>([]);
   const [testingNodeId,    setTestingNodeId]               = useState<string | null>(null);
   const lastRunInputRef    = useRef<Record<string, unknown>>({});
+  const floActionNodeMap   = useRef<Map<string, HubActionNodeDoc>>(new Map());
+  
 
   // Branding — logo URL + display name loaded from hub doc
   const [hubLogoUrl,  setHubLogoUrl]  = useState<string>('');
@@ -481,6 +493,75 @@ const DesignerInner: React.FC<DesignerProps> = ({
     };
     loadPlugs();
   }, [hubId, tenantId]);
+
+  // ── Load FloActions for palette (developer-enabled hub action nodes) ───────
+  useEffect(() => {
+    const loadFloActions = async () => {
+      try {
+        const cf = httpsCallable<
+          { hubId: string; tenantId: string },
+          { nodes: HubActionNodeDoc[] }
+        >(functions, 'getHubActionNodes');
+        const res = await cf({ hubId, tenantId });
+        const docs = res.data.nodes ?? [];
+
+        // Build ref map immediately — keyed by floKitId
+        // Using a ref (not state) so openFlow can read it synchronously
+        const nextMap = new Map<string, HubActionNodeDoc>();
+        for (const d of docs) nextMap.set(d.floKitId, d);
+        floActionNodeMap.current = nextMap;
+
+        // Palette items for the drag source
+        setFloActions(docs.map(toFloActionPaletteItem));
+        console.log(`[Designer] Loaded ${docs.length} FloActionNodes into map + palette`);
+
+        // Re-hydrate any floActionNodes already on canvas that lost the race
+        // (openFlow ran before this CF returned → arrays were empty)
+        setNodes(prev => prev.map(n => {
+          if (n.type !== 'floActionNode') return n;
+          const liveDoc = nextMap.get(n.data.floKitId as string);
+          if (!liveDoc) return n;
+          return {
+            ...n,
+            data: {
+              ...n.data,
+              actionIds:            liveDoc.actionIds            ?? [],
+              allowedConnectionIds: liveDoc.allowedConnectionIds ?? [],
+              defaultConnectionId:  liveDoc.defaultConnectionId  ?? '',
+              templateActionId:     liveDoc.templateActionId     ?? liveDoc.actionIds?.[0] ?? '',
+              connectorId:          liveDoc.connectorId,
+              flaLabel:             liveDoc.displayName,
+              connectionId: (n.data.connectionId as string) || liveDoc.defaultConnectionId || liveDoc.allowedConnectionIds?.[0] || '',
+              actionId:     (n.data.actionId     as string) || liveDoc.templateActionId    || liveDoc.actionIds?.[0]            || '',
+            },
+          };
+        }));
+        // Patch selectedNode too if it's a floActionNode
+        setSelectedNode(prev => {
+          if (!prev || prev.type !== 'floActionNode') return prev;
+          const liveDoc = nextMap.get(prev.data.floKitId as string);
+          if (!liveDoc) return prev;
+          return {
+            ...prev,
+            data: {
+              ...prev.data,
+              actionIds:            liveDoc.actionIds            ?? [],
+              allowedConnectionIds: liveDoc.allowedConnectionIds ?? [],
+              defaultConnectionId:  liveDoc.defaultConnectionId  ?? '',
+              templateActionId:     liveDoc.templateActionId     ?? liveDoc.actionIds?.[0] ?? '',
+              connectorId:          liveDoc.connectorId,
+              flaLabel:             liveDoc.displayName,
+              connectionId: (prev.data.connectionId as string) || liveDoc.defaultConnectionId || '',
+              actionId:     (prev.data.actionId     as string) || liveDoc.templateActionId    || liveDoc.actionIds?.[0] || '',
+            },
+          };
+        });
+      } catch (err) {
+        console.warn('[Designer] loadFloActions error:', err);
+      }
+    };
+    loadFloActions();
+  }, [hubId, tenantId, functions]);
 
   // ── Step 2: Load flos once workspace is known ──────────────────────────────
   // Hub admins see ALL flos in the workspace (no ownerUid filter).
@@ -601,7 +682,8 @@ const DesignerInner: React.FC<DesignerProps> = ({
     lastRunInput:  lastRunInputRef.current,
     onTestNode:    testNode,
     testingNodeId,
-  }), [functions, hubId, tenantId, floList, activeFlo?.id, nodes, edges, testNode, testingNodeId]);
+    floActions, 
+  }), [functions, hubId, tenantId, floList, activeFlo?.id, nodes, edges, testNode, testingNodeId,floActions]);
 
   const deleteNode = useCallback((nodeId: string) => {
     setNodes(prev => {
@@ -631,11 +713,8 @@ const DesignerInner: React.FC<DesignerProps> = ({
         ...(!hasEnd   ? [defaults[1]] : []),
       ];
 
-      const hydrated = merged.map(n => ({
-        ...n,
-        ...(n.width  != null ? { width:  n.width  } : {}),
-        ...(n.height != null ? { height: n.height } : {}),
-        data: {
+      const hydrated = merged.map(n => {
+        const baseData = {
           ...n.data,
           hubId,
           tenantId,
@@ -644,13 +723,57 @@ const DesignerInner: React.FC<DesignerProps> = ({
           availablePlugs: plugs.filter(p =>
             p.connectorId === n.type || p.connectorId === 'genericNode'
           ),
-          // Inject category-aware placeholders for plug nodes
           ...(n.type === 'plugNode' ? {
             _placeholders: getPlugPlaceholders(n.data?.category as string),
           } : {}),
           availableFlos: flos.map(f => ({ id: f.id, name: f.name })),
-        },
-      }));
+        };
+
+        if (n.type === 'floActionNode') {
+          const liveDoc = floActionNodeMap.current.get(n.data?.floKitId as string);
+          if (liveDoc) {
+            return {
+              ...n,
+              ...(n.width  != null ? { width:  n.width  } : {}),
+              ...(n.height != null ? { height: n.height } : {}),
+              data: {
+                ...baseData,
+                // Live from FloActionNodeDoc — always fresh, never stale
+                actionIds:            liveDoc.actionIds            ?? [],
+                allowedConnectionIds: liveDoc.allowedConnectionIds ?? [],
+                defaultConnectionId:  liveDoc.defaultConnectionId  ?? '',
+                templateActionId:     liveDoc.templateActionId     ?? liveDoc.actionIds?.[0] ?? '',
+                connectorId:          liveDoc.connectorId,
+                flaLabel:             liveDoc.displayName,
+                floKitId:             liveDoc.floKitId,
+                // Developer's saved choices — fall back to live defaults
+                connectionId: (n.data?.connectionId as string) || liveDoc.defaultConnectionId || liveDoc.allowedConnectionIds?.[0] || '',
+                actionId:     (n.data?.actionId     as string) || liveDoc.templateActionId    || liveDoc.actionIds?.[0]            || '',
+              },
+            };
+          }
+          // Map not yet populated (race) — re-hydration fires in loadFloActions
+          console.warn(`[Designer] openFlow: floActionNode ${n.id} floKitId="${n.data?.floKitId}" not in map yet — will re-hydrate`);
+          return {
+            ...n,
+            ...(n.width  != null ? { width:  n.width  } : {}),
+            ...(n.height != null ? { height: n.height } : {}),
+            data: {
+              ...baseData,
+              actionIds:            (n.data?.actionIds            as string[]) ?? [],
+              allowedConnectionIds: (n.data?.allowedConnectionIds as string[]) ?? [],
+              defaultConnectionId:  (n.data?.defaultConnectionId  as string)  ?? '',
+            },
+          };
+        }
+
+        return {
+          ...n,
+          ...(n.width  != null ? { width:  n.width  } : {}),
+          ...(n.height != null ? { height: n.height } : {}),
+          data: baseData,
+        };
+      });
 
       setNodes(hydrated);
       setEdges(data.edges ?? []);
@@ -858,6 +981,7 @@ const DesignerInner: React.FC<DesignerProps> = ({
     startNode:         COMPACT_NODE,
     endNode:           COMPACT_NODE,
     plugNode:          COMPACT_NODE,
+    floActionNode:     COMPACT_NODE,
     workdayNode:       COMPACT_NODE,
     salesforceNode:    COMPACT_NODE,
     sapNode:           COMPACT_NODE,
@@ -893,16 +1017,54 @@ const DesignerInner: React.FC<DesignerProps> = ({
       y: e.clientY - bounds.top,
     });
 
-    const plugMeta = meta ? JSON.parse(meta) : {};
+    const nodeMeta = meta ? JSON.parse(meta) : {};
     const dims     = RESIZABLE_DEFAULTS[type] ?? COMPACT_NODE;
 
     // For plug nodes, inject category-aware placeholders at drop time
     const categoryPlaceholders = type === 'plugNode'
       ? {
-          _placeholders: getPlugPlaceholders(plugMeta?.category),
+          _placeholders: getPlugPlaceholders(nodeMeta?.category),
           testInputJson: JSON.stringify({ message: 'Hello FloPlug', value: 42 }, null, 2),
         }
-      : {};
+      : type === 'floActionNode'
+          ? (() => {
+              // Always read from the live map — never from palette meta
+              // so the developer always gets the current HubAdmin config
+              const floKitId = nodeMeta.floKitId as string | undefined;
+              const liveDoc  = floKitId ? floActionNodeMap.current.get(floKitId) : undefined;
+              if (liveDoc) {
+                return {
+                  floKitId:             liveDoc.floKitId,
+                  connectorId:          liveDoc.connectorId,
+                  flaLabel:             liveDoc.displayName,
+                  // Live metadata — never saved to flo doc (stripped by STRIP_KEYS)
+                  actionIds:            liveDoc.actionIds            ?? [],
+                  allowedConnectionIds: liveDoc.allowedConnectionIds ?? [],
+                  defaultConnectionId:  liveDoc.defaultConnectionId  ?? '',
+                  templateActionId:     liveDoc.templateActionId     ?? liveDoc.actionIds?.[0] ?? '',
+                  // Developer's initial picks
+                  actionId:      liveDoc.templateActionId    ?? liveDoc.actionIds?.[0]            ?? '',
+                  connectionId:  liveDoc.defaultConnectionId ?? liveDoc.allowedConnectionIds?.[0] ?? '',
+                  outputTarget:  'cStream',
+                  outputVarName: '',
+                };
+              }
+              // Fallback: map not ready — use palette meta, re-hydration will correct it
+              return {
+                floKitId:             nodeMeta.floKitId,
+                connectorId:          nodeMeta.connectorId,
+                flaLabel:             nodeMeta.flaLabel,
+                actionIds:            (nodeMeta.actionIds            as string[]) ?? [],
+                allowedConnectionIds: (nodeMeta.allowedConnectionIds as string[]) ?? [],
+                defaultConnectionId:  (nodeMeta.defaultConnectionId  as string)  ?? '',
+                templateActionId:     (nodeMeta.templateActionId     as string)  ?? '',
+                actionId:      (nodeMeta.templateActionId as string) ?? (nodeMeta.actionIds as string[])?.[0] ?? '',
+                connectionId:  (nodeMeta.defaultConnectionId as string) ?? (nodeMeta.allowedConnectionIds as string[])?.[0] ?? '',
+                outputTarget:  'cStream',
+                outputVarName: '',
+              };
+            })()
+          : {};
 
     setNodes(prev => [...prev, {
       id:   `${type}-${Date.now()}`,
@@ -918,7 +1080,7 @@ const DesignerInner: React.FC<DesignerProps> = ({
         availablePlugs: plugs.filter(p =>
           p.connectorId === type || p.connectorId === 'genericNode'
         ),
-        ...plugMeta,
+        ...nodeMeta,
         ...categoryPlaceholders,
         availableFlos: flos.map(f => ({ id: f.id, name: f.name })),
       },
@@ -1150,7 +1312,7 @@ const DesignerInner: React.FC<DesignerProps> = ({
       <div style={s.body}>
 
         {/* Admin panel — slides in from left when open */}
-        <NodePalette plugs={plugs} />
+        <NodePalette plugs={plugs} floActions={floActions} />
 
         <div
           ref={wrapperRef}

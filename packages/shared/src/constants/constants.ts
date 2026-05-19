@@ -31,7 +31,7 @@ export const SUB_COLLECTIONS = {
   ACTIONS: 'Actions',
   /** Kit-scoped operations — FloPlugConnectors/{id}/FloKits/{kitId}/FloKitActions */
   FLOKITACTIONS: 'FloKitActions',
-  /** Product templates under FloPlugConnectors/{id}/FloKits/{kitId}/ActionNodes */
+  /** Product templates: FloPlugConnectors/{id}/FloKits/{kitId}/ActionNodes */
   ACTIONNODES: 'ActionNodes',
 } as const;
 
@@ -43,13 +43,13 @@ export const HUB_COLLECTIONS = {
   FLOS:        'Flos',
   PLUGS:           'Plugs',
   FLO_CONNECTIONS: 'FloConnections',
-  ACTION_NODES:    'ActionNodes',
   USERS:       'Users',
   EXEC_LOG:    'ExecutionLog',
   CONNECTORS:  'ConnectorCredentials',
   EMAIL_LOG:   'EmailLog',
   SCHEMAS:     'Schemas',
   ENTITLEMENTS: 'Entitlements',
+  FLOACTIONNODES: 'FloActionNodes',
   /**
    * Tenant-scoped registry for dedup checks.
    * Path: FloPlugHubs/{hubId}/Tenants/{tenantId}/Registry

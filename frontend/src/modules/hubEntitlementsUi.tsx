@@ -141,7 +141,14 @@ export function useEntitlementCatalog(tierId: string) {
   useEffect(() => {
     let cancelled = false;
     lastKitsLoadKey.current = '';
+    
     (async () => {
+
+      if (!tierId || tierId === "" || tierId === "loading_placeholder" || tierId === "unassigned_fallback") {
+      setCatalogLoading(false);
+      setKitsLoading(false);
+      return;
+    }
       setCatalogLoading(true);
       try {
         const [conns, tierSnap] = await Promise.all([

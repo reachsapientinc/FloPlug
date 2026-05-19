@@ -8,7 +8,7 @@ import {
   WorkdayInspector, SalesforceInspector, SapInspector, OracleInspector,
   FilterInspector, MapperInspector, VariableStoreInspector,
   FIFInspector, LoopInspector, FunctionInspector, TemplateInspector,
-  StartInspector, EndInspector,
+  StartInspector, EndInspector,FloActionInspector
 } from './nodeInspectors';
 
 const REGISTRY: Record<string, React.FC<{ node: Node; onUpdate: InspectorOnUpdate; ctx: DesignerInspectorContext }>> = {
@@ -26,6 +26,7 @@ const REGISTRY: Record<string, React.FC<{ node: Node; onUpdate: InspectorOnUpdat
   loopNode:          LoopInspector,
   functionNode:      FunctionInspector,
   templateNode:      TemplateInspector,
+  floActionNode:     FloActionInspector, 
 };
 
 export interface NodeInspectorPanelProps {

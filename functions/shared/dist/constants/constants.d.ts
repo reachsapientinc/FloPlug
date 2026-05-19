@@ -25,7 +25,7 @@ export declare const SUB_COLLECTIONS: {
     readonly ACTIONS: "Actions";
     /** Kit-scoped operations — FloPlugConnectors/{id}/FloKits/{kitId}/FloKitActions */
     readonly FLOKITACTIONS: "FloKitActions";
-    /** Product templates under FloPlugConnectors/{id}/FloKits/{kitId}/ActionNodes */
+    /** Product templates: FloPlugConnectors/{id}/FloKits/{kitId}/ActionNodes */
     readonly ACTIONNODES: "ActionNodes";
 };
 export declare const HUB_COLLECTIONS: {
@@ -35,13 +35,13 @@ export declare const HUB_COLLECTIONS: {
     readonly FLOS: "Flos";
     readonly PLUGS: "Plugs";
     readonly FLO_CONNECTIONS: "FloConnections";
-    readonly ACTION_NODES: "ActionNodes";
     readonly USERS: "Users";
     readonly EXEC_LOG: "ExecutionLog";
     readonly CONNECTORS: "ConnectorCredentials";
     readonly EMAIL_LOG: "EmailLog";
     readonly SCHEMAS: "Schemas";
     readonly ENTITLEMENTS: "Entitlements";
+    readonly FLOACTIONNODES: "FloActionNodes";
     /**
      * Tenant-scoped registry for dedup checks.
      * Path: FloPlugHubs/{hubId}/Tenants/{tenantId}/Registry

@@ -37,13 +37,84 @@ export interface HubActionNodeDoc {
   hubId:                  string;
   tenantId:               string;
   floKitId:               string;
-  kitVersion:             string;
-  templateActionId:       string;
+  kitVersion?:            string;
+  /** Entitled actions enabled for this kit on the hub */
+  actionIds?:             string[];
+  /** @deprecated Use actionIds — kept for older docs */
+  templateActionId?:      string;
   connectorId:            string;
-  displayName:            string;
+  /** Admin-defined name for this FloAction instance (not tied to FloKit label) */
+  floActionName?:         string;
+  /** Unique short label shown on the designer node palette */
+  flaLabel?:              string;
+  /** Hub-admin notes shown in the palette bubble */
+  description?:           string;
+  /** @deprecated Use floActionName */
+  displayName?:           string;
+  allowedConnectionIds?:  string[];
   defaultConnectionId?:   string;
-  enabledForDevelopers:   boolean;
-  isActive:               boolean;
+  outputTarget?:          'cStream' | 'local' | 'global';
+  varName?:               string;
+  enabledForDevelopers?:  boolean;
+  isActive?:              boolean;
   createdAt?:             unknown;
   updatedAt?:             unknown;
+}
+
+/** Resolved display fields for palette / inspector (handles legacy docs). */
+export function resolveFloActionFields(doc: Pick<
+  HubActionNodeDoc,
+  'floActionName' | 'displayName' | 'flaLabel' | 'floKitId' | 'description'
+>) {
+  const floActionName = doc.floActionName?.trim()
+    || doc.displayName?.trim()
+    || doc.floKitId;
+  const flaLabel = doc.flaLabel?.trim() || floActionName;
+  return { floActionName, flaLabel, description: doc.description?.trim() ?? '' };
+}
+
+/** Subset passed to the designer node palette */
+export interface FloActionPaletteItem {
+  id:                     string;
+  floActionName:          string;
+  flaLabel:               string;
+  description?:           string;
+  connectorId:            string;
+  floKitId:               string;
+  actionIds:              string[];
+  templateActionId?:    string;
+  defaultConnectionId?:   string;
+  allowedConnectionIds?:  string[];
+}
+
+export function toFloActionPaletteItem(doc: HubActionNodeDoc): FloActionPaletteItem {
+  const { floActionName, flaLabel, description } = resolveFloActionFields(doc);
+  return {
+    id:                   doc.id,
+    floActionName,
+    flaLabel,
+    description:          description || undefined,
+    connectorId:          doc.connectorId,
+    floKitId:             doc.floKitId,
+    actionIds:            doc.actionIds ?? (doc.templateActionId ? [doc.templateActionId] : []),
+    defaultConnectionId:  doc.defaultConnectionId,
+    allowedConnectionIds: doc.allowedConnectionIds,
+  };
+}
+
+export interface AddActionNodeParams {
+  floKitId:             string;
+  connectorId:          string;
+  actionIds:            string[];
+  /** All connections the developer may choose from in the designer inspector */
+  allowedConnectionIds: string[];
+  /** The ★ default — pre-selected when the node is dropped on canvas */
+  defaultConnectionId:  string;
+  outputTarget:         'cStream' | 'local' | 'global';
+  varName?:             string;
+  floActionName:        string;
+  flaLabel:             string;
+  description?:         string;
+  /** @deprecated Use floActionName */
+  displayName?:         string;
 }

@@ -19,8 +19,8 @@
  *  5. All previous behaviour retained for non-email plugs.
  */
 
-import React, { useState } from 'react';
-import type { PlugConfig } from '@floplug/shared';
+import React, { useState, useEffect, useRef } from 'react';
+import type { PlugConfig, FloActionPaletteItem } from '@floplug/shared';
 
 // ── Palette static items ──────────────────────────────────────────────────────
 interface PaletteItem {
@@ -47,6 +47,34 @@ const PALETTE_ITEMS: PaletteItem[] = [
 ];
 
 const CATEGORIES = ['ERP', 'HRIS', 'CRM', 'Transform', 'Logic'];
+
+// ── Palette bubble (plug-style tooltip) ───────────────────────────────────────
+const PaletteBubble: React.FC<{
+  title:       string;
+  titleColor?: string;
+  subtitle?:   string;
+  body?:       string;
+  footer?:     string;
+  typeHint?:   string;
+}> = ({ title, titleColor = '#4f8ef7', subtitle, body, footer, typeHint }) => (
+  <div style={{
+    position: 'absolute', left: 'calc(100% + 8px)', top: '50%', transform: 'translateY(-50%)',
+    zIndex: 9999, pointerEvents: 'none', background: '#1e2130',
+    border: '0.5px solid rgba(255,255,255,0.12)', borderRadius: 7, padding: '8px 10px',
+    width: 200, boxShadow: '0 8px 24px rgba(0,0,0,0.5)', whiteSpace: 'normal',
+  }}>
+    <div style={{
+      position: 'absolute', left: -5, top: '50%', transform: 'translateY(-50%)',
+      width: 0, height: 0, borderTop: '5px solid transparent', borderBottom: '5px solid transparent',
+      borderRight: '5px solid rgba(255,255,255,0.12)',
+    }} />
+    <div style={{ fontSize: 11, fontWeight: 600, color: titleColor, marginBottom: subtitle || body ? 2 : 0 }}>{title}</div>
+    {subtitle && <div style={{ fontSize: 9, color: '#f59e0b', marginBottom: 4 }}>{subtitle}</div>}
+    {body && <div style={{ fontSize: 9, color: '#d0d0dc', lineHeight: 1.5, marginBottom: footer ? 5 : 0 }}>{body}</div>}
+    {footer && <div style={{ fontSize: 8, color: '#22c55e' }}>{footer}</div>}
+    {typeHint && <div style={{ marginTop: 5, fontSize: 8, color: '#3a3a50', fontFamily: 'monospace' }}>{typeHint}</div>}
+  </div>
+);
 
 // ── IconWithTooltip ───────────────────────────────────────────────────────────
 const IconWithTooltip: React.FC<{
@@ -144,6 +172,51 @@ const PlugIcon: React.FC<{
   );
 };
 
+// ── FloActionIcon — click toggles plug-style bubble ───────────────────────────
+const FloActionIcon: React.FC<{
+  action:      FloActionPaletteItem;
+  bubbleOpen:  boolean;
+  onToggle:    () => void;
+  onDragStart: (e: React.DragEvent, action: FloActionPaletteItem) => void;
+}> = ({ action, bubbleOpen, onToggle, onDragStart }) => {
+  const color = '#10b981';
+
+  return (
+    <div style={{ position: 'relative', display: 'inline-block' }}>
+      <div
+        draggable
+        onDragStart={e => onDragStart(e, action)}
+        onClick={e => { e.stopPropagation(); onToggle(); }}
+        style={{
+          width: 42, height: 42, borderRadius: 8,
+          background: bubbleOpen ? color : `${color}28`,
+          border: `0.5px solid ${bubbleOpen ? color : `${color}50`}`,
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+          cursor: 'grab', userSelect: 'none', gap: 2,
+          transition: 'background 0.15s, border-color 0.15s',
+        }}
+      >
+        <span style={{ fontSize: 10, fontWeight: 800, color: bubbleOpen ? '#fff' : color }}>⚡</span>
+        <span style={{
+          fontSize: 7, color: bubbleOpen ? '#fff' : '#f59e0b', lineHeight: 1, textAlign: 'center',
+          maxWidth: 38, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>
+          {action.flaLabel}
+        </span>
+      </div>
+      {bubbleOpen && (
+        <PaletteBubble
+          title={action.floActionName}
+          titleColor={color}
+          subtitle={action.connectorId}
+          body={action.description || `${action.actionIds.length} action(s) enabled`}
+          footer="⚡ Drag to add FloAction to flow"
+        />
+      )}
+    </div>
+  );
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // NodePalette
 // Accepts plugs as a prop (live list from Designer state).
@@ -151,12 +224,34 @@ const PlugIcon: React.FC<{
 // palette updates immediately without a page refresh.
 // ─────────────────────────────────────────────────────────────────────────────
 interface NodePaletteProps {
-  plugs?:          PlugConfig[];
+  plugs?:      PlugConfig[];
+  floActions?: FloActionPaletteItem[];
 }
 
-export const NodePalette: React.FC<NodePaletteProps> = ({ plugs = [] }) => {
-  const [collapsed,   setCollapsed]   = useState<Record<string, boolean>>({});
-  const [panelHidden, setPanelHidden] = useState(false);
+const MIN_WIDTH = 100;
+  const MAX_WIDTH = 280;
+  const DEFAULT_WIDTH = 128;
+  const RAIL_WIDTH = 28;
+
+
+
+export const NodePalette: React.FC<NodePaletteProps> = ({ plugs = [], floActions = [] }) => {
+  const [collapsed,       setCollapsed]       = useState<Record<string, boolean>>({});
+  const [panelHidden,     setPanelHidden]     = useState(false);
+  const [openActionBubble, setOpenActionBubble] = useState<string | null>(null);
+  const [paletteWidth, setPaletteWidth] = useState(DEFAULT_WIDTH);
+  const isResizing = useRef(false);
+  const paletteRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const onDocClick = (e: MouseEvent) => {
+      if (!paletteRef.current?.contains(e.target as HTMLElement)) {
+        setOpenActionBubble(null);
+      }
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, []);
 
   const toggleCat = (cat: string) =>
     setCollapsed(prev => ({ ...prev, [cat]: !prev[cat] }));
@@ -183,8 +278,47 @@ export const NodePalette: React.FC<NodePaletteProps> = ({ plugs = [] }) => {
     e.dataTransfer.effectAllowed = 'move';
   };
 
-  const EXPANDED_WIDTH = 128;
-  const RAIL_WIDTH     = 28;
+  const onFloActionDragStart = (e: React.DragEvent, action: FloActionPaletteItem) => {
+    e.dataTransfer.setData('application/flonode-type',  'floActionNode');
+    e.dataTransfer.setData('application/flonode-label', action.flaLabel);
+    e.dataTransfer.setData('application/flonode-meta',  JSON.stringify({
+      floActionNodeId:      action.id,
+      floActionName:        action.floActionName,
+      flaLabel:             action.flaLabel,
+      description:          action.description ?? '',
+      floKitId:             action.floKitId,
+      connectorId:          action.connectorId,
+      actionIds:            action.actionIds,
+      defaultConnectionId:  action.defaultConnectionId,
+      allowedConnectionIds: action.allowedConnectionIds ?? [],
+    }));
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  //const EXPANDED_WIDTH = 128;
+  //const RAIL_WIDTH     = 28;
+
+  const onResizeMouseDown = (e: React.MouseEvent) => {
+  e.preventDefault();
+  isResizing.current = true;
+  const startX = e.clientX;
+  const startW = paletteWidth;
+
+  const onMove = (mv: MouseEvent) => {
+    if (!isResizing.current) return;
+    const next = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, startW + mv.clientX - startX));
+    setPaletteWidth(next);
+  };
+  const onUp = () => {
+    isResizing.current = false;
+    window.removeEventListener('mousemove', onMove);
+    window.removeEventListener('mouseup', onUp);
+  };
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup', onUp);
+};
+
+  
 
   if (panelHidden) {
     return (
@@ -197,7 +331,18 @@ export const NodePalette: React.FC<NodePaletteProps> = ({ plugs = [] }) => {
   }
 
   return (
-    <div style={{ width: EXPANDED_WIDTH, background: '#141720', borderRight: '0.5px solid rgba(255,255,255,0.06)', display: 'flex', flexDirection: 'column', flexShrink: 0, overflowY: 'auto', overflowX: 'visible', fontFamily: "'Inter',-apple-system,sans-serif", userSelect: 'none', position: 'relative' }}>
+    <div ref={paletteRef} style={{ width: paletteWidth,
+                                  minWidth: MIN_WIDTH,
+                                  maxWidth: MAX_WIDTH, 
+                                  background: '#141720', 
+                                  borderRight: '0.5px solid rgba(255,255,255,0.06)', 
+                                  display: 'flex', 
+                                  flexDirection: 'column', 
+                                  flexShrink: 0, 
+                                  overflowY: 'auto', 
+                                  overflowX: 'visible', 
+                                  fontFamily: "'Inter',-apple-system,sans-serif", 
+                                  userSelect: 'none', position: 'relative' }}>
       {/* Header */}
       <div style={{ height: 36, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 8px', borderBottom: '0.5px solid rgba(255,255,255,0.05)', flexShrink: 0 }}>
         <span style={{ fontSize: 9, fontWeight: 700, color: '#3a3a50', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Nodes</span>
@@ -205,6 +350,7 @@ export const NodePalette: React.FC<NodePaletteProps> = ({ plugs = [] }) => {
           <svg width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6" /></svg>
         </button>
       </div>
+      
 
       {/* Static node categories */}
       {CATEGORIES.map(cat => {
@@ -251,10 +397,52 @@ export const NodePalette: React.FC<NodePaletteProps> = ({ plugs = [] }) => {
         )}
       </div>
 
-      <div style={{ marginTop: 'auto', padding: '8px', borderTop: '0.5px solid rgba(255,255,255,0.04)', fontSize: 8, color: '#2a2a38', lineHeight: 1.5, flexShrink: 0 }}>
-        Drag onto canvas
+      <div>
+        <button onClick={() => toggleCat('FloActions')} style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '5px 8px', background: 'none', border: 'none', borderTop: '0.5px solid rgba(16,185,129,0.2)', cursor: 'pointer', color: !collapsed['FloActions'] ? '#10b981' : '#3a3a50' }}>
+          <span style={{ fontSize: 8, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', fontFamily: 'inherit' }}>
+            ⚡ FloActions {floActions.length > 0 && `(${floActions.length})`}
+          </span>
+          <span style={{ fontSize: 8 }}>{!collapsed['FloActions'] ? '▾' : '▸'}</span>
+        </button>
+        {!collapsed['FloActions'] && (
+          floActions.length === 0 ? (
+            <div style={{ padding: '8px 10px', fontSize: 9, color: '#3a3a50', lineHeight: 1.6 }}>
+              No FloActions enabled yet.<br/>
+              Ask your hub admin to configure actions in <span style={{ color: '#10b981' }}>Hub Manager → Actions</span>.
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 5, padding: '4px 8px 8px' }}>
+              {floActions.map(action => (
+                <FloActionIcon
+                  key={action.id}
+                  action={action}
+                  bubbleOpen={openActionBubble === action.id}
+                  onToggle={() => setOpenActionBubble(prev => prev === action.id ? null : action.id)}
+                  onDragStart={onFloActionDragStart}
+                />
+              ))}
+            </div>
+          )
+        )}
       </div>
+
+      <div style={{ marginTop: 'auto', padding: '8px', borderTop: '0.5px solid rgba(255,255,255,0.04)', fontSize: 8, color: '#2a2a38', lineHeight: 1.5, flexShrink: 0 }}>
+        Drag onto canvas · click FloAction for details
+      </div>   
+      {/* Drag-resize handle — right edge */}
+      <div
+        onMouseDown={onResizeMouseDown}
+        style={{
+          position: 'absolute', right: 0, top: 0, bottom: 0,
+          width: 4, cursor: 'col-resize',
+          background: 'transparent',
+          transition: 'background 0.15s',
+        }}
+        onMouseEnter={e => (e.currentTarget.style.background = 'rgba(16,185,129,0.3)')}
+        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+      />   
     </div>
+    
   );
 };
 

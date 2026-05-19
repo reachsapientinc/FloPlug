@@ -325,3 +325,132 @@ export const EndInspector: React.FC<NodeInspectorProps> = ({ node, onUpdate, ctx
     </>
   );
 };
+
+export const FloActionInspector: React.FC<NodeInspectorProps> = withOutput(({ node, onUpdate }) => {
+  const d = node.data as Record<string, unknown>;
+
+  // Live arrays injected at hydration from FloActionNodeDoc — never fetched here
+  const actionIds            = (d.actionIds            as string[]) ?? [];
+  const allowedConnectionIds = (d.allowedConnectionIds as string[]) ?? [];
+  const defaultConnectionId  = (d.defaultConnectionId  as string)  ?? '';
+  const templateActionId     = (d.templateActionId     as string)  ?? '';
+  const connectorId          = (d.connectorId          as string)  ?? '';
+  const floKitId             = (d.floKitId             as string)  ?? '';
+
+  // Developer's persisted choices — fall back to node defaults
+  const selectedActionId = (d.actionId as string)
+    || templateActionId
+    || actionIds[0]
+    || '';
+
+  const selectedConnectionId = (d.connectionId as string)
+    || defaultConnectionId
+    || allowedConnectionIds[0]
+    || '';
+
+  // Initialise defaults once on mount if missing
+  React.useEffect(() => {
+    const patch: Record<string, unknown> = {};
+    if (!d.outputTarget) patch.outputTarget = 'cStream';
+    if (!d.actionId && (templateActionId || actionIds[0]))
+      patch.actionId = templateActionId || actionIds[0];
+    if (!d.connectionId && (defaultConnectionId || allowedConnectionIds[0]))
+      patch.connectionId = defaultConnectionId || allowedConnectionIds[0];
+    if (Object.keys(patch).length > 0) onUpdate(node.id, patch);
+  }, [node.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const notConfigured = actionIds.length === 0;
+
+  return (
+    <>
+      {/* Identity — read-only */}
+      <Field label="Connector">
+        <Inp value={connectorId || '—'} disabled />
+      </Field>
+      <Field label="FloKit">
+        <Inp value={floKitId || '—'} disabled />
+      </Field>
+
+      {/* Warning if live doc hasn't arrived yet */}
+      {notConfigured && (
+        <div style={{
+          fontSize: 10, color: '#f59e0b', padding: '6px 10px', borderRadius: 6,
+          background: 'rgba(245,158,11,0.08)', border: '0.5px solid rgba(245,158,11,0.25)',
+          lineHeight: 1.5, marginBottom: 4,
+        }}>
+          ⚠ Configuration loading… If this persists, ask your Hub Admin to check the Action Node setup.
+        </div>
+      )}
+
+      {/* Action chip selector */}
+      <Field label="Action">
+        {notConfigured ? (
+          <span style={{ fontSize: 10, color: '#3a3a50', fontStyle: 'italic' }}>No actions configured.</span>
+        ) : (
+          <>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 2 }}>
+              {actionIds.map(id => {
+                const isSelected = selectedActionId === id;
+                const isDefault  = id === templateActionId;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => onUpdate(node.id, { actionId: id })}
+                    style={{
+                      fontSize: 9, padding: '3px 9px', borderRadius: 12, cursor: 'pointer',
+                      border: isSelected ? '1px solid #10b981' : '1px solid #3a3a50',
+                      background: isSelected ? 'rgba(16,185,129,0.15)' : 'transparent',
+                      color: isSelected ? '#10b981' : '#6b7280',
+                      fontWeight: isDefault ? 700 : 400,
+                      fontFamily: 'inherit',
+                    }}
+                  >
+                    {id}{isDefault ? ' ★' : ''}
+                  </button>
+                );
+              })}
+            </div>
+            <Help>★ = Hub Admin default. Click to override for this node.</Help>
+          </>
+        )}
+      </Field>
+
+      {/* Connection dropdown */}
+      <Field label="Connection">
+        {allowedConnectionIds.length === 0 ? (
+          <span style={{ fontSize: 10, color: '#3a3a50', fontStyle: 'italic' }}>No connections configured.</span>
+        ) : (
+          <>
+            <Sel
+              value={selectedConnectionId}
+              onChange={e => onUpdate(node.id, { connectionId: e.target.value })}
+            >
+              {allowedConnectionIds.map(cid => (
+                <option key={cid} value={cid}>
+                  {cid}{cid === defaultConnectionId ? '  (default)' : ''}
+                </option>
+              ))}
+            </Sel>
+            {selectedConnectionId !== defaultConnectionId && defaultConnectionId && (
+              <Help>
+                Default: {defaultConnectionId}.{' '}
+                <button
+                  type="button"
+                  onClick={() => onUpdate(node.id, { connectionId: defaultConnectionId })}
+                  style={{
+                    background: 'none', border: 'none', color: '#4f8ef7',
+                    fontSize: 9, cursor: 'pointer', padding: 0, textDecoration: 'underline',
+                  }}
+                >
+                  Reset
+                </button>
+              </Help>
+            )}
+          </>
+        )}
+      </Field>
+    </>
+  );
+  // withOutput() adds OutputTargetSection + NodeTestPanel automatically
+});

@@ -22,13 +22,18 @@
  *   onBack             — called when user clicks "← Designer"
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { PERMISSIONS } from '@floplug/shared';
-import type {FloConnectionSafe} from '@floplug/shared';
+import type { FloConnectionSafe, AuthProtocol, ConnectorDoc, PlugSummary, TenantUser, HubActionNodeDoc } from '@floplug/shared';
+import type { ExistingActionNodeRef } from './FloActionManager';
+import type { FloMeta } from './../handlers/hubActionHandler';
 import {
   usePlugManagerActions,
 }                                                 from './../handlers/hubActionHandler';
-import PlugManager     from './PlugManager';
+import PlugManager from './PlugManager';
+import { FloConnectionManager } from './FloConnectionManager';
+import { FloActionManager } from './FloActionManager';
+import { useHubEntitledCatalog } from './../hooks/useHubEntitledCatalog';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 export interface HubAdminDashboardProps {
@@ -42,7 +47,7 @@ export interface HubAdminDashboardProps {
   onBack:      () => void;
 }
 
-type TabId = 'plugs' | 'users' | 'scheduler' | 'keys' | 'executions' | 'connections';
+type TabId = 'plugs' | 'users' | 'scheduler' | 'keys' | 'executions' | 'connections' | 'actions';
 
 interface Tab {
   id:         TabId;
@@ -53,13 +58,22 @@ interface Tab {
 }
 
 const TABS: Tab[] = [
-  { id: 'plugs',      label: 'Plugs',           icon: '🔌', adminOnly: true,  permission: PERMISSIONS.MANAGE_PLUGS  },
-  { id: 'users',      label: 'Users',            icon: '👥', adminOnly: true,  permission: PERMISSIONS.MANAGE_USERS  },
-  { id: 'scheduler',  label: 'Scheduler',        icon: '⏰', adminOnly: false, permission: PERMISSIONS.INVOKE_FLOS   },
-  { id: 'keys',       label: 'Key Vault',        icon: '🔑', adminOnly: true,  permission: PERMISSIONS.MANAGE_SETTINGS },
-  { id: 'executions', label: 'Execution Viewer', icon: '📊', adminOnly: false, permission: PERMISSIONS.VIEW_LOGS     },
-  { id: 'connections', label: 'Connections',     icon: '🔗', adminOnly: true, permission: PERMISSIONS.MANAGE_PLUGS }
+  { id: 'plugs',       label: 'Plugs',           icon: '🔌', adminOnly: true,  permission: PERMISSIONS.MANAGE_PLUGS  },
+  { id: 'users',       label: 'Users',            icon: '👥', adminOnly: true,  permission: PERMISSIONS.MANAGE_USERS  },
+  { id: 'connections', label: 'Connections',     icon: '🔗', adminOnly: true,  permission: PERMISSIONS.MANAGE_PLUGS  },
+  { id: 'actions',     label: 'Actions',          icon: '⚡', adminOnly: true,  permission: PERMISSIONS.MANAGE_PLUGS  },
+  { id: 'scheduler',   label: 'Scheduler',        icon: '⏰', adminOnly: false, permission: PERMISSIONS.INVOKE_FLOS   },
+  { id: 'keys',        label: 'Key Vault',        icon: '🔑', adminOnly: true,  permission: PERMISSIONS.MANAGE_SETTINGS },
+  { id: 'executions',  label: 'Execution Viewer', icon: '📊', adminOnly: false, permission: PERMISSIONS.VIEW_LOGS     },
 ];
+
+const sectionCard: React.CSSProperties = {
+  background: '#fff', border: '1px solid #E5E7EB',
+  borderRadius: 12, overflow: 'hidden',
+  boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+  minHeight: 500,
+  padding: '16px 20px',
+};
 
 // ── Placeholder section ───────────────────────────────────────────────────────
 const PlaceholderSection: React.FC<{
@@ -222,8 +236,38 @@ const HubAdminDashboard: React.FC<HubAdminDashboardProps> = ({
   hubName = 'FloPlug', hubLogoUrl, onBack,
 }) => {
   const [activeTab, setActiveTab] = useState<TabId>('plugs');
+  const [_plugs, setPlugs] = useState<PlugSummary[]>([]);
+  const [_users, setUsers] = useState<TenantUser[]>([]);
+  const [_flos, setFlos] = useState<FloMeta[]>([]);
+  const [connectors, setConnectors] = useState<ConnectorDoc[]>([]);
+  const [protocols, setProtocols] = useState<AuthProtocol[]>([]);
   const [floConnections, setFloConnections] = useState<FloConnectionSafe[]>([]);
-  const actions = usePlugManagerActions({ ..., setFloConnections });
+  const [actionNodes, setActionNodes] = useState<HubActionNodeDoc[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [actionSavedMsg, setActionSavedMsg] = useState('');
+
+  const {
+    fetchAll,
+    handleSaveFloConnection,
+    handleDeactivateFloConnection,
+    handleSaveActionNode,
+  } = usePlugManagerActions({
+    hubId, tenantId, isAdmin: isHubAdmin, userId,
+    setPlugs, setUsers, setFlos, setConnectors, setProtocols,
+    setFloConnections, setActionNodes, setLoading, setLoadError,
+  });
+
+  const {
+    entitledConnectors,
+    floKitsByConnectorId,
+    actionsByFloKitId,
+    loading: catalogLoading,
+  } = useHubEntitledCatalog(hubId,tenantId);
+
+  useEffect(() => {
+    if (isHubAdmin) fetchAll();
+  }, [isHubAdmin, fetchAll]);
 
   // Filter tabs by permission
   const visibleTabs = TABS.filter(t => {
@@ -234,6 +278,21 @@ const HubAdminDashboard: React.FC<HubAdminDashboardProps> = ({
 
   // Ensure activeTab is always visible
   const effectiveTab = visibleTabs.find(t => t.id === activeTab)?.id ?? visibleTabs[0]?.id ?? 'executions';
+
+  const existingActionNodes: ExistingActionNodeRef[] = useMemo(
+    () => actionNodes.map(n => ({
+      id:                   n.id,
+      connectorId:          n.connectorId,
+      kitId:                n.floKitId,
+      actionIds:            n.actionIds ?? (n.templateActionId ? [n.templateActionId] : []),
+      connectionId:         n.defaultConnectionId ?? '',
+      allowedConnectionIds: n.allowedConnectionIds ?? [],
+      floActionName:        n.floActionName,
+      flaLabel:             n.flaLabel,
+      description:          n.description,
+    })),
+    [actionNodes],
+  );
 
   return (
     <div style={{
@@ -398,6 +457,8 @@ const HubAdminDashboard: React.FC<HubAdminDashboardProps> = ({
               {effectiveTab === 'users'      && 'Manage hub users, roles, and workspace access.'}
               {effectiveTab === 'scheduler'  && 'Schedule flos to run automatically on a timer or cron expression.'}
               {effectiveTab === 'keys'       && 'Manage SSH keys, PGP keys, and named credentials used by plugs.'}
+              {effectiveTab === 'connections' && 'Manage authenticated connections to external systems. Credentials are stored encrypted server-side.'}
+              {effectiveTab === 'actions'     && 'Browse entitled FloKit actions and register hub action nodes for the designer.'}
               {effectiveTab === 'executions' && 'Browse flo execution history and replay individual runs with node-level details.'}
             </div>
           </div>
@@ -410,16 +471,50 @@ const HubAdminDashboard: React.FC<HubAdminDashboardProps> = ({
           {effectiveTab === 'scheduler'  && <SchedulerSection />}
           {effectiveTab === 'keys'       && <KeysSection />}
           {effectiveTab === 'executions' && <ExecutionsSection />}
-          {effectiveTab === 'connections' && <FloActionManager
-                                              connectors={entitledConnectors}
-                                              floKits={floKitsByConnectorId}
-                                              actions={actionsByFloKitId}
-                                              connections={floConnections}
-                                              protocols={protocols}
-                                              onAddActionNode={async (params) => {
-                                                // call saveActionNode CF with params
-                                              }}
-                                            />}
+          {effectiveTab === 'connections' && (
+            <div style={sectionCard}>
+              {loading ? (
+                <div style={{ padding: 40, textAlign: 'center', color: '#6B7280', fontSize: 13 }}>Loading connections…</div>
+              ) : loadError ? (
+                <div style={{ padding: 16, background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 8, color: '#B91C1C', fontSize: 13 }}>{loadError}</div>
+              ) : (
+                <FloConnectionManager
+                  lightTheme
+                  connections={floConnections}
+                  connectors={connectors}
+                  protocols={protocols}
+                  onSave={handleSaveFloConnection}
+                  onDeactivate={handleDeactivateFloConnection}
+                />
+              )}
+            </div>
+          )}
+          {effectiveTab === 'actions' && (
+            <div style={sectionCard}>
+              {actionSavedMsg && (
+                <div style={{ marginBottom: 12, padding: '10px 14px', background: '#ECFDF5', border: '1px solid #A7F3D0', borderRadius: 8, color: '#065F46', fontSize: 12 }}>
+                  {actionSavedMsg}
+                </div>
+              )}
+              {catalogLoading ? (
+                <div style={{ padding: 40, textAlign: 'center', color: '#6B7280', fontSize: 13 }}>Loading entitled actions…</div>
+              ) : (
+                <FloActionManager
+                  connectors={entitledConnectors}
+                  floKits={floKitsByConnectorId}
+                  actions={actionsByFloKitId}
+                  connections={floConnections.filter(c => c.isActive)}
+                  existingNodes={existingActionNodes}
+                  onAddActionNode={async (params): Promise<string> => {
+                    const id = await handleSaveActionNode(params);
+                    setActionSavedMsg(`FloActionNode saved (${id}). Developers can pick actions and connections in the Designer.`);
+                    setTimeout(() => setActionSavedMsg(''), 5000);
+                    return id;
+                  }}
+                />
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

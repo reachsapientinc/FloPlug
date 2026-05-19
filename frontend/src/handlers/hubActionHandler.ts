@@ -20,6 +20,7 @@ import type {
   PlugConfig,
   FloConnectionSafe,
 }                                    from '@floplug/shared';
+import type { AddActionNodeParams,HubActionNodeDoc }  from '@floplug/shared';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -52,6 +53,7 @@ export interface PlugManagerActions {
   // ── FloConnection ─────────────────────────────────────────────────────────
   handleSaveFloConnection:     (conn: SaveFloConnectionPayload) => Promise<FloConnectionSafe>;
   handleDeactivateFloConnection: (connectionId: string) => Promise<void>;
+  handleSaveActionNode:        (params: AddActionNodeParams) => Promise<string>;
 }
 
 // ── Hook params ───────────────────────────────────────────────────────────────
@@ -67,6 +69,7 @@ export interface UsePlugManagerActionsParams {
   setConnectors:    React.Dispatch<React.SetStateAction<ConnectorDoc[]>>;
   setProtocols:     React.Dispatch<React.SetStateAction<AuthProtocol[]>>;
   setFloConnections: React.Dispatch<React.SetStateAction<FloConnectionSafe[]>>;
+  setActionNodes:   React.Dispatch<React.SetStateAction<HubActionNodeDoc[]>>;
   setLoading:       React.Dispatch<React.SetStateAction<boolean>>;
   setLoadError:     React.Dispatch<React.SetStateAction<string>>;
 }
@@ -100,6 +103,7 @@ export function usePlugManagerActions({
   setConnectors,
   setProtocols,
   setFloConnections,
+  setActionNodes,
   setLoading,
   setLoadError,
 }: UsePlugManagerActionsParams): PlugManagerActions {
@@ -123,7 +127,7 @@ export function usePlugManagerActions({
       const [
         plugRes, userRes, flowRes,
         loadedConnectors, loadedProtocols,
-        connRes,
+        connRes, nodesRes,
       ] = await Promise.all([
         cf<{ hubId: string; tenantId: string }, { plugs: PlugSummary[] }>
           ('getHubPlugs')({ hubId, tenantId }),
@@ -135,6 +139,8 @@ export function usePlugManagerActions({
         loadAuthProtocols(),
         cf<{ hubId: string; tenantId: string }, { connections: FloConnectionSafe[] }>
           ('getFloConnections')({ hubId, tenantId }),
+        cf<{ hubId: string; tenantId: string }, { nodes: HubActionNodeDoc[] }>
+          ('getHubActionNodes')({ hubId, tenantId }),
       ]);
 
       setPlugs(plugRes.data.plugs              ?? []);
@@ -143,6 +149,7 @@ export function usePlugManagerActions({
       setConnectors(loadedConnectors);
       setProtocols(loadedProtocols);
       setFloConnections(connRes.data.connections ?? []);
+      setActionNodes(nodesRes.data.nodes       ?? []);
     } catch (e: any) {
       setLoadError(e?.message ?? 'Failed to load hub data');
     } finally {
@@ -152,7 +159,7 @@ export function usePlugManagerActions({
     hubId, tenantId, isAdmin,
     setPlugs, setUsers, setFlos,
     setConnectors, setProtocols,
-    setFloConnections,
+    setFloConnections, setActionNodes,
     setLoading, setLoadError,
   ]);
 
@@ -264,6 +271,38 @@ export function usePlugManagerActions({
     }
   }, [hubId, tenantId, requireAdmin, setFloConnections]);
 
+  // ── ActionNode: save hub-scoped instance ──────────────────────────────────
+  const handleSaveActionNode = useCallback(async (
+    params: AddActionNodeParams,
+  ): Promise<string> => {
+    requireAdmin('saveHubActionNode');
+    const res = await cf<
+      Record<string, unknown>,
+      { instanceId: string; created: boolean }
+    >('saveHubActionNode')({
+      hubId,
+      tenantId,
+      floKitId:             params.floKitId,
+      connectorId:          params.connectorId,
+      actionIds:            params.actionIds,
+      allowedConnectionIds: params.allowedConnectionIds,
+      connectionId:         params.defaultConnectionId,
+      outputTarget:         params.outputTarget,
+      varName:              params.varName,
+      floActionName:        params.floActionName,
+      flaLabel:             params.flaLabel,
+      description:          params.description,
+    });
+
+    const nodesRes = await cf<
+      { hubId: string; tenantId: string },
+      { nodes: HubActionNodeDoc[] }
+    >('getHubActionNodes')({ hubId, tenantId });
+    setActionNodes(nodesRes.data.nodes ?? []);
+
+    return res.data.instanceId;
+  }, [hubId, tenantId, requireAdmin, setActionNodes]);
+
   return {
     fetchAll,
     handleDeactivatePlug,
@@ -274,5 +313,6 @@ export function usePlugManagerActions({
     handlePlugSaved,
     handleSaveFloConnection,
     handleDeactivateFloConnection,
+    handleSaveActionNode,
   };
 }

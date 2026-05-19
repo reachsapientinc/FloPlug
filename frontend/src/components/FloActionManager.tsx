@@ -1,538 +1,345 @@
 /**
- * FloActionManager.tsx
- *
- * Hub Admin tab — browse entitled connector FloKits and their actions,
- * and create/manage ActionNodes that associate a FloAction with a connection.
- *
- * Data flow:
- *  ┌──────────────────────────────────────────────────────────────────┐
- *  │  HubEntitlements                                                 │
- *  │   connectors: { workday: { floKits: [hrKit, financeKit] } }     │
- *  └──────────────┬───────────────────────────────────────────────────┘
- *                 │  entitled FloKits + their ActionDocs
- *                 ▼
- *  ┌──────────────────────────────────────────────────────────────────┐
- *  │  FloActionManager UI                                             │
- *  │   • left panel: connector/kit tree                               │
- *  │   • right panel: action list with "Add to Canvas" button         │
- *  │   • "Add to Canvas" → opens ActionNodeFormModal                  │
- *  │     - picks a FloConnection (filtered by connector.authProtocol) │
- *  │     - sets output target (cStream / local / global)              │
- *  │     - saves ActionNode doc to tenant sub-collection              │
- *  └──────────────────────────────────────────────────────────────────┘
- *
- * ActionNode doc is stored at:
- *   FloPlugHubs/{hubId}/Tenants/{tenantId}/ActionNodes/{nodeId}
- *
- * Security: all writes go through Cloud Functions.
- * This component never writes to Firestore directly.
+ * FloActionManager.tsx — Hub Admin FloActionNode configuration
  */
 
-import React, { useState, useMemo, useCallback } from 'react';
-import type {
-  ConnectorDoc,
-  ActionDoc,
-  AuthProtocol,
-}                              from '@floplug/shared';
-import type { FloConnectionSafe } from '@floplug/shared';
-
-// ── Style tokens ──────────────────────────────────────────────────────────────
-
-const C = {
-  bg:        '#0e0e14',
-  surface:   '#16161f',
-  surfaceAlt:'#13131c',
-  border:    '#2a2a3a',
-  accent:    '#7c6af7',
-  text:      '#c0c0cc',
-  textMuted: '#5a5a70',
-  textStrong:'#e8e8f0',
-  danger:    '#e05555',
-  success:   '#4caf8a',
-  warning:   '#e0a040',
-  pill:      '#1e1e2e',
-} as const;
-
-const methodColour: Record<string, string> = {
-  GET:    '#4caf8a',
-  POST:   '#7c6af7',
-  PUT:    '#e0a040',
-  PATCH:  '#4a90d9',
-  DELETE: '#e05555',
-};
-
-// ── Shared types ──────────────────────────────────────────────────────────────
+import React, { useState, useEffect, useMemo } from 'react';
+import type { ConnectorDoc, ActionDoc, FloConnectionSafe, AddActionNodeParams } from '@floplug/shared';
+import { resolveFloActionFields } from '@floplug/shared';
 
 export interface FloKitMeta {
-  id:          string;
+  id: string;
   connectorId: string;
-  label:       string;
+  label: string;
   description?: string;
-  actionIds:   string[];
+  actionIds: string[];
 }
 
-/** What the parent passes down — already filtered to entitled items */
-export interface FloActionManagerProps {
-  /** Entitled connectors (full ConnectorDoc) */
-  connectors:    ConnectorDoc[];
-  /** All entitled FloKits keyed by connectorId */
-  floKits:       Record<string, FloKitMeta[]>;
-  /** All entitled ActionDocs keyed by floKitId */
-  actions:       Record<string, ActionDoc[]>;
-  /** Active FloConnections for the current tenant (credentials stripped) */
-  connections:   FloConnectionSafe[];
-  protocols:     AuthProtocol[];
-  /** Called when user confirms "Add to Canvas" for an action + connection */
-  onAddActionNode: (params: AddActionNodeParams) => Promise<void>;
-}
-
-export interface AddActionNodeParams {
-  actionId:     string;
-  floKitId:     string;
-  connectorId:  string;
+export interface ExistingActionNodeRef {
+  id: string;
+  connectorId: string;
+  kitId: string;
+  actionIds: string[];
   connectionId: string;
-  outputTarget: 'cStream' | 'local' | 'global';
-  varName?:     string;
+  allowedConnectionIds: string[];
+  floActionName?: string;
+  flaLabel?: string;
+  description?: string;
 }
 
-// ── ActionNodeFormModal ───────────────────────────────────────────────────────
-// Shown when the user clicks "Add to Canvas" on an action.
-
-interface ActionNodeFormModalProps {
-  action:      ActionDoc;
+export interface FloActionManagerProps {
+  connectors: ConnectorDoc[];
+  floKits: Record<string, FloKitMeta[]>;
+  actions: Record<string, ActionDoc[]>;
   connections: FloConnectionSafe[];
-  protocols:   AuthProtocol[];
-  connector:   ConnectorDoc;
-  onConfirm:   (connectionId: string, outputTarget: 'cStream'|'local'|'global', varName: string) => void;
-  onClose:     () => void;
+  onAddActionNode: (params: AddActionNodeParams) => Promise<string>;
+  existingNodes?: ExistingActionNodeRef[];
 }
 
-const ActionNodeFormModal: React.FC<ActionNodeFormModalProps> = ({
-  action, connections, protocols, connector, onConfirm, onClose,
+const fieldLabel: React.CSSProperties = {
+  fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 4, display: 'block',
+};
+const fieldInput: React.CSSProperties = {
+  width: '100%', padding: '8px 10px', fontSize: 13, border: '1px solid #D1D5DB',
+  borderRadius: 6, boxSizing: 'border-box',
+};
+
+export const FloActionManager: React.FC<FloActionManagerProps> = ({
+  connectors = [],
+  floKits = {},
+  actions = {},
+  connections = [],
+  onAddActionNode,
+  existingNodes = [],
 }) => {
-  // Filter connections by any protocol the connector supports
-  const compatible = connections.filter(c =>
-    connector.supportedAuthTypes.includes(c.authProtocol),
+  const [selectedConnectorId, setSelectedConnectorId] = useState('');
+  const [selectedActionsMap, setSelectedActionsMap] = useState<Record<string, string[]>>({});
+  const [allowedConnectionsMap, setAllowedConnectionsMap] = useState<Record<string, string[]>>({});
+  const [defaultConnectionMap, setDefaultConnectionMap] = useState<Record<string, string>>({});
+  const [floActionNameMap, setFloActionNameMap] = useState<Record<string, string>>({});
+  const [flaLabelMap, setFlaLabelMap] = useState<Record<string, string>>({});
+  const [descriptionMap, setDescriptionMap] = useState<Record<string, string>>({});
+  const [processingKitId, setProcessingKitId] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState('');
+
+  const activeKits = selectedConnectorId ? floKits[selectedConnectorId] ?? [] : [];
+
+  const labelsInUse = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const n of existingNodes) {
+      const { flaLabel } = resolveFloActionFields({
+        floActionName: n.floActionName,
+        flaLabel: n.flaLabel,
+        floKitId: n.kitId,
+      });
+      map.set(flaLabel.trim().toLowerCase(), n.kitId);
+    }
+    return map;
+  }, [existingNodes]);
+
+  useEffect(() => {
+    if (!selectedConnectorId && connectors[0]) setSelectedConnectorId(connectors[0].id);
+  }, [connectors, selectedConnectorId]);
+
+  useEffect(() => {
+    if (!existingNodes.length) return;
+    const a: Record<string, string[]> = {};
+    const al: Record<string, string[]> = {};
+    const d: Record<string, string> = {};
+    const names: Record<string, string> = {};
+    const labels: Record<string, string> = {};
+    const descs: Record<string, string> = {};
+    for (const n of existingNodes) {
+      const resolved = resolveFloActionFields({
+        floActionName: n.floActionName,
+        flaLabel: n.flaLabel,
+        floKitId: n.kitId,
+        description: n.description,
+      });
+      a[n.kitId] = n.actionIds ?? [];
+      al[n.kitId] = n.allowedConnectionIds?.length ? n.allowedConnectionIds : (n.connectionId ? [n.connectionId] : []);
+      d[n.kitId] = n.connectionId || n.allowedConnectionIds?.[0] || '';
+      names[n.kitId] = resolved.floActionName;
+      labels[n.kitId] = resolved.flaLabel;
+      descs[n.kitId] = resolved.description;
+    }
+    setSelectedActionsMap(prev => ({ ...a, ...prev }));
+    setAllowedConnectionsMap(prev => ({ ...al, ...prev }));
+    setDefaultConnectionMap(prev => ({ ...d, ...prev }));
+    setFloActionNameMap(prev => ({ ...names, ...prev }));
+    setFlaLabelMap(prev => ({ ...labels, ...prev }));
+    setDescriptionMap(prev => ({ ...descs, ...prev }));
+  }, [existingNodes]);
+
+  const connectionsForConnector = useMemo(
+    () => connections.filter(c => c.connectorId === selectedConnectorId && c.isActive !== false),
+    [connections, selectedConnectorId],
   );
 
-  const [connectionId,  setConnectionId]  = useState(compatible[0]?.id ?? '');
-  const [outputTarget,  setOutputTarget]  = useState<'cStream'|'local'|'global'>('cStream');
-  const [varName,       setVarName]       = useState('');
-  const [saving,        setSaving]        = useState(false);
-  const [error,         setError]         = useState('');
+  useEffect(() => {
+    if (!activeKits.length) return;
+    setFloActionNameMap(prev => {
+      const next = { ...prev };
+      for (const kit of activeKits) {
+        if (next[kit.id] === undefined) next[kit.id] = kit.label;
+      }
+      return next;
+    });
+    setFlaLabelMap(prev => {
+      const next = { ...prev };
+      for (const kit of activeKits) {
+        if (next[kit.id] === undefined) next[kit.id] = kit.label;
+      }
+      return next;
+    });
+  }, [activeKits]);
 
-  const inp: React.CSSProperties = {
-    background: '#1c1c28', border: `1px solid ${C.border}`, borderRadius: 6,
-    color: C.textStrong, padding: '7px 10px', fontSize: 12, outline: 'none',
-    fontFamily: "'Inter', -apple-system, sans-serif",
+  const toggleAction = (kitId: string, actionId: string) => {
+    setSelectedActionsMap(prev => {
+      const cur = prev[kitId] ?? [];
+      return { ...prev, [kitId]: cur.includes(actionId) ? cur.filter(x => x !== actionId) : [...cur, actionId] };
+    });
   };
 
-  const handleConfirm = async () => {
-    if (!connectionId) { setError('Select a connection.'); return; }
-    setSaving(true);
+  const toggleAllowed = (kitId: string, connId: string) => {
+    setAllowedConnectionsMap(prev => {
+      const cur = prev[kitId] ?? [];
+      const next = cur.includes(connId) ? cur.filter(x => x !== connId) : [...cur, connId];
+      setDefaultConnectionMap(def => {
+        if (!next.length) return { ...def, [kitId]: '' };
+        if (!def[kitId] || !next.includes(def[kitId])) return { ...def, [kitId]: next[0] };
+        return def;
+      });
+      return { ...prev, [kitId]: next };
+    });
+  };
+
+  const setDefault = (kitId: string, connId: string) => {
+    setDefaultConnectionMap(prev => ({ ...prev, [kitId]: connId }));
+    setAllowedConnectionsMap(prev => {
+      const cur = prev[kitId] ?? [];
+      return cur.includes(connId) ? prev : { ...prev, [kitId]: [...cur, connId] };
+    });
+  };
+
+  const labelConflict = (kitId: string, label: string) => {
+    const norm = label.trim().toLowerCase();
+    if (!norm) return null;
+    const owner = labelsInUse.get(norm);
+    if (owner && owner !== kitId) return `Label "${label.trim()}" is already used by another FloAction.`;
+    return null;
+  };
+
+  const saveKit = async (kitId: string, kitLabel: string) => {
+    if (!selectedConnectorId) return;
+    const actionIds = selectedActionsMap[kitId] ?? [];
+    const allowedConnectionIds = allowedConnectionsMap[kitId] ?? [];
+    const defaultConnectionId = defaultConnectionMap[kitId] ?? '';
+    const floActionName = (floActionNameMap[kitId] ?? kitLabel).trim();
+    const flaLabel = (flaLabelMap[kitId] ?? '').trim();
+    const description = (descriptionMap[kitId] ?? '').trim();
+
+    if (!floActionName) { setSaveError('FloAction name is required.'); return; }
+    if (!flaLabel) { setSaveError('FloAction label (palette name) is required.'); return; }
+    const conflict = labelConflict(kitId, flaLabel);
+    if (conflict) { setSaveError(conflict); return; }
+    if (!actionIds.length) { setSaveError('Select at least one action.'); return; }
+    if (!allowedConnectionIds.length) { setSaveError('Select at least one allowed connection.'); return; }
+    if (!defaultConnectionId) { setSaveError('Mark a default connection with ★.'); return; }
+    if (!allowedConnectionIds.includes(defaultConnectionId)) {
+      setSaveError('Default must be one of the allowed connections.'); return;
+    }
+    setSaveError('');
+    setProcessingKitId(kitId);
     try {
-      await onConfirm(connectionId, outputTarget, varName);
-      onClose();
-    } catch (e: any) {
-      setError(e?.message ?? 'Failed to add action node.');
+      await onAddActionNode({
+        floKitId: kitId,
+        connectorId: selectedConnectorId,
+        actionIds,
+        allowedConnectionIds,
+        defaultConnectionId,
+        outputTarget: 'cStream',
+        floActionName,
+        flaLabel,
+        description: description || undefined,
+      });
+    } catch (e: unknown) {
+      setSaveError(e instanceof Error ? e.message : 'Save failed.');
     } finally {
-      setSaving(false);
+      setProcessingKitId(null);
     }
   };
 
+  const nodeForKit = (kitId: string) => existingNodes.find(n => n.connectorId === selectedConnectorId && n.kitId === kitId);
+
   return (
-    <div style={{
-      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.72)',
-      backdropFilter: 'blur(4px)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      zIndex: 9999, fontFamily: "'Inter', -apple-system, sans-serif",
-    }}>
-      <div style={{
-        background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12,
-        width: 480, boxShadow: '0 32px 64px rgba(0,0,0,0.6)',
-      }}>
-        {/* Header */}
-        <div style={{
-          padding: '16px 20px', borderBottom: `1px solid ${C.border}`,
-          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        }}>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: C.textStrong }}>
-              Add to Canvas
-            </div>
-            <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2 }}>
-              {action.label}
-            </div>
-          </div>
-          <button onClick={onClose} style={{
-            background: 'none', border: 'none', color: C.textMuted,
-            fontSize: 18, cursor: 'pointer',
-          }}>✕</button>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, color: '#111827' }}>
+      {saveError && (
+        <div style={{ padding: '10px 14px', background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 8, color: '#B91C1C', fontSize: 13 }}>
+          {saveError}
         </div>
+      )}
 
-        {/* Body */}
-        <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {/* Action summary */}
-          <div style={{
-            background: C.surfaceAlt, borderRadius: 8, padding: 12,
-            border: `1px solid ${C.border}`,
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-              <span style={{
-                fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
-                background: `${methodColour[action.method] ?? '#5a5a70'}22`,
-                color: methodColour[action.method] ?? C.textMuted,
-                border: `1px solid ${methodColour[action.method] ?? '#5a5a70'}44`,
-              }}>{action.method}</span>
-              <code style={{ fontSize: 10, color: C.textMuted }}>{action.endpoint}</code>
-            </div>
-            {action.description && (
-              <div style={{ fontSize: 11, color: C.textMuted }}>{action.description}</div>
-            )}
-          </div>
+      <div style={{ display: 'flex', gap: 8, borderBottom: '1px solid #E5E7EB', paddingBottom: 12, overflowX: 'auto' }}>
+        {connectors.map(conn => {
+          const isActive = conn.id === selectedConnectorId;
+          return (
+            <button key={conn.id} type="button" onClick={() => setSelectedConnectorId(conn.id)} style={{
+              padding: '8px 16px', borderRadius: 8, fontSize: 14, cursor: 'pointer', whiteSpace: 'nowrap',
+              border: isActive ? '1px solid #1A56DB' : '1px solid #E5E7EB',
+              background: isActive ? '#EFF6FF' : '#FFFFFF',
+              color: isActive ? '#1A56DB' : '#4B5563', fontWeight: isActive ? 600 : 500,
+            }}>{conn.label || conn.id}</button>
+          );
+        })}
+        {!connectors.length && <span style={{ fontSize: 14, color: '#6B7280' }}>No entitled connectors.</span>}
+      </div>
 
-          {/* Connection selector */}
-          <div>
-            <div style={{
-              fontSize: 10, fontWeight: 700, letterSpacing: '0.08em',
-              textTransform: 'uppercase', color: '#8888a0', marginBottom: 4,
-            }}>Connection *</div>
-            {compatible.length === 0 ? (
-              <div style={{
-                fontSize: 11, color: C.warning, padding: '8px 10px',
-                background: `${C.warning}18`, borderRadius: 6,
-                border: `1px solid ${C.warning}44`,
-              }}>
-                No compatible connections. Create one in the Connections tab first.
+      {activeKits.map(kit => {
+        const kitActions = actions[kit.id] || [];
+        const chosen = selectedActionsMap[kit.id] || [];
+        const allowed = allowedConnectionsMap[kit.id] || [];
+        const defaultConn = defaultConnectionMap[kit.id] || '';
+        const existing = nodeForKit(kit.id);
+        const isUpdate = !!existing;
+        const floActionName = floActionNameMap[kit.id] ?? kit.label;
+        const flaLabel = flaLabelMap[kit.id] ?? '';
+        const description = descriptionMap[kit.id] ?? '';
+        const labelErr = labelConflict(kit.id, flaLabel);
+
+        return (
+          <div key={kit.id} style={{ border: '1px solid #E5E7EB', borderRadius: 12, background: '#FFF', padding: 24, boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
+            <h3 style={{ margin: '0 0 4px', fontSize: 16, fontWeight: 700 }}>{kit.label}</h3>
+            {kit.description && <p style={{ margin: '0 0 12px', fontSize: 13, color: '#6B7280' }}>FloKit: {kit.description}</p>}
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+              <div>
+                <label style={fieldLabel}>FloAction name *</label>
+                <input
+                  style={fieldInput}
+                  value={floActionName}
+                  placeholder="e.g. SAP PO Create"
+                  onChange={e => setFloActionNameMap(prev => ({ ...prev, [kit.id]: e.target.value }))}
+                />
+                <span style={{ fontSize: 11, color: '#9CA3AF' }}>Internal name — editable, not tied to FloKit label</span>
               </div>
-            ) : (
-              <select
-                value={connectionId}
-                onChange={e => setConnectionId(e.target.value)}
-                style={{ ...inp, width: '100%', cursor: 'pointer' }}
-              >
-                {compatible.map(c => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}  ({c.authProtocol})
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
-
-          {/* Output target */}
-          <div>
-            <div style={{
-              fontSize: 10, fontWeight: 700, letterSpacing: '0.08em',
-              textTransform: 'uppercase', color: '#8888a0', marginBottom: 4,
-            }}>Response Storage</div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              {(['cStream', 'local', 'global'] as const).map(t => (
-                <button
-                  key={t}
-                  onClick={() => setOutputTarget(t)}
-                  style={{
-                    flex: 1, padding: '7px 0', borderRadius: 6, fontSize: 11,
-                    cursor: 'pointer', fontWeight: 600,
-                    background: outputTarget === t ? C.accent : 'transparent',
-                    border: `1px solid ${outputTarget === t ? C.accent : C.border}`,
-                    color: outputTarget === t ? '#fff' : C.textMuted,
-                    transition: 'all 0.15s',
-                  }}
-                >{t}</button>
-              ))}
+              <div>
+                <label style={fieldLabel}>Palette label (flaLabel) *</label>
+                <input
+                  style={{ ...fieldInput, borderColor: labelErr ? '#FCA5A5' : '#D1D5DB' }}
+                  value={flaLabel}
+                  placeholder="Unique short name for designer palette"
+                  onChange={e => setFlaLabelMap(prev => ({ ...prev, [kit.id]: e.target.value }))}
+                />
+                {labelErr
+                  ? <span style={{ fontSize: 11, color: '#B91C1C' }}>{labelErr}</span>
+                  : <span style={{ fontSize: 11, color: '#9CA3AF' }}>Must be unique across all FloActions on this hub</span>
+                }
+              </div>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <label style={fieldLabel}>Description</label>
+                <textarea
+                  style={{ ...fieldInput, minHeight: 64, resize: 'vertical' }}
+                  value={description}
+                  placeholder="Notes for developers — shown in palette bubble on click"
+                  onChange={e => setDescriptionMap(prev => ({ ...prev, [kit.id]: e.target.value }))}
+                />
+              </div>
             </div>
-          </div>
 
-          {/* Variable name (for local/global) */}
-          {(outputTarget === 'local' || outputTarget === 'global') && (
-            <div>
-              <div style={{
-                fontSize: 10, fontWeight: 700, letterSpacing: '0.08em',
-                textTransform: 'uppercase', color: '#8888a0', marginBottom: 4,
-              }}>Variable Name</div>
-              <input
-                style={{ ...inp, width: '100%', boxSizing: 'border-box' }}
-                value={varName}
-                onChange={e => setVarName(e.target.value)}
-                placeholder={`${outputTarget}.myResult`}
-              />
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 8, textTransform: 'uppercase' }}>Actions</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {kitActions.map(action => {
+                  const on = chosen.includes(action.id);
+                  return (
+                    <button key={action.id} type="button" onClick={() => toggleAction(kit.id, action.id)} style={{
+                      padding: '6px 14px', borderRadius: 20, fontSize: 13, cursor: 'pointer',
+                      border: on ? '1px solid #1A56DB' : '1px solid #D1D5DB',
+                      background: on ? '#1A56DB' : '#F9FAFB', color: on ? '#FFF' : '#374151',
+                    }}>{action.label || action.id}</button>
+                  );
+                })}
+                {!kitActions.length && <span style={{ fontSize: 13, color: '#9CA3AF' }}>No entitled actions.</span>}
+              </div>
             </div>
-          )}
 
-          {error && (
-            <div style={{
-              fontSize: 11, color: C.danger, padding: '8px 10px',
-              background: `${C.danger}18`, borderRadius: 6,
-            }}>{error}</div>
-          )}
-        </div>
-
-        {/* Footer */}
-        <div style={{
-          padding: '14px 20px', borderTop: `1px solid ${C.border}`,
-          display: 'flex', justifyContent: 'flex-end', gap: 8,
-        }}>
-          <button onClick={onClose} style={{
-            padding: '7px 16px', borderRadius: 6, fontSize: 12, cursor: 'pointer',
-            background: 'transparent', border: `1px solid ${C.border}`,
-            color: C.text,
-          }}>Cancel</button>
-          <button
-            onClick={handleConfirm}
-            disabled={saving || compatible.length === 0}
-            style={{
-              padding: '7px 18px', borderRadius: 6, fontSize: 12, cursor: 'pointer',
-              background: C.accent, border: 'none', color: '#fff',
-              fontWeight: 600, opacity: saving ? 0.7 : 1,
-            }}
-          >{saving ? 'Adding…' : 'Add to Canvas'}</button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// ── FloActionManager (main component) ────────────────────────────────────────
-
-export const FloActionManager: React.FC<FloActionManagerProps> = ({
-  connectors, floKits, actions, connections, protocols, onAddActionNode,
-}) => {
-  const [selectedConnector, setSelectedConnector] = useState<string>(connectors[0]?.id ?? '');
-  const [selectedKit,       setSelectedKit]       = useState<string>('');
-  const [search,            setSearch]            = useState('');
-  const [addTarget,         setAddTarget]         = useState<{
-    action: ActionDoc; connector: ConnectorDoc; floKitId: string;
-  } | null>(null);
-
-  // ── Derived: kits for selected connector ──────────────────────────────────
-  const kitsForConnector = useMemo(() =>
-    floKits[selectedConnector] ?? [],
-  [floKits, selectedConnector]);
-
-  // Auto-select first kit when connector changes
-  const handleSelectConnector = useCallback((id: string) => {
-    setSelectedConnector(id);
-    setSelectedKit(floKits[id]?.[0]?.id ?? '');
-    setSearch('');
-  }, [floKits]);
-
-  // ── Derived: actions for selected kit, filtered by search ─────────────────
-  const visibleActions = useMemo(() => {
-    const all = actions[selectedKit] ?? [];
-    if (!search) return all;
-    const q = search.toLowerCase();
-    return all.filter(a =>
-      a.label.toLowerCase().includes(q) ||
-      a.endpoint.toLowerCase().includes(q) ||
-      a.description?.toLowerCase().includes(q),
-    );
-  }, [actions, selectedKit, search]);
-
-  const activeConnector = connectors.find(c => c.id === selectedConnector);
-
-  return (
-    <div style={{
-      display: 'flex', height: '100%', gap: 0,
-      fontFamily: "'Inter', -apple-system, sans-serif", color: C.text,
-    }}>
-      {/* ── Left: connector + kit tree ────────────────────────────────────── */}
-      <div style={{
-        width: 220, flexShrink: 0, overflowY: 'auto',
-        borderRight: `1px solid ${C.border}`, paddingRight: 0,
-      }}>
-        {connectors.length === 0 ? (
-          <div style={{ padding: 16, fontSize: 11, color: C.textMuted }}>
-            No entitled connectors.
-          </div>
-        ) : connectors.map(connector => (
-          <div key={connector.id}>
-            {/* Connector header */}
-            <button
-              onClick={() => handleSelectConnector(connector.id)}
-              style={{
-                width: '100%', textAlign: 'left', padding: '10px 14px',
-                background: selectedConnector === connector.id ? '#1e1e2e' : 'transparent',
-                border: 'none', borderBottom: `1px solid ${C.border}`,
-                color: selectedConnector === connector.id ? C.textStrong : C.text,
-                fontSize: 12, fontWeight: 700, cursor: 'pointer',
-                borderLeft: selectedConnector === connector.id
-                  ? `3px solid ${C.accent}` : '3px solid transparent',
-                transition: 'all 0.1s',
-              }}
-            >
-              {connector.label}
-            </button>
-
-            {/* FloKits under connector */}
-            {selectedConnector === connector.id && (
-              (floKits[connector.id] ?? []).map(kit => (
-                <button
-                  key={kit.id}
-                  onClick={() => setSelectedKit(kit.id)}
-                  style={{
-                    width: '100%', textAlign: 'left',
-                    padding: '8px 14px 8px 26px',
-                    background: selectedKit === kit.id ? '#16162a' : 'transparent',
-                    border: 'none', borderBottom: `1px solid ${C.border}22`,
-                    color: selectedKit === kit.id ? C.accent : C.textMuted,
-                    fontSize: 11, cursor: 'pointer',
-                    transition: 'all 0.1s',
-                  }}
-                >
-                  {kit.label}
-                  <span style={{
-                    marginLeft: 6, fontSize: 9, color: C.textMuted,
-                  }}>({kit.actionIds.length})</span>
-                </button>
-              ))
-            )}
-          </div>
-        ))}
-      </div>
-
-      {/* ── Right: action list ────────────────────────────────────────────── */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-        {/* Search bar */}
-        <div style={{
-          padding: '12px 16px', borderBottom: `1px solid ${C.border}`,
-          display: 'flex', alignItems: 'center', gap: 10,
-        }}>
-          <input
-            style={{
-              background: '#16161f', border: `1px solid ${C.border}`,
-              borderRadius: 6, color: C.textStrong, padding: '6px 10px',
-              fontSize: 12, outline: 'none', flex: 1,
-            }}
-            placeholder="Search actions…"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-          />
-          <div style={{ fontSize: 10, color: C.textMuted, whiteSpace: 'nowrap' }}>
-            {visibleActions.length} action{visibleActions.length !== 1 ? 's' : ''}
-          </div>
-        </div>
-
-        {/* Action cards */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px' }}>
-          {!selectedKit ? (
-            <div style={{ textAlign: 'center', padding: '60px 0', color: C.textMuted, fontSize: 12 }}>
-              Select a FloKit from the left panel.
-            </div>
-          ) : visibleActions.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '60px 0', color: C.textMuted, fontSize: 12 }}>
-              No actions found.
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {visibleActions.map(action => (
-                <div
-                  key={action.id}
-                  style={{
-                    background: C.surface, border: `1px solid ${C.border}`,
-                    borderRadius: 8, padding: '12px 14px',
-                    display: 'flex', alignItems: 'flex-start',
-                    gap: 12, transition: 'border-color 0.15s',
-                  }}
-                  onMouseEnter={e => (e.currentTarget.style.borderColor = C.accent + '66')}
-                  onMouseLeave={e => (e.currentTarget.style.borderColor = C.border)}
-                >
-                  {/* Method badge */}
-                  <div style={{ paddingTop: 2 }}>
-                    <span style={{
-                      fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
-                      background: `${methodColour[action.method] ?? '#5a5a70'}22`,
-                      color: methodColour[action.method] ?? C.textMuted,
-                      border: `1px solid ${methodColour[action.method] ?? '#5a5a70'}44`,
-                    }}>{action.method}</span>
-                  </div>
-
-                  {/* Action info */}
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, color: C.textStrong, fontSize: 12 }}>
-                      {action.label}
-                    </div>
-                    <code style={{
-                      fontSize: 10, color: C.textMuted, display: 'block',
-                      marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}>
-                      {action.endpoint}
-                    </code>
-                    {action.description && (
-                      <div style={{
-                        fontSize: 11, color: C.textMuted, marginTop: 4,
-                        lineHeight: 1.4,
-                      }}>
-                        {action.description}
-                      </div>
-                    )}
-                    {/* Output keys preview */}
-                    {action.outputKeys && action.outputKeys.length > 0 && (
-                      <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                        {action.outputKeys.map(k => (
-                          <span key={k} style={{
-                            fontSize: 9, padding: '1px 6px', borderRadius: 10,
-                            background: C.pill, color: C.textMuted,
-                            border: `1px solid ${C.border}`,
-                          }}>{k}</span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Add button */}
-                  <button
-                    onClick={() => activeConnector && setAddTarget({
-                      action,
-                      connector: activeConnector,
-                      floKitId: selectedKit,
-                    })}
-                    style={{
-                      flexShrink: 0, background: 'transparent',
-                      border: `1px solid ${C.accent}66`, borderRadius: 6,
-                      color: C.accent, padding: '5px 12px',
-                      fontSize: 11, fontWeight: 600, cursor: 'pointer',
-                      transition: 'all 0.15s',
-                      whiteSpace: 'nowrap',
-                    }}
-                    onMouseEnter={e => {
-                      (e.currentTarget as HTMLButtonElement).style.background = C.accent;
-                      (e.currentTarget as HTMLButtonElement).style.color = '#fff';
-                    }}
-                    onMouseLeave={e => {
-                      (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
-                      (e.currentTarget as HTMLButtonElement).style.color = C.accent;
-                    }}
-                  >
-                    + Canvas
-                  </button>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 8, textTransform: 'uppercase' }}>
+                Connections (check allowed · ★ = default for designer)
+              </div>
+              {connectionsForConnector.length === 0 ? (
+                <div style={{ fontSize: 13, color: '#D97706', padding: 10, background: '#FFFBEB', borderRadius: 6 }}>
+                  No active connections for this connector. Create one in the Connections tab first.
                 </div>
-              ))}
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {connectionsForConnector.map(conn => (
+                    <label key={conn.id} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' }}>
+                      <input type="checkbox" checked={allowed.includes(conn.id)} onChange={() => toggleAllowed(kit.id, conn.id)} />
+                      <span style={{ flex: 1 }}>{conn.name} <span style={{ color: '#9CA3AF', fontSize: 11 }}>({conn.authProtocol})</span></span>
+                      <input type="radio" name={`default-${kit.id}`} checked={defaultConn === conn.id} disabled={!allowed.includes(conn.id)}
+                        onChange={() => setDefault(kit.id, conn.id)} title="Default connection" />
+                      <span style={{ fontSize: 11, color: defaultConn === conn.id ? '#1A56DB' : '#9CA3AF' }}>★ default</span>
+                    </label>
+                  ))}
+                </div>
+              )}
             </div>
-          )}
-        </div>
-      </div>
 
-      {/* ── ActionNode form modal ── */}
-      {addTarget && (
-        <ActionNodeFormModal
-          action={addTarget.action}
-          connector={addTarget.connector}
-          connections={connections}
-          protocols={protocols}
-          onConfirm={async (connectionId, outputTarget, varName) => {
-            await onAddActionNode({
-              actionId:    addTarget.action.id,
-              floKitId:    addTarget.floKitId,
-              connectorId: addTarget.connector.id,
-              connectionId,
-              outputTarget,
-              varName,
-            });
-          }}
-          onClose={() => setAddTarget(null)}
-        />
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button type="button" onClick={() => saveKit(kit.id, kit.label)} disabled={processingKitId === kit.id || !!labelErr} style={{
+                padding: '0 20px', height: 38, borderRadius: 6, border: 'none', color: '#FFF', fontSize: 14, fontWeight: 600, cursor: 'pointer',
+                background: isUpdate ? '#059669' : '#1A56DB', opacity: processingKitId === kit.id || labelErr ? 0.7 : 1,
+              }}>
+                {processingKitId === kit.id ? 'Saving…' : isUpdate ? 'Update FloActionNode' : 'Create FloActionNode'}
+              </button>
+            </div>
+          </div>
+        );
+      })}
+
+      {!activeKits.length && selectedConnectorId && (
+        <div style={{ textAlign: 'center', padding: 40, color: '#6B7280', fontSize: 14 }}>No entitled FloKits for this connector.</div>
       )}
     </div>
   );

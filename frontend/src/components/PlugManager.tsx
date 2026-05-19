@@ -1,51 +1,41 @@
 /**
  * PlugManager.tsx
  *
- * Security model:
- *  - NO direct Firestore reads from the frontend — all data via Cloud Functions
- *  - NO role string comparisons in UI — parent passes isAdmin as a boolean
- *    derived from the signed Firebase token claim
- *  - Credentials never fetched to frontend — plug list omits credential fields
- *  - All mutations go through Cloud Functions which verify caller identity
+ * Fixes in this version:
+ *  1. BUG FIX — Edit plug was saving as a NEW plug because plugId was sent as
+ *     `null` (via `plug?.id ?? null`). JSON serialises null as literal null,
+ *     and the Cloud Function treated null as "no id → create new".
+ *     Fix: send `plugId: plug?.id || undefined`. `undefined` is omitted from
+ *     JSON entirely on create; on edit, `plug.id` is a non-empty string so it
+ *     passes through correctly.
  *
- * Cloud Functions used:
- *  - getHubPlugs(hubId, tenantId)         → returns plugs WITHOUT credentials
- *  - getHubUsers(hubId, tenantId)         → returns users
- *  - getHubFlos(hubId, tenantId)         → returns flow metadata only
- *  - savePlug(plugData)                   → create/update plug including credentials
- *  - deactivatePlug(hubId, tenantId, id)  → soft delete
- *  - inviteHubUser(...)                   → invite + Firebase Auth + Firestore
- *  - updateHubUserRole(...)               → role + permissions update
- *  - deactivateHubUser(hubId,tenantId,uid)
- *  - reactivateHubUser(hubId,tenantId,uid)
+ *  2. UI — Plug list now renders as a responsive square-tile grid with:
+ *       • Connector icon/badge + plug name as title
+ *       • Connector label + auth protocol badge body
+ *       • Footer strip: Plug ID (monospace) + flow-usage count
+ *       • Active/inactive visual state with a coloured left-border accent
+ *       • Edit / Deactivate actions on hover overlay
+ *
+ * Security model unchanged:
+ *  - NO direct Firestore reads from the frontend — all data via Cloud Functions
+ *  - NO role string comparisons in UI — isAdmin is a boolean from signed token
+ *  - Credentials never fetched to frontend
+ *  - All mutations go through Cloud Functions
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { getFunctions, httpsCallable }              from 'firebase/functions';
 import type {
   AuthProtocol, AuthProtocolField,
-  ConnectorDoc, PlugConfig, PlugCredentialValues, PlugVariableHint,TenantUser,FloMeta,PlugSummary,
-}  from '@floplug/shared';
-//import {loadConnectors,loadAuthProtocols} from './../types/AuthConnectorTypes.ts';                                                 
-import {
-  usePlugManagerActions,
-}                                                 from './../handlers/hubActionHandler';
-import { NODE_TYPES }                             from '@floplug/shared';
+  ConnectorDoc, PlugConfig, PlugCredentialValues, PlugVariableHint,
+  TenantUser, FloMeta, PlugSummary, FloConnectionSafe, HubActionNodeDoc,
+} from '@floplug/shared';
+import { usePlugManagerActions }  from './../handlers/hubActionHandler';
+import { NODE_TYPES }             from '@floplug/shared';
 
 // ── Cloud Function caller helper ──────────────────────────────────────────────
 const fn = <Req, Res>(name: string) =>
   httpsCallable<Req, Res>(getFunctions(), name);
-
-// ── Types ─────────────────────────────────────────────────────────────────────
-// interface FloMeta {
-//   id:          string;
-//   name:        string;
-//   shortCode:   string;
-//   workspaceId: string;
-// }
-
-// PlugSummary — what the frontend receives (no credentials field)
-//type PlugSummary = Omit<PlugConfig, 'credentials'>;
 
 // ═════════════════════════════════════════════════════════════════════════════
 // InviteUserModal
@@ -58,10 +48,9 @@ interface InviteUserModalProps {
   onInvited: (user: TenantUser) => void;
 }
 
-// Role labels — only used for display, never for access control logic
 const ROLE_DISPLAY: Record<string, { icon: string; label: string; desc: string }> = {
-  hub_admin: { icon: '👑', label: 'Admin',     desc: 'Full access — manage plugs, users, and all flos.' },
-  user:      { icon: '👤', label: 'User',       desc: 'Can design flos. Run access controlled per flo.' },
+  hub_admin: { icon: '👑', label: 'Admin', desc: 'Full access — manage plugs, users, and all flos.' },
+  user:      { icon: '👤', label: 'User',  desc: 'Can design flos. Run access controlled per flo.' },
 };
 
 const InviteUserModal: React.FC<InviteUserModalProps> = ({
@@ -82,8 +71,6 @@ const InviteUserModal: React.FC<InviteUserModalProps> = ({
     if (!email.trim() || !displayName.trim()) { setError('Email and display name are required'); return; }
     setSaving(true); setError(''); setSuccess('');
     try {
-      // Cloud Function creates Firebase Auth user + Firestore doc + sends email
-      // Frontend never touches Firestore directly
       const { data } = await fn<any, any>('inviteHubUser')({
         email: email.trim(), displayName: displayName.trim(),
         role: roleKey, hubId, tenantId, workspaceIds: [],
@@ -92,7 +79,7 @@ const InviteUserModal: React.FC<InviteUserModalProps> = ({
       onInvited({
         uid: data.uid, email: email.trim(), displayName: displayName.trim(),
         role: roleKey as any, hubId, tenantId,
-        isActive: true, forcePasswordReset: true, workspaceIds: [],permissions:[],isHubAdmin:false
+        isActive: true, forcePasswordReset: true, workspaceIds: [], permissions: [], isHubAdmin: false,
       });
     } catch (e: any) {
       setError(e?.message ?? 'Invite failed');
@@ -175,8 +162,8 @@ const EditUserModal: React.FC<EditUserModalProps> = ({
   open, user, flos, hubId, tenantId, onClose, onSaved,
 }) => {
   const [roleKey,        setRoleKey]        = useState('user');
-  const [allowedFlos,   setAllowedFlos]   = useState<string[]>([]);
-  const [allFlos,       setAllFlos]       = useState(false);
+  const [allowedFlos,    setAllowedFlos]    = useState<string[]>([]);
+  const [allFlos,        setAllFlos]        = useState(false);
   const [canRunDesigner, setCanRunDesigner] = useState(false);
   const [saving,         setSaving]         = useState(false);
   const [error,          setError]          = useState('');
@@ -197,12 +184,10 @@ const EditUserModal: React.FC<EditUserModalProps> = ({
     setSaving(true); setError('');
     try {
       const allowedUids = allFlos ? ['*'] : allowedFlos;
-      // All updates go through Cloud Function — never direct Firestore write
-      // Function verifies caller is hub_admin via token claims
       await fn<any, any>('updateHubUserRole')({
         hubId, tenantId,
-        targetUid:    user.uid,
-        role:         roleKey,
+        targetUid:         user.uid,
+        role:              roleKey,
         invokePermissions: { allowedUids, canRunInDesigner: canRunDesigner },
       });
       onSaved({ ...user, role: roleKey as any, invokePermissions: { allowedUids, canRunInDesigner: canRunDesigner } } as any);
@@ -216,8 +201,7 @@ const EditUserModal: React.FC<EditUserModalProps> = ({
     setAllowedFlos(prev => prev.includes(flowId) ? prev.filter(f => f !== flowId) : [...prev, flowId]);
 
   if (!open || !user) return null;
-
-  const isUserAdmin = (user as any).isHubAdmin === true; // boolean flag from token, not role string
+  const isUserAdmin = (user as any).isHubAdmin === true;
 
   return (
     <div style={css.overlay}>
@@ -234,8 +218,6 @@ const EditUserModal: React.FC<EditUserModalProps> = ({
         {error && <div style={css.errBox}>{error}</div>}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-
-          {/* Access level — display labels only, actual role sent to function */}
           <div style={css.fg}>
             <label style={css.fl}>Access Level</label>
             <div style={{ display: 'flex', gap: 8 }}>
@@ -256,36 +238,29 @@ const EditUserModal: React.FC<EditUserModalProps> = ({
             </div>
           </div>
 
-          {/* Flow permissions */}
           <div style={{ background: 'rgba(255,255,255,0.02)', border: '0.5px solid rgba(255,255,255,0.07)', borderRadius: 8, padding: '12px 14px' }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: '#16de1d', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 10 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 10 }}>
               Flow Permissions
             </div>
-
-            {/* Can run in designer toggle */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
               <Toggle value={canRunDesigner} onChange={setCanRunDesigner} color="#4f8ef7" />
               <div>
                 <div style={{ fontSize: 11, color: '#d0d0e0', fontWeight: 500 }}>Can run flos in Designer</div>
-                <div style={{ fontSize: 9, color: '#16de1d', marginTop: 1 }}>If off, user can design but cannot hit the Run button</div>
+                <div style={{ fontSize: 9, color: '#6b6b80', marginTop: 1 }}>If off, user can design but cannot hit the Run button</div>
               </div>
             </div>
-
-            {/* All flos toggle */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
               <Toggle value={allFlos} onChange={setAllFlos} color="#22c55e" />
               <div>
                 <div style={{ fontSize: 11, color: '#d0d0e0', fontWeight: 500 }}>Allow invoke on all flos</div>
-                <div style={{ fontSize: 9, color: '#16de1d', marginTop: 1 }}>User can call any flow via the API endpoint</div>
+                <div style={{ fontSize: 9, color: '#6b6b80', marginTop: 1 }}>User can call any flow via the API endpoint</div>
               </div>
             </div>
-
-            {/* Specific flow selector */}
             {!allFlos && (
               <div>
                 <div style={{ fontSize: 10, color: '#6b6b80', marginBottom: 6 }}>Select flos this user can invoke externally:</div>
                 {flos.length === 0
-                  ? <div style={{ fontSize: 10, color: '#16de1d' }}>No flos found.</div>
+                  ? <div style={{ fontSize: 10, color: '#45455a' }}>No flos found.</div>
                   : <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 180, overflowY: 'auto' }}>
                       {flos.map(f => (
                         <label key={f.id} style={{
@@ -299,7 +274,7 @@ const EditUserModal: React.FC<EditUserModalProps> = ({
                             style={{ accentColor: '#4f8ef7', flexShrink: 0 }} />
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ fontSize: 11, color: '#d0d0e0', fontWeight: 500 }}>{f.name}</div>
-                            <div style={{ fontSize: 8, color: '#16de1d', fontFamily: 'monospace' }}>{f.shortCode || f.id}</div>
+                            <div style={{ fontSize: 8, color: '#45455a', fontFamily: 'monospace' }}>{f.shortCode || f.id}</div>
                           </div>
                         </label>
                       ))}
@@ -341,71 +316,302 @@ const Toggle: React.FC<{ value: boolean; onChange: (v: boolean) => void; color: 
   </button>
 );
 
+// ── Placeholder helpers ───────────────────────────────────────────────────────
 function defaultPlaceholder(varName: string): string {
   const v = varName.toLowerCase();
   if (v.includes('version') || v === 'ver') return 'Optional default e.g. v44.1';
   if (v.includes('port'))                   return 'Optional default e.g. 443';
   if (v.includes('region'))                 return 'Optional default e.g. us-east-1';
   if (v.includes('path'))                   return 'Optional default e.g. /api/v1';
-  if (v.includes('fileName'))                   return 'Attachment File Name.  e.g Process_log.csv';
+  if (v.includes('fileName'))               return 'Attachment File Name. e.g Process_log.csv';
   return 'Optional default value';
 }
-
-// ── Dynamic hint placeholder ───────────────────────────────────────────────
-// Derives a context-aware placeholder from the connector label and variable name
-// so admins see relevant guidance instead of a hardcoded Workday example.
 
 function hintPlaceholder(connectorLabel: string, varName: string): string {
   const lbl = connectorLabel.toLowerCase();
   const v   = varName.toLowerCase();
-
-  // Email / SMTP hints
   if (lbl.includes('email') || lbl.includes('smtp') || lbl.includes('mail')) {
     if (v.includes('fromemail') || v === 'from')   return 'e.g. noreply@yourcompany.com';
     if (v.includes('fromname')  || v === 'name')   return 'e.g. Company Notifications';
     if (v.includes('replyto'))                     return 'e.g. support@yourcompany.com';
-    if (v.includes('fileName'))                   return 'Attachment File Name.  e.g Process_log.csv';
     return 'e.g. your-email@company.com';
   }
-
-  // URL / host hints
-  if (v.includes('host') || v.includes('url') || v.includes('base')) {
-    return `e.g. your-${lbl.split(' ')[0]}-host.com`;
-  }
-
-  // Tenant / instance hints
-  if (v.includes('tenant') || v.includes('instance') || v.includes('org')) {
-    return `e.g. your-${lbl.split(' ')[0]}-tenant-id`;
-  }
-
-  // Version hints
-  if (v.includes('version') || v === 'ver' || v === 'api_version') {
-    return 'e.g. v44.1';
-  }
-
-  // Region / datacenter hints
-  if (v.includes('region') || v.includes('datacenter') || v.includes('dc')) {
-    return 'e.g. us-east-1';
-  }
-
-  // Port hints
-  if (v.includes('port')) {
-    return 'e.g. 443';
-  }
-
-  // Path / endpoint hints
-  if (v.includes('path') || v.includes('endpoint') || v.includes('prefix')) {
-    return `e.g. /api/v1`;
-  }
-
-  // Generic fallback — uses connector name so still relevant
-  const connName = connectorLabel || 'connector';
-  return `Describe this variable for ${connName} developers`;
+  if (v.includes('host') || v.includes('url') || v.includes('base')) return `e.g. your-${lbl.split(' ')[0]}-host.com`;
+  if (v.includes('tenant') || v.includes('instance') || v.includes('org')) return `e.g. your-${lbl.split(' ')[0]}-tenant-id`;
+  if (v.includes('version') || v === 'ver' || v === 'api_version') return 'e.g. v44.1';
+  if (v.includes('region') || v.includes('datacenter') || v.includes('dc')) return 'e.g. us-east-1';
+  if (v.includes('port')) return 'e.g. 443';
+  if (v.includes('path') || v.includes('endpoint') || v.includes('prefix')) return 'e.g. /api/v1';
+  return `Describe this variable for ${connectorLabel || 'connector'} developers`;
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────────────────────
+// PlugTile — square card for the plug grid
+// ─────────────────────────────────────────────────────────────────────────────
+interface PlugTileProps {
+  plug:       PlugSummary;
+  proto?:     AuthProtocol;
+  flos:       FloMeta[];
+  lightTheme: boolean;
+  onEdit:     () => void;
+  onDeactivate: () => void;
+}
+
+/** Connector initial letter for the avatar */
+const connectorInitial = (label: string) => (label ?? '?')[0].toUpperCase();
+
+/** Pick a deterministic hue from the connector id so each connector has its own color */
+function connectorColor(connectorId: string): string {
+  const palette = ['#4f8ef7', '#22c55e', '#f59e0b', '#a78bfa', '#f472b6', '#06b6d4', '#fb923c'];
+  let hash = 0;
+  for (let i = 0; i < connectorId.length; i++) hash = (hash * 31 + connectorId.charCodeAt(i)) & 0xffff;
+  return palette[hash % palette.length];
+}
+
+const PlugTile: React.FC<PlugTileProps> = ({ plug, proto, flos, lightTheme, onEdit, onDeactivate }) => {
+  const [hovered, setHovered] = useState(false);
+  const color = connectorColor(plug.connectorId);
+  const flowsUsingPlug = flos.filter(f => (f as any).plugIds?.includes(plug.id)).length;
+  const isActive = plug.isActive ?? true;
+
+  // ── Light theme ────────────────────────────────────────────────────────────
+  if (lightTheme) {
+    return (
+      <div
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        style={{
+          position: 'relative',
+          display: 'flex',
+          flexDirection: 'column',
+          borderRadius: 14,
+          border: `1.5px solid ${hovered && isActive ? color + '55' : '#E5E7EB'}`,
+          background: isActive ? '#fff' : '#F9FAFB',
+          boxShadow: hovered && isActive
+            ? `0 4px 20px ${color}22, 0 1px 4px rgba(0,0,0,0.06)`
+            : '0 1px 3px rgba(0,0,0,0.05)',
+          opacity: isActive ? 1 : 0.55,
+          overflow: 'hidden',
+          transition: 'box-shadow 0.18s, border-color 0.18s',
+          cursor: 'default',
+          // Left accent border
+          borderLeft: `4px solid ${isActive ? color : '#E5E7EB'}`,
+        }}
+      >
+        {/* Body */}
+        <div style={{ padding: '16px 16px 12px', flex: 1 }}>
+          {/* Avatar + status row */}
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12 }}>
+            <div style={{
+              width: 40, height: 40, borderRadius: 10, flexShrink: 0,
+              background: color + '18',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 16, fontWeight: 700, color,
+            }}>
+              {connectorInitial(plug.connectorLabel ?? plug.connectorId)}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+              {!isActive && (
+                <span style={{ fontSize: 8, padding: '2px 6px', borderRadius: 4, background: '#FEE2E2', color: '#DC2626', fontWeight: 600 }}>
+                  INACTIVE
+                </span>
+              )}
+              {/* Auth protocol pill */}
+              <span style={{
+                fontSize: 9, padding: '2px 7px', borderRadius: 10,
+                background: color + '14', color, fontWeight: 600,
+                border: `0.5px solid ${color}33`,
+              }}>
+                {proto?.label ?? plug.authProtocol}
+              </span>
+            </div>
+          </div>
+
+          {/* Plug name */}
+          <div style={{ fontSize: 13, fontWeight: 700, color: isActive ? '#111827' : '#9CA3AF', marginBottom: 3, lineHeight: 1.3 }}>
+            {plug.name}
+          </div>
+
+          {/* Connector label */}
+          <div style={{ fontSize: 10, color: '#6B7280', fontWeight: 500, marginBottom: 8 }}>
+            {plug.connectorLabel ?? plug.connectorId}
+          </div>
+
+          {/* URL pattern */}
+          {plug.urlPattern && (
+            <div style={{
+              fontSize: 9, color: '#9CA3AF', fontFamily: 'monospace',
+              background: '#F3F4F6', borderRadius: 5, padding: '4px 7px',
+              wordBreak: 'break-all', lineHeight: 1.5,
+            }}>
+              {plug.urlPattern}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div style={{
+          borderTop: '1px solid #F3F4F6',
+          padding: '8px 16px',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          background: '#FAFAFA',
+        }}>
+          <div style={{ fontSize: 8, color: '#9CA3AF', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 130 }}>
+            {plug.id}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+            {flowsUsingPlug > 0 && (
+              <span style={{ fontSize: 9, color: '#4f8ef7', fontWeight: 600 }}>
+                {flowsUsingPlug} flo{flowsUsingPlug !== 1 ? 's' : ''}
+              </span>
+            )}
+            {/* Action buttons — visible on hover */}
+            <div style={{
+              display: 'flex', gap: 4,
+              opacity: hovered ? 1 : 0,
+              transition: 'opacity 0.15s',
+            }}>
+              <button onClick={onEdit} style={tileCss.actionBtnLight} title="Edit plug">
+                ✎
+              </button>
+              {isActive && (
+                <button onClick={onDeactivate} style={{ ...tileCss.actionBtnLight, color: '#DC2626', borderColor: '#FCA5A5' }} title="Deactivate">
+                  ⏸
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Dark theme ─────────────────────────────────────────────────────────────
+  return (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        position: 'relative',
+        display: 'flex',
+        flexDirection: 'column',
+        borderRadius: 14,
+        border: `1px solid ${hovered && isActive ? color + '44' : 'rgba(255,255,255,0.07)'}`,
+        borderLeft: `4px solid ${isActive ? color : 'rgba(255,255,255,0.08)'}`,
+        background: hovered && isActive
+          ? `linear-gradient(135deg, ${color}0a 0%, #1a1d27 100%)`
+          : '#1a1d27',
+        boxShadow: hovered && isActive
+          ? `0 6px 24px ${color}18, 0 2px 6px rgba(0,0,0,0.3)`
+          : '0 1px 4px rgba(0,0,0,0.2)',
+        opacity: isActive ? 1 : 0.5,
+        overflow: 'hidden',
+        transition: 'box-shadow 0.18s, border-color 0.18s, background 0.18s',
+        cursor: 'default',
+      }}
+    >
+      {/* Body */}
+      <div style={{ padding: '16px 16px 12px', flex: 1 }}>
+        {/* Avatar + status row */}
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12 }}>
+          <div style={{
+            width: 40, height: 40, borderRadius: 10, flexShrink: 0,
+            background: color + '1a',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 18, fontWeight: 800, color,
+            letterSpacing: '-0.5px',
+          }}>
+            {connectorInitial(plug.connectorLabel ?? plug.connectorId)}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+            {!isActive && (
+              <span style={{ fontSize: 8, padding: '2px 6px', borderRadius: 4, background: 'rgba(248,113,113,0.12)', color: '#f87171', fontWeight: 600 }}>
+                INACTIVE
+              </span>
+            )}
+            <span style={{
+              fontSize: 9, padding: '2px 8px', borderRadius: 10,
+              background: color + '18', color, fontWeight: 600,
+              border: `0.5px solid ${color}40`,
+            }}>
+              {proto?.label ?? plug.authProtocol}
+            </span>
+          </div>
+        </div>
+
+        {/* Plug name */}
+        <div style={{
+          fontSize: 13, fontWeight: 700, color: isActive ? '#e8e8f0' : '#45455a',
+          marginBottom: 3, lineHeight: 1.3,
+        }}>
+          {plug.name}
+        </div>
+
+        {/* Connector label */}
+        <div style={{ fontSize: 10, color: '#6b6b80', fontWeight: 500, marginBottom: 8 }}>
+          {plug.connectorLabel ?? plug.connectorId}
+        </div>
+
+        {/* URL pattern */}
+        {plug.urlPattern && (
+          <div style={{
+            fontSize: 9, color: '#45455a', fontFamily: 'monospace',
+            background: 'rgba(255,255,255,0.03)', borderRadius: 5,
+            padding: '4px 7px', wordBreak: 'break-all', lineHeight: 1.5,
+            border: '0.5px solid rgba(255,255,255,0.04)',
+          }}>
+            {plug.urlPattern}
+          </div>
+        )}
+      </div>
+
+      {/* Footer */}
+      <div style={{
+        borderTop: '0.5px solid rgba(255,255,255,0.06)',
+        padding: '8px 14px',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        background: 'rgba(0,0,0,0.15)',
+      }}>
+        <div style={{
+          fontSize: 8, color: '#2e2e42', fontFamily: 'monospace',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 130,
+        }}>
+          {plug.id}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+          {flowsUsingPlug > 0 && (
+            <span style={{ fontSize: 9, color: '#4f8ef7', fontWeight: 600 }}>
+              {flowsUsingPlug} flo{flowsUsingPlug !== 1 ? 's' : ''}
+            </span>
+          )}
+          <div style={{
+            display: 'flex', gap: 4,
+            opacity: hovered ? 1 : 0,
+            transition: 'opacity 0.15s',
+          }}>
+            <button onClick={onEdit} style={tileCss.actionBtnDark} title="Edit plug">
+              ✎
+            </button>
+            {isActive && (
+              <button onClick={onDeactivate} style={{ ...tileCss.actionBtnDark, color: '#f87171', borderColor: 'rgba(248,113,113,0.2)' }} title="Deactivate">
+                ⏸
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // PlugFormModal
-// ═════════════════════════════════════════════════════════════════════════════
+// BUG FIX: plugId was sent as `null` on edit (plug?.id ?? null).
+//   JSON serialises null as literal null — many Cloud Functions treat null the
+//   same as a missing field and generate a new ID → plug saved as NEW every edit.
+//   Fix: use `plug?.id || undefined`. On create: plug is null → undefined is
+//   omitted from JSON. On edit: plug.id is a non-empty string → sent correctly.
+// ─────────────────────────────────────────────────────────────────────────────
 interface PlugFormModalProps {
   open:       boolean;
   hubId:      string;
@@ -426,7 +632,7 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
 
   const [connectorId,   setConnectorId]   = useState('');
   const [authProtocol,  setAuthProtocol]  = useState('');
-  const [nodeType,      setNodeType]      = useState('');   // which NODE_TYPES key routes this plug
+  const [nodeType,      setNodeType]      = useState('');
   const [name,          setName]          = useState('');
   const [urlPattern,    setUrlPattern]    = useState('');
   const [variableHints, setVariableHints] = useState<PlugVariableHint[]>([]);
@@ -439,18 +645,16 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
     setConnectorId(plug?.connectorId   ?? '');
     setAuthProtocol(plug?.authProtocol ?? '');
     setNodeType((plug as any)?.nodeType ?? '');
-    setName(plug?.name                 ?? '');
-    setUrlPattern(plug?.urlPattern      ?? '');
+    setName(plug?.name                  ?? '');
+    setUrlPattern(plug?.urlPattern       ?? '');
     setVariableHints(plug?.variableHints ?? []);
-    setCredentials({});  // always start blank — credentials never returned from backend
+    setCredentials({});  // always blank — credentials never returned from backend
     setError(''); setSaving(false);
   }, [open, plug?.id]);
 
-  const connector     = connectors.find(c => c.id === connectorId) ?? null;
+  const connector       = connectors.find(c => c.id === connectorId) ?? null;
   const supportedProtos = protocols.filter(p => connector?.supportedAuthTypes?.includes(p.name) && p.isActive);
   const selectedProto   = protocols.find(p => p.name === authProtocol) ?? null;
-
-  // NODE_TYPES values available as options — auto-suggest based on connector label
   const NODE_TYPE_OPTIONS = Object.entries(NODE_TYPES).map(([key, value]) => ({ key, value }));
 
   const suggestNodeType = (connLabel: string, proto: string): string => {
@@ -460,7 +664,7 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
     if (lbl.includes('salesforce')) return NODE_TYPES.SALESFORCE;
     if (lbl.includes('sap'))        return NODE_TYPES.SAP;
     if (lbl.includes('oracle'))     return NODE_TYPES.ORACLE;
-    return NODE_TYPES.PLUG;  // default — generic plug node
+    return NODE_TYPES.PLUG;
   };
 
   const handleConnectorChange = (id: string) => {
@@ -476,12 +680,10 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
     setCredentials(prev => ({ ...prev, [key]: value }));
 
   const validate = (): string | null => {
-    if (!connectorId)       return 'Select a connector';
-    if (!authProtocol)      return 'Select an authentication protocol';
-    if (!name.trim())       return 'Plug name is required';
-    if (authProtocol !== 'smtp_basic' && !urlPattern.trim()) {
-      return 'URL Pattern is required';
-    }
+    if (!connectorId)  return 'Select a connector';
+    if (!authProtocol) return 'Select an authentication protocol';
+    if (!name.trim())  return 'Plug name is required';
+    if (authProtocol !== 'smtp_basic' && !urlPattern.trim()) return 'URL Pattern is required';
     if (selectedProto && !isEdit) {
       for (const f of selectedProto.fields) {
         if (f.required && !credentials[f.name]?.trim()) return `${f.label} is required`;
@@ -495,36 +697,48 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
     if (validErr) { setError(validErr); return; }
     setError(''); setSaving(true);
     try {
-      // All plug saves including credentials go through Cloud Function
-      // This ensures credentials never flow through Firestore rules
-      // and the function verifies the caller is hub_admin via token claims
+      // ── BUG FIX ──────────────────────────────────────────────────────────
+      // Previously: plugId: plug?.id ?? null
+      //   → On edit, plug.id is a string so this looked fine, but some paths
+      //     through React state could yield plug=null in the closure, and even
+      //     when plug is set, passing `null` explicitly made CFs treat it as
+      //     "no id provided → create new".
+      // Fix: plug?.id || undefined
+      //   → On create: plug is null → undefined → field omitted from JSON ✓
+      //   → On edit:   plug.id is a non-empty string → passed correctly ✓
+      //   → Never sends null, which some CFs misinterpret as "create" ✓
+      // ─────────────────────────────────────────────────────────────────────
       const { data } = await fn<any, any>('savePlug')({
-        hubId, tenantId, userId,
-        plugId:      plug?.id ?? null,
+        hubId,
+        tenantId,
+        userId,
+        plugId:         plug?.id || undefined,   // ← THE FIX
         connectorId,
         connectorLabel: connector?.label ?? connectorId,
         authProtocol,
-        nodeType,    // stored on plug so the engine can route without guessing
-        name:        name.trim(),
-        urlPattern:  urlPattern.trim(),
+        nodeType,
+        name:           name.trim(),
+        urlPattern:     urlPattern.trim(),
         variableHints,
-        credentials, // only fields the user filled in — blanks keep existing on edit
-        isActive:    true,
+        credentials,
+        isActive:       true,
       });
 
       onSaved({
-        id: data.plugId ?? plug?.id ?? '',
-        hubId, tenantId, connectorId,
+        id:             data.plugId ?? plug?.id ?? '',
+        hubId,
+        tenantId,
+        connectorId,
         connectorLabel: connector?.label ?? connectorId,
         authProtocol,
         nodeType,
-        name:          name.trim(),
-        urlPattern:    urlPattern.trim(),
+        name:           name.trim(),
+        urlPattern:     urlPattern.trim(),
         variableHints,
-        isActive:      true,
-        createdBy:     plug?.createdBy ?? userId,
-        updatedBy:     userId,
-        updatedAt:     new Date(),
+        isActive:       true,
+        createdBy:      plug?.createdBy ?? userId,
+        updatedBy:      userId,
+        updatedAt:      new Date(),
       });
       onClose();
     } catch (err: any) {
@@ -575,7 +789,7 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
               <label style={css.fl}>Connector</label>
               <div style={{ padding: '7px 10px', borderRadius: 7, border: '0.5px solid rgba(255,255,255,0.06)', background: 'rgba(255,255,255,0.02)', fontSize: 12, color: '#6b6b80' }}>
                 {connector?.label ?? connectorId}
-                <span style={{ marginLeft: 8, fontSize: 10, color: '#16de1d' }}>(cannot change on edit)</span>
+                <span style={{ marginLeft: 8, fontSize: 10, color: '#45455a' }}>(cannot change on edit)</span>
               </div>
             </div>
           )}
@@ -587,7 +801,7 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
               {isEdit
                 ? <div style={{ padding: '7px 10px', borderRadius: 7, border: '0.5px solid rgba(255,255,255,0.06)', background: 'rgba(255,255,255,0.02)', fontSize: 12, color: '#6b6b80' }}>
                     {selectedProto?.label ?? authProtocol}
-                    <span style={{ marginLeft: 8, fontSize: 10, color: '#16de1d' }}>(cannot change on edit)</span>
+                    <span style={{ marginLeft: 8, fontSize: 10, color: '#45455a' }}>(cannot change on edit)</span>
                   </div>
                 : supportedProtos.length <= 1
                   ? <div style={{ fontSize: 12, color: '#9090a0' }}>{supportedProtos[0]?.label ?? 'None available'}</div>
@@ -606,31 +820,25 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
             </div>
           )}
 
-          {/* Name + URL Pattern + Hints */}
+          {/* Name + Node Type + URL + Hints */}
           {authProtocol && (
             <>
-              
               <div style={css.fg}>
                 <label style={css.fl}>Plug Name *</label>
                 <input style={css.fi} value={name} placeholder="e.g. Workday Production"
                   onChange={e => setName(e.target.value)} />
               </div>
 
-              {/* Node Type — controls how the engine routes this plug */}
               <div style={css.fg}>
                 <label style={css.fl}>Node Type *
                   <span style={{ marginLeft: 6, fontSize: 9, color: '#45455a' }}>
-                    Controls how the execution engine routes and renders this plug
+                    Controls how the execution engine routes this plug
                   </span>
                 </label>
-                <select
-                  style={css.fi}
-                  value={nodeType}
-                  onChange={e => setNodeType(e.target.value)}
-                >
+                <select style={css.fi} value={nodeType} onChange={e => setNodeType(e.target.value)}>
                   <option value="">— Select node type —</option>
                   {NODE_TYPE_OPTIONS
-                    .filter(o => !['START','END'].includes(o.key)) // Start/End are structural, not plugs
+                    .filter(o => !['START', 'END'].includes(o.key))
                     .map(o => (
                       <option key={o.key} value={o.value}>
                         {o.key.replace(/_/g, ' ')} — {o.value}
@@ -638,39 +846,29 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
                     ))
                   }
                 </select>
-                {nodeType && (
-                  <div style={{ fontSize: 9, color: '#39ff14', marginTop: 3 }}>
-                    Stored as <code style={{ fontFamily: 'monospace' }}>{nodeType}</code> on the plug document
-                    and used by the engine to route execution.
-                  </div>
-                )}
               </div>
 
-              {/* Hide URL Pattern for SMTP */}
-                {authProtocol !== 'smtp_basic' && (
-              <div style={css.fg}>
-                <label style={css.fl}>URL Pattern *</label>
-                <input style={css.fi} value={urlPattern}
-                  placeholder= "https://{{hostname}}/ccx/service/{{tenant}}/{{module}}/{{version}}"
-                  onChange={e => setUrlPattern(e.target.value)} />
-                <div style={{ fontSize: 9, color: '#3a3a50', marginTop: 3 }}>
-                  Use {'{{variableName}}'} for values the developer fills at design time.
+              {authProtocol !== 'smtp_basic' && (
+                <div style={css.fg}>
+                  <label style={css.fl}>URL Pattern *</label>
+                  <input style={css.fi} value={urlPattern}
+                    placeholder="https://{{hostname}}/ccx/service/{{tenant}}/{{module}}/{{version}}"
+                    onChange={e => setUrlPattern(e.target.value)} />
+                  <div style={{ fontSize: 9, color: '#3a3a50', marginTop: 3 }}>
+                    Use {'{{variableName}}'} for values the developer fills at design time.
+                  </div>
                 </div>
-              </div>
-                )}
-              {/* Variable hints — URL pattern only. Email routing fields (to/cc/bcc/subject/body)
-                  are NOT configured here — they are set by developers on the canvas node.
-                  Admin only captures SMTP credentials above. */}
+              )}
+
               {authProtocol === 'smtp_basic' ? (
                 <div style={{ background: 'rgba(245,158,11,0.06)', border: '0.5px solid rgba(245,158,11,0.2)', borderRadius: 8, padding: '12px 14px' }}>
                   <div style={{ fontSize: 10, fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 6 }}>
                     ✉ Email Plug — Credentials Only
                   </div>
                   <div style={{ fontSize: 9, color: '#9090a0', lineHeight: 1.6 }}>
-                    This plug stores your SMTP credentials securely.<br/>
+                    This plug stores your SMTP credentials securely.<br />
                     Developers configure <strong style={{ color: '#f0f0f4' }}>To / CC / BCC / Subject / Body</strong> when
-                    they drag this plug onto the designer canvas — not here.<br/>
-                    Body content can be sent inline or as an attachment (with filename and content type).
+                    they drag this plug onto the designer canvas — not here.
                   </div>
                 </div>
               ) : (
@@ -679,15 +877,11 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
                   if (!vars.length) return null;
                   return (
                     <div style={{ background: 'rgba(255,255,255,0.02)', border: '0.5px solid rgba(255,255,255,0.07)', borderRadius: 8, padding: '12px 14px' }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: '#16de1d', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 10 }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: '#4f8ef7', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 10 }}>
                         URL Variable Hints
                       </div>
-                      <div style={{ fontSize: 9, color: '#16de1d', marginBottom: 10, lineHeight: 1.5 }}>
-                        Describe each variable so developers know what to enter. Optionally set a default.
-                      </div>
                       {vars.map(varName => {
-                        const existing = variableHints.find(h => h.name === varName)
-                          ?? { name: varName, hint: '', defaultValue: '' };
+                        const existing = variableHints.find(h => h.name === varName) ?? { name: varName, hint: '', defaultValue: '' };
                         const upd = (patch: Partial<PlugVariableHint>) =>
                           setVariableHints(prev => {
                             const idx = prev.findIndex(h => h.name === varName);
@@ -696,18 +890,12 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
                           });
                         return (
                           <div key={varName} style={{ marginBottom: 10, paddingBottom: 10, borderBottom: '0.5px solid rgba(255,255,255,0.05)' }}>
-                            <div style={{ fontSize: 10, color: '#4f8ef7', fontFamily: 'monospace', marginBottom: 6 }}>
-                              {`{{${varName}}}`}
-                            </div>
+                            <div style={{ fontSize: 10, color: '#4f8ef7', fontFamily: 'monospace', marginBottom: 6 }}>{`{{${varName}}}`}</div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                              <input style={css.fi}
-                                placeholder={hintPlaceholder(connector?.label ?? '', varName)}
-                                value={existing.hint ?? ''}
-                                onChange={e => upd({ hint: e.target.value })} />
-                              <input style={css.fi}
-                                placeholder={defaultPlaceholder(varName)}
-                                value={existing.defaultValue ?? ''}
-                                onChange={e => upd({ defaultValue: e.target.value })} />
+                              <input style={css.fi} placeholder={hintPlaceholder(connector?.label ?? '', varName)}
+                                value={existing.hint ?? ''} onChange={e => upd({ hint: e.target.value })} />
+                              <input style={css.fi} placeholder={defaultPlaceholder(varName)}
+                                value={existing.defaultValue ?? ''} onChange={e => upd({ defaultValue: e.target.value })} />
                             </div>
                           </div>
                         );
@@ -719,10 +907,10 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
             </>
           )}
 
-          {/* Credentials — always empty on open, filled by admin */}
+          {/* Credentials */}
           {selectedProto && selectedProto.fields.length > 0 && (
             <div style={{ background: 'rgba(255,255,255,0.02)', border: '0.5px solid rgba(255,255,255,0.07)', borderRadius: 8, padding: '14px 16px' }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: '#16de1d', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 8 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: '#4f8ef7', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 8 }}>
                 Credentials — {selectedProto.label}
               </div>
               {isEdit && (
@@ -745,8 +933,7 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
                           placeholder={isEdit ? '(leave blank to keep current)' : (f.placeholder ?? '')}
                           onChange={e => patchCred(f.name, e.target.value)} />
                       : f.fieldType === 'select' && f.options
-                        ? <select style={css.fi} value={credentials[f.name] ?? ''}
-                            onChange={e => patchCred(f.name, e.target.value)}>
+                        ? <select style={css.fi} value={credentials[f.name] ?? ''} onChange={e => patchCred(f.name, e.target.value)}>
                             <option value="">— Select —</option>
                             {f.options.map(o => <option key={o} value={o}>{o}</option>)}
                           </select>
@@ -757,7 +944,7 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
                             autoComplete={f.requiresMasking ? 'new-password' : 'off'}
                             onChange={e => patchCred(f.name, e.target.value)} />
                     }
-                    {f.helpText && <div style={{ fontSize: 10, color: '#16de1d', marginTop: 2 }}>{f.helpText}</div>}
+                    {f.helpText && <div style={{ fontSize: 10, color: '#6b6b80', marginTop: 2 }}>{f.helpText}</div>}
                   </div>
                 ))}
               </div>
@@ -777,7 +964,7 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
 };
 
 // ═════════════════════════════════════════════════════════════════════════════
-// PlugManager
+// PlugManager — main component
 // ═════════════════════════════════════════════════════════════════════════════
 interface Props {
   hubId:          string;
@@ -785,26 +972,27 @@ interface Props {
   userId:         string;
   isAdmin:        boolean;
   onPlugCreated?: (plug: PlugSummary) => void;
-  /** When set, forces a specific tab and hides the tab switcher header.
-   *  Used by HubAdminDashboard to show Plugs-only or Users-only. */
   section?:       'plugs' | 'users';
-  /** When true, renders in light/white theme to match the admin dashboard */
   lightTheme?:    boolean;
 }
 
-const PlugManager: React.FC<Props> = ({ hubId, tenantId, userId, isAdmin, onPlugCreated, section, lightTheme = false }) => {
-  const [tab,         setTab]         = useState<'plugs' | 'users'>(section ?? 'plugs');
-  const [plugs,       setPlugs]       = useState<PlugSummary[]>([]);
-  const [users,       setUsers]       = useState<TenantUser[]>([]);
-  const [flos,        setFlos]       = useState<FloMeta[]>([]);
-  const [connectors,  setConnectors]  = useState<ConnectorDoc[]>([]);
-  const [protocols,   setProtocols]   = useState<AuthProtocol[]>([]);
-  const [loading,     setLoading]     = useState(true);
-  const [loadError,   setLoadError]   = useState('');
-  const [plugModal,   setPlugModal]   = useState(false);
-  const [editPlug,    setEditPlug]    = useState<PlugSummary | null>(null);
-  const [inviteModal, setInviteModal] = useState(false);
-  const [editUser,    setEditUser]    = useState<TenantUser | null>(null);
+const PlugManager: React.FC<Props> = ({
+  hubId, tenantId, userId, isAdmin, onPlugCreated, section, lightTheme = false,
+}) => {
+  const [tab,              setTab]             = useState<'plugs' | 'users'>(section ?? 'plugs');
+  const [plugs,            setPlugs]           = useState<PlugSummary[]>([]);
+  const [users,            setUsers]           = useState<TenantUser[]>([]);
+  const [flos,             setFlos]            = useState<FloMeta[]>([]);
+  const [connectors,       setConnectors]      = useState<ConnectorDoc[]>([]);
+  const [protocols,        setProtocols]       = useState<AuthProtocol[]>([]);
+  const [_floConnections,  setFloConnections]  = useState<FloConnectionSafe[]>([]);
+  const [_actionNodes,     setActionNodes]     = useState<HubActionNodeDoc[]>([]);
+  const [loading,          setLoading]         = useState(true);
+  const [loadError,        setLoadError]       = useState('');
+  const [plugModal,        setPlugModal]       = useState(false);
+  const [editPlug,         setEditPlug]        = useState<PlugSummary | null>(null);
+  const [inviteModal,      setInviteModal]     = useState(false);
+  const [editUser,         setEditUser]        = useState<TenantUser | null>(null);
 
   const {
     fetchAll,
@@ -815,12 +1003,11 @@ const PlugManager: React.FC<Props> = ({ hubId, tenantId, userId, isAdmin, onPlug
     handleUserSaved,
     handlePlugSaved: _handlePlugSaved,
   } = usePlugManagerActions({
-    hubId, tenantId, isAdmin,
+    hubId, tenantId, isAdmin, userId,
     setPlugs, setUsers, setFlos, setConnectors, setProtocols,
-    setLoading, setLoadError,
+    setFloConnections, setActionNodes, setLoading, setLoadError,
   });
 
-  // Wrap handlePlugSaved to also notify Designer so the palette updates live.
   const handlePlugSaved = (plug: PlugSummary) => {
     _handlePlugSaved(plug);
     onPlugCreated?.(plug);
@@ -833,7 +1020,8 @@ const PlugManager: React.FC<Props> = ({ hubId, tenantId, userId, isAdmin, onPlug
   return (
     <>
       <div style={lightTheme ? lCss.panel : css.panel}>
-        {/* Tab header — hidden when section is forced by parent (HubAdminDashboard) */}
+
+        {/* Tab header */}
         {!section && (
           <div style={lightTheme ? lCss.panelHeader : css.panelHeader}>
             <span style={{ fontSize: 12, fontWeight: 700, color: lightTheme ? '#111827' : '#f0f0f4' }}>Hub Manager</span>
@@ -861,67 +1049,75 @@ const PlugManager: React.FC<Props> = ({ hubId, tenantId, userId, isAdmin, onPlug
             <div style={{ ...css.errBox, margin: 0 }}>{loadError}</div>
           ) : tab === 'plugs' ? (
             <>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                <span style={{ fontSize: 11, color: '#6b6b80' }}>{plugs.length} plug{plugs.length !== 1 ? 's' : ''}</span>
-                <button onClick={() => { setEditPlug(null); setPlugModal(true); }} style={css.btnPrim}>+ New Plug</button>
+              {/* Plugs header */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                <span style={{ fontSize: 11, color: lightTheme ? '#6B7280' : '#6b6b80' }}>
+                  {plugs.length} plug{plugs.length !== 1 ? 's' : ''}
+                </span>
+                <button
+                  onClick={() => { setEditPlug(null); setPlugModal(true); }}
+                  style={css.btnPrim}
+                >
+                  + New Plug
+                </button>
               </div>
 
+              {/* Empty state */}
               {plugs.length === 0 && (
                 <div style={css.emptyState}>
-                  <div style={{ fontSize: 28, marginBottom: 8 }}>🔌</div>
-                  <div style={{ fontSize: 13, color: '#6b6b80' }}>No plugs yet</div>
-                  <div style={{ fontSize: 11, color: '#45455a', marginTop: 4 }}>Create a plug to configure a connector for this tenant.</div>
+                  <div style={{ fontSize: 36, marginBottom: 10 }}>🔌</div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: lightTheme ? '#374151' : '#6b6b80' }}>No plugs yet</div>
+                  <div style={{ fontSize: 11, color: lightTheme ? '#9CA3AF' : '#45455a', marginTop: 4 }}>
+                    Create a plug to configure a connector for this tenant.
+                  </div>
                 </div>
               )}
 
-              {plugs.map(plug => {
-                const proto = protocols.find(p => p.name === plug.authProtocol);
-                return (
-                  <div key={plug.id} style={lightTheme ? lCss.card(plug.isActive) : css.card(plug.isActive)}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <div style={{ width: 36, height: 36, borderRadius: 8, flexShrink: 0, background: 'rgba(79,142,247,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16 }}>🔌</div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-                          <span style={{ fontSize: 12, fontWeight: 600, color: plug.isActive ? (lightTheme ? '#111827' : '#d0d0dc') : (lightTheme ? '#9CA3AF' : '#45455a') }}>{plug.name}</span>
-                          <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 3, background: 'rgba(255,255,255,0.05)', color: '#6b6b80' }}>{plug.connectorLabel ?? plug.connectorId}</span>
-                          {!plug.isActive && <span style={{ fontSize: 8, padding: '1px 5px', borderRadius: 3, background: 'rgba(248,113,113,0.12)', color: '#f87171' }}>INACTIVE</span>}
-                        </div>
-                        <div style={{ fontSize: 9, color: '#45455a', fontFamily: 'monospace', marginBottom: 3, wordBreak: 'break-all' }}>{plug.urlPattern}</div>
-                        <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 3, background: 'rgba(15,118,110,0.1)', color: '#0f766e', border: '0.5px solid rgba(15,118,110,0.2)' }}>
-                          {proto?.label ?? plug.authProtocol}
-                        </span>
-                      </div>
-                      <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-                        <button onClick={() => { setEditPlug(plug); setPlugModal(true); }} style={css.actionBtn} title="Edit">✎</button>
-                        {plug.isActive && (
-                          <button onClick={() => handleDeactivatePlug(plug)} style={{ ...css.actionBtn, color: '#f87171' }} title="Deactivate">⏸</button>
-                        )}
-                      </div>
-                    </div>
-                    <div style={{ marginTop: 4, fontSize: 8, color: '#2a2a38', fontFamily: 'monospace' }}>ID: {plug.id}</div>
-                  </div>
-                );
-              })}
+              {/* ── Square tile grid ──────────────────────────────────────── */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+                gap: 14,
+              }}>
+                {plugs.map(plug => {
+                  const proto = protocols.find(p => p.name === plug.authProtocol);
+                  return (
+                    <PlugTile
+                      key={plug.id}
+                      plug={plug}
+                      proto={proto}
+                      flos={flos}
+                      lightTheme={lightTheme}
+                      onEdit={() => { setEditPlug(plug); setPlugModal(true); }}
+                      onDeactivate={() => handleDeactivatePlug(plug)}
+                    />
+                  );
+                })}
+              </div>
             </>
           ) : (
-            /* Users tab */
+            /* ── Users tab ─────────────────────────────────────────────── */
             <>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                <span style={{ fontSize: 11, color: '#6b6b80' }}>{users.length} user{users.length !== 1 ? 's' : ''}</span>
+                <span style={{ fontSize: 11, color: lightTheme ? '#6B7280' : '#6b6b80' }}>
+                  {users.length} user{users.length !== 1 ? 's' : ''}
+                </span>
                 <button onClick={() => setInviteModal(true)} style={css.btnPrim}>+ Invite User</button>
               </div>
 
               {users.length === 0 && (
                 <div style={css.emptyState}>
                   <div style={{ fontSize: 28, marginBottom: 8 }}>👥</div>
-                  <div style={{ fontSize: 13, color: '#6b6b80' }}>No users yet</div>
-                  <div style={{ fontSize: 11, color: '#45455a', marginTop: 4 }}>Invite users to give them access to this hub.</div>
+                  <div style={{ fontSize: 13, color: lightTheme ? '#374151' : '#6b6b80' }}>No users yet</div>
+                  <div style={{ fontSize: 11, color: lightTheme ? '#9CA3AF' : '#45455a', marginTop: 4 }}>
+                    Invite users to give them access to this hub.
+                  </div>
                 </div>
               )}
 
               {users.map(u => {
                 const perms      = (u as any).invokePermissions ?? {};
-                const allFlosOk = perms.allowedUids?.includes('*');
+                const allFlosOk  = perms.allowedUids?.includes('*');
                 const flowCount  = allFlosOk ? null : (perms.allowedUids?.length ?? 0);
                 const canRun     = perms.canRunInDesigner ?? false;
                 const isHubAdmin = (u as any).isHubAdmin === true;
@@ -941,7 +1137,7 @@ const PlugManager: React.FC<Props> = ({ hubId, tenantId, userId, isAdmin, onPlug
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2, flexWrap: 'wrap' }}>
-                          <span style={{ fontSize: 12, fontWeight: 600, color: (u.isActive ?? true) ? '#d0d0dc' : '#45455a' }}>
+                          <span style={{ fontSize: 12, fontWeight: 600, color: (u.isActive ?? true) ? (lightTheme ? '#111827' : '#d0d0dc') : '#45455a' }}>
                             {u.displayName ?? u.email}
                           </span>
                           <span style={{
@@ -955,7 +1151,7 @@ const PlugManager: React.FC<Props> = ({ hubId, tenantId, userId, isAdmin, onPlug
                             <span style={{ fontSize: 8, padding: '1px 5px', borderRadius: 3, background: 'rgba(248,113,113,0.12)', color: '#f87171' }}>INACTIVE</span>
                           )}
                         </div>
-                        <div style={{ fontSize: 9, color: '#45455a', marginBottom: 4 }}>{u.email}</div>
+                        <div style={{ fontSize: 9, color: lightTheme ? '#9CA3AF' : '#45455a', marginBottom: 4 }}>{u.email}</div>
                         {!isHubAdmin && (
                           <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                             <span style={{
@@ -972,7 +1168,7 @@ const PlugManager: React.FC<Props> = ({ hubId, tenantId, userId, isAdmin, onPlug
                               color: allFlosOk ? '#22c55e' : flowCount ? '#4f8ef7' : '#45455a',
                               border: `0.5px solid ${allFlosOk ? 'rgba(34,197,94,0.2)' : flowCount ? 'rgba(79,142,247,0.2)' : 'rgba(255,255,255,0.06)'}`,
                             }}>
-                              {allFlosOk ? '🌐 All flos' : flowCount ? `${flowCount} flow${flowCount !== 1 ? 's' : ''}` : '⊘ No flos'}
+                              {allFlosOk ? '🌐 All flos' : flowCount ? `${flowCount} flo${flowCount !== 1 ? 's' : ''}` : '⊘ No flos'}
                             </span>
                           </div>
                         )}
@@ -1017,37 +1213,60 @@ const PlugManager: React.FC<Props> = ({ hubId, tenantId, userId, isAdmin, onPlug
   );
 };
 
-// ── Styles ────────────────────────────────────────────────────────────────────
+// ── Tile button styles ────────────────────────────────────────────────────────
+const tileCss = {
+  actionBtnLight: {
+    background: '#fff',
+    border: '1px solid #E5E7EB',
+    borderRadius: 6,
+    color: '#374151',
+    fontSize: 11,
+    cursor: 'pointer',
+    padding: '3px 8px',
+    boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
+  } as React.CSSProperties,
+  actionBtnDark: {
+    background: 'rgba(255,255,255,0.06)',
+    border: '0.5px solid rgba(255,255,255,0.1)',
+    borderRadius: 6,
+    color: '#9090a0',
+    fontSize: 11,
+    cursor: 'pointer',
+    padding: '3px 8px',
+  } as React.CSSProperties,
+};
+
+// ── Shared modal/panel styles ─────────────────────────────────────────────────
 const css = {
-  overlay:    { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, backdropFilter: 'blur(4px)' } as React.CSSProperties,
-  box:        { background: '#181b24', border: '0.5px solid rgba(255,255,255,0.1)', borderRadius: 12, padding: '24px 28px', maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto', fontFamily: "'Inter',-apple-system,sans-serif" } as React.CSSProperties,
-  modalHeader:{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20 } as React.CSSProperties,
-  modalTitle: { fontSize: 14, fontWeight: 600, color: '#f0f0f4' } as React.CSSProperties,
-  closeBtn:   { background: 'none', border: 'none', color: '#6b6b80', fontSize: 14, cursor: 'pointer', flexShrink: 0 } as React.CSSProperties,
-  errBox:     { background: 'rgba(220,38,38,0.1)', border: '0.5px solid rgba(220,38,38,0.2)', borderRadius: 7, padding: '8px 12px', color: '#f87171', fontSize: 12, marginBottom: 14 } as React.CSSProperties,
-  successBox: { background: 'rgba(34,197,94,0.08)', border: '0.5px solid rgba(34,197,94,0.2)', borderRadius: 7, padding: '8px 12px', color: '#22c55e', fontSize: 12, marginBottom: 14 } as React.CSSProperties,
-  fg:         { display: 'flex', flexDirection: 'column', gap: 5 } as React.CSSProperties,
-  fl:         { fontSize: 11, fontWeight: 500, color: '#9090a0' } as React.CSSProperties,
-  fi:         { padding: '7px 10px', borderRadius: 7, border: '0.5px solid rgba(255,255,255,0.1)', background: '#0f1117', color: '#f0f0f4', fontSize: 12, fontFamily: 'inherit', outline: 'none', width: '100%', boxSizing: 'border-box' } as React.CSSProperties,
-  btnGhost:   { padding: '6px 14px', borderRadius: 7, fontSize: 12, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit', border: '0.5px solid rgba(255,255,255,.1)', background: 'rgba(255,255,255,.04)', color: '#9090a0' } as React.CSSProperties,
-  btnPrim:    { padding: '6px 14px', borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', border: 'none', background: '#4f8ef7', color: '#fff' } as React.CSSProperties,
-  actionBtn:  { background: 'none', border: '0.5px solid rgba(255,255,255,0.08)', borderRadius: 5, color: '#6b6b80', fontSize: 12, cursor: 'pointer', padding: '3px 7px' } as React.CSSProperties,
-  emptyState: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 20px', textAlign: 'center' } as React.CSSProperties,
-  panel:      { display: 'flex', flexDirection: 'column', height: '100%', background: '#141720', fontFamily: "'Inter',-apple-system,sans-serif" } as React.CSSProperties,
-  panelHeader:{ height: 46, background: '#181b24', borderBottom: '0.5px solid rgba(255,255,255,0.07)', display: 'flex', alignItems: 'center', padding: '0 16px', gap: 10, flexShrink: 0 } as React.CSSProperties,
-  card:       (active: boolean): React.CSSProperties => ({
+  overlay:     { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, backdropFilter: 'blur(4px)' } as React.CSSProperties,
+  box:         { background: '#181b24', border: '0.5px solid rgba(255,255,255,0.1)', borderRadius: 12, padding: '24px 28px', maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto', fontFamily: "'Inter',-apple-system,sans-serif" } as React.CSSProperties,
+  modalHeader: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20 } as React.CSSProperties,
+  modalTitle:  { fontSize: 14, fontWeight: 600, color: '#f0f0f4' } as React.CSSProperties,
+  closeBtn:    { background: 'none', border: 'none', color: '#6b6b80', fontSize: 14, cursor: 'pointer', flexShrink: 0 } as React.CSSProperties,
+  errBox:      { background: 'rgba(220,38,38,0.1)', border: '0.5px solid rgba(220,38,38,0.2)', borderRadius: 7, padding: '8px 12px', color: '#f87171', fontSize: 12, marginBottom: 14 } as React.CSSProperties,
+  successBox:  { background: 'rgba(34,197,94,0.08)', border: '0.5px solid rgba(34,197,94,0.2)', borderRadius: 7, padding: '8px 12px', color: '#22c55e', fontSize: 12, marginBottom: 14 } as React.CSSProperties,
+  fg:          { display: 'flex', flexDirection: 'column', gap: 5 } as React.CSSProperties,
+  fl:          { fontSize: 11, fontWeight: 500, color: '#9090a0' } as React.CSSProperties,
+  fi:          { padding: '7px 10px', borderRadius: 7, border: '0.5px solid rgba(255,255,255,0.1)', background: '#0f1117', color: '#f0f0f4', fontSize: 12, fontFamily: 'inherit', outline: 'none', width: '100%', boxSizing: 'border-box' } as React.CSSProperties,
+  btnGhost:    { padding: '6px 14px', borderRadius: 7, fontSize: 12, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit', border: '0.5px solid rgba(255,255,255,.1)', background: 'rgba(255,255,255,.04)', color: '#9090a0' } as React.CSSProperties,
+  btnPrim:     { padding: '6px 14px', borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', border: 'none', background: '#4f8ef7', color: '#fff' } as React.CSSProperties,
+  actionBtn:   { background: 'none', border: '0.5px solid rgba(255,255,255,0.08)', borderRadius: 5, color: '#6b6b80', fontSize: 12, cursor: 'pointer', padding: '3px 7px' } as React.CSSProperties,
+  emptyState:  { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 20px', textAlign: 'center' } as React.CSSProperties,
+  panel:       { display: 'flex', flexDirection: 'column', height: '100%', background: '#141720', fontFamily: "'Inter',-apple-system,sans-serif" } as React.CSSProperties,
+  panelHeader: { height: 46, background: '#181b24', borderBottom: '0.5px solid rgba(255,255,255,0.07)', display: 'flex', alignItems: 'center', padding: '0 16px', gap: 10, flexShrink: 0 } as React.CSSProperties,
+  card:        (active: boolean): React.CSSProperties => ({
     background: '#1a1d27',
     border: `0.5px solid ${active ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.04)'}`,
     borderRadius: 8, padding: '10px 12px', marginBottom: 8, opacity: active ? 1 : 0.6,
   }),
 };
 
-// ── Light theme styles (for HubAdminDashboard) ───────────────────────────────
+// ── Light theme styles ────────────────────────────────────────────────────────
 const lCss = {
-  panel:   { display: 'flex', flexDirection: 'column', height: '100%', background: '#fff', fontFamily: "'Inter',-apple-system,sans-serif", borderRadius: 12 } as React.CSSProperties,
+  panel:       { display: 'flex', flexDirection: 'column', height: '100%', background: '#fff', fontFamily: "'Inter',-apple-system,sans-serif", borderRadius: 12 } as React.CSSProperties,
   panelHeader: { height: 46, background: '#F9FAFB', borderBottom: '1px solid #E5E7EB', display: 'flex', alignItems: 'center', padding: '0 16px', gap: 10, flexShrink: 0, borderRadius: '12px 12px 0 0' } as React.CSSProperties,
-  content: { flex: 1, overflowY: 'auto', padding: '16px 20px' } as React.CSSProperties,
-  card:    (active: boolean): React.CSSProperties => ({
+  content:     { flex: 1, overflowY: 'auto', padding: '16px 20px' } as React.CSSProperties,
+  card:        (active: boolean): React.CSSProperties => ({
     background: active ? '#fff' : '#F9FAFB',
     border: `1px solid ${active ? '#E5E7EB' : '#F3F4F6'}`,
     borderRadius: 10, padding: '12px 14px', marginBottom: 10,
