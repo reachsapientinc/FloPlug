@@ -40,6 +40,18 @@ export const outputTargetBadge = (data: Record<string, unknown>): string | undef
   return `→ ${target}.${name}`;
 };
 
+export const inputSourceBadge = (data: Record<string, unknown>): string | undefined => {
+  const source = (data.inputSource as string) || 'cStream';
+  if (source === 'cStream') return undefined;
+  const name = (data.inputVarName as string) || '?';
+  return `← ${source}.${name}`;
+};
+
+export const floActionIoBadge = (data: Record<string, unknown>): string | undefined => {
+  const parts = [inputSourceBadge(data), outputTargetBadge(data)].filter(Boolean);
+  return parts.length > 0 ? parts.join(' ') : undefined;
+};
+
 export const CompactNode: React.FC<CompactNodeProps> = ({
   id: _id, selected, color, icon, title, subtitle, badge, status = 'idle',
   hasTarget = true, hasSource = true, onDelete, width = 172, height = 64,

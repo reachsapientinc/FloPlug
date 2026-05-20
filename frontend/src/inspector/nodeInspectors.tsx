@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import type { NodeInspectorProps } from './types';
 import { Field, Inp, Sel, TextArea, Btn, Help, Section } from './ui';
 import { OutputTargetSection } from './OutputTargetSection';
+import { InputSourceSection } from './InputSourceSection';
 import { NodeTestPanel } from './InspectorChrome';
 import { TemplateEditorModal, CONTENT_TYPES } from '../components/nodes/TemplateNode';
 import type { StoreRow } from '../components/nodes/AdvancedNodes';
@@ -351,6 +352,8 @@ export const FloActionInspector: React.FC<NodeInspectorProps> = withOutput(({ no
   // Initialise defaults once on mount if missing
   React.useEffect(() => {
     const patch: Record<string, unknown> = {};
+    if (!d.inputSource) patch.inputSource = 'cStream';
+    if (!d.inputContentType) patch.inputContentType = 'application/json';
     if (!d.outputTarget) patch.outputTarget = 'cStream';
     if (!d.actionId && (templateActionId || actionIds[0]))
       patch.actionId = templateActionId || actionIds[0];
@@ -370,6 +373,13 @@ export const FloActionInspector: React.FC<NodeInspectorProps> = withOutput(({ no
       <Field label="FloKit">
         <Inp value={floKitId || '—'} disabled />
       </Field>
+
+      <InputSourceSection
+        inputSource={(d.inputSource as string) ?? 'cStream'}
+        inputVarName={(d.inputVarName as string) ?? ''}
+        inputContentType={(d.inputContentType as string) ?? 'application/json'}
+        onChange={p => onUpdate(node.id, p)}
+      />
 
       {/* Warning if live doc hasn't arrived yet */}
       {notConfigured && (

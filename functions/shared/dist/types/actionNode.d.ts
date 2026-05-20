@@ -1,3 +1,32 @@
+/** Where a FloAction node reads / writes flow data (canvas + engine). */
+export type StreamSource = 'cStream' | 'local' | 'global';
+/** MIME types supported when parsing non-cStream input (phase-2 engine). */
+export declare const ACTION_INPUT_CONTENT_TYPES: readonly [{
+    readonly value: "application/json";
+    readonly label: "JSON";
+}, {
+    readonly value: "application/xml";
+    readonly label: "XML";
+}, {
+    readonly value: "text/csv";
+    readonly label: "CSV";
+}, {
+    readonly value: "text/plain";
+    readonly label: "Plain Text";
+}, {
+    readonly value: "text/html";
+    readonly label: "HTML";
+}];
+/** Developer-configured fields persisted on the flo canvas node. */
+export interface FloActionCanvasData {
+    actionId?: string;
+    connectionId?: string;
+    inputSource?: StreamSource;
+    inputVarName?: string;
+    inputContentType?: string;
+    outputTarget?: StreamSource;
+    outputVarName?: string;
+}
 /**
  * Product-level action node template — materialized when a FloKit is saved.
  * Path: FloPlugConnectors/{connectorId}/FloKits/{floKitId}/ActionNodes/{actionId}

@@ -23,21 +23,21 @@ import {
   useNodesState,
   useEdgesState,
   addEdge,
+  reconnectEdge,
   Background,
   BackgroundVariant,
   Controls,
   MiniMap,
   ReactFlowProvider,
-  BaseEdge,
-  EdgeLabelRenderer,
-  getBezierPath,
-  useReactFlow,
   type Connection,
-  type EdgeProps,
   type Edge,
+  type EdgeChange,
   type Node,
+  type NodeChange,
   type ReactFlowInstance,
 } from '@xyflow/react';
+import { useCanvasHistory } from '../hooks/useCanvasHistory';
+import type { CanvasSnapshot } from '../utils/canvasSnapshot';
 import '@xyflow/react/dist/style.css';
 
 import { db }                          from '../firebaseConfig';
@@ -74,6 +74,8 @@ import { toFloActionPaletteItem } from '@floplug/shared';
 import { COLLECTIONS, HUB_COLLECTIONS, NODE_TYPES as NODE_TYPE_KEYS } from '@floplug/shared';
 import PlugNodeComponent from './nodes/PlugNode';
 import FloActionNodeComponent from './nodes/FloActionNode';
+import DeletableEdge from './edges/DeletableEdge';
+import { EdgeRewireContext, type EdgeRewireApi } from './edges/edgeRewireContext';
 import ProfileDrawer, { type DashboardSection } from './ProfileDrawer';
 import HubAdminDashboard                        from './HubAdminDashboard';
 
@@ -97,61 +99,6 @@ const NODE_TYPES: Record<string, React.ComponentType<any>> = {
   [NODE_TYPE_KEYS.TEMPLATE]:   TemplateNode,
   [NODE_TYPE_KEYS.PLUG]:       PlugNodeComponent,
   floActionNode:               FloActionNodeComponent,
-};
-
-// ── Custom deletable edge ────────────────────────────────────────────────────
-const DeletableEdge: React.FC<EdgeProps> = ({
-  id, sourceX, sourceY, targetX, targetY,
-  sourcePosition, targetPosition, selected, markerEnd,
-}) => {
-  const { setEdges } = useReactFlow();
-  const [edgePath, labelX, labelY] = getBezierPath({
-    sourceX, sourceY, sourcePosition,
-    targetX, targetY, targetPosition,
-  });
-
-  return (
-    <>
-      <BaseEdge
-        id={id}
-        path={edgePath}
-        markerEnd={markerEnd}
-        style={{
-          stroke:      selected ? '#f59e0b' : '#4f8ef7',
-          strokeWidth: selected ? 2.5 : 1.5,
-          filter:      selected ? 'drop-shadow(0 0 4px rgba(245,158,11,0.6))' : 'none',
-          transition:  'stroke 0.15s, stroke-width 0.15s',
-        }}
-      />
-      <EdgeLabelRenderer>
-        <div
-          style={{
-            position:  'absolute',
-            transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
-            pointerEvents: 'all',
-            opacity: selected ? 1 : 0,
-            transition: 'opacity 0.15s',
-          }}
-          className="edge-delete-btn-wrap"
-        >
-          <button
-            onClick={() => setEdges(eds => eds.filter(e => e.id !== id))}
-            title="Delete connection"
-            style={{
-              width: 18, height: 18, borderRadius: '50%',
-              background: '#f87171', border: '2px solid #0f1117',
-              color: '#fff', fontSize: 11, fontWeight: 700,
-              cursor: 'pointer', display: 'flex',
-              alignItems: 'center', justifyContent: 'center',
-              lineHeight: 1, padding: 0,
-            }}
-          >
-            ×
-          </button>
-        </div>
-      </EdgeLabelRenderer>
-    </>
-  );
 };
 
 const EDGE_TYPES = { deletable: DeletableEdge };
@@ -267,9 +214,47 @@ function sanitizeEdge(e: Edge): Record<string, unknown> {
   if (e.animated     != null) clean.animated     = e.animated;
   if (e.style        != null) clean.style        = e.style;
   if (e.type         != null) clean.type         = e.type;
+  if (e.reconnectable != null) clean.reconnectable = e.reconnectable;
   return clean;
 }
 function sanitizeEdges(edges: Edge[]): Record<string, unknown>[] { return edges.map(sanitizeEdge); }
+
+/** Ensure loaded/saved edges work with the deletable type and drag-to-rewire handles. */
+function normalizeFlowEdge(e: Edge): Edge {
+  return {
+    ...e,
+    type:          e.type ?? 'deletable',
+    animated:      e.animated ?? true,
+    reconnectable: e.reconnectable ?? true,
+    style:         e.style ?? { stroke: '#4f8ef7', strokeWidth: 1.5 },
+  };
+}
+
+/** Shared wiring rules for new connections and reconnecting an existing edge. */
+function isValidFlowConnection(
+  connection: Connection,
+  edges: Edge[],
+  nodes: Node[],
+  ignoreEdgeId?: string,
+): boolean {
+  const { source, target, sourceHandle } = connection;
+  if (!source || !target || source === target) return false;
+
+  const others = ignoreEdgeId ? edges.filter(e => e.id !== ignoreEdgeId) : edges;
+
+  const hasOutgoing = others.some(
+    e => e.source === source && e.sourceHandle === (sourceHandle ?? null),
+  );
+  if (hasOutgoing) return false;
+
+  const targetNode = nodes.find(n => n.id === target);
+  if (targetNode?.type === 'endNode') {
+    const hasIncoming = others.some(e => e.target === target);
+    if (hasIncoming) return false;
+  }
+
+  return true;
+}
 
 // ── New Flow Modal ────────────────────────────────────────────────────────────
 interface NewFlowModalProps {
@@ -391,8 +376,14 @@ const DesignerInner: React.FC<DesignerProps> = ({
   const wrapperRef = useRef<HTMLDivElement>(null);
   const nodesRef   = useRef<Node[]>(nodes);
   const edgesRef   = useRef<Edge[]>(edges);
+  const reconnectingEdgeId = useRef<string | null>(null);
+  const canvasHistory = useCanvasHistory();
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
   useEffect(() => { edgesRef.current = edges; }, [edges]);
+
+  const recordCanvasHistory = useCallback(() => {
+    canvasHistory.pushSnapshot(nodesRef.current, edgesRef.current);
+  }, [canvasHistory]);
 
   // ── Derive isHubAdmin from Firebase auth token ─────────────────────────────
   // Never trust the isAdmin prop alone; validate against the actual custom claim.
@@ -686,14 +677,124 @@ const DesignerInner: React.FC<DesignerProps> = ({
   }), [functions, hubId, tenantId, floList, activeFlo?.id, nodes, edges, testNode, testingNodeId,floActions]);
 
   const deleteNode = useCallback((nodeId: string) => {
-    setNodes(prev => {
-      const node = prev.find(n => n.id === nodeId);
-      if (node?.type === 'startNode' || node?.type === 'endNode') return prev;
-      return prev.filter(n => n.id !== nodeId);
-    });
+    const node = nodesRef.current.find(n => n.id === nodeId);
+    if (node?.type === 'startNode' || node?.type === 'endNode') return;
+    recordCanvasHistory();
+    setNodes(prev => prev.filter(n => n.id !== nodeId));
     setEdges(prev => prev.filter(e => e.source !== nodeId && e.target !== nodeId));
     setSelectedNode(prev => prev?.id === nodeId ? null : prev);
-  }, [setNodes, setEdges]);
+  }, [setNodes, setEdges, recordCanvasHistory]);
+
+  const hydrateCanvasNodes = useCallback((savedNodes: Node[]): Node[] => (
+    savedNodes.map(n => {
+      const baseData = {
+        ...n.data,
+        hubId,
+        tenantId,
+        onUpdate:       updateNodeData,
+        onDelete:       deleteNode,
+        availablePlugs: plugs.filter(p =>
+          p.connectorId === n.type || p.connectorId === 'genericNode'
+        ),
+        ...(n.type === 'plugNode' ? {
+          _placeholders: getPlugPlaceholders(n.data?.category as string),
+        } : {}),
+        availableFlos: flos.map(f => ({ id: f.id, name: f.name })),
+      };
+
+      if (n.type === 'floActionNode') {
+        const liveDoc = floActionNodeMap.current.get(n.data?.floKitId as string);
+        if (liveDoc) {
+          return {
+            ...n,
+            ...(n.width  != null ? { width:  n.width  } : {}),
+            ...(n.height != null ? { height: n.height } : {}),
+            data: {
+              ...baseData,
+              actionIds:            liveDoc.actionIds            ?? [],
+              allowedConnectionIds: liveDoc.allowedConnectionIds ?? [],
+              defaultConnectionId:  liveDoc.defaultConnectionId  ?? '',
+              templateActionId:     liveDoc.templateActionId     ?? liveDoc.actionIds?.[0] ?? '',
+              connectorId:          liveDoc.connectorId,
+              flaLabel:             liveDoc.displayName,
+              floKitId:             liveDoc.floKitId,
+              connectionId: (n.data?.connectionId as string) || liveDoc.defaultConnectionId || liveDoc.allowedConnectionIds?.[0] || '',
+              actionId:     (n.data?.actionId     as string) || liveDoc.templateActionId    || liveDoc.actionIds?.[0]            || '',
+            },
+          };
+        }
+        return {
+          ...n,
+          ...(n.width  != null ? { width:  n.width  } : {}),
+          ...(n.height != null ? { height: n.height } : {}),
+          data: {
+            ...baseData,
+            actionIds:            (n.data?.actionIds            as string[]) ?? [],
+            allowedConnectionIds: (n.data?.allowedConnectionIds as string[]) ?? [],
+            defaultConnectionId:  (n.data?.defaultConnectionId  as string)  ?? '',
+          },
+        };
+      }
+
+      return {
+        ...n,
+        ...(n.width  != null ? { width:  n.width  } : {}),
+        ...(n.height != null ? { height: n.height } : {}),
+        data: baseData,
+      };
+    })
+  ), [hubId, tenantId, updateNodeData, deleteNode, plugs, flos]);
+
+  const applyCanvasSnapshot = useCallback((snap: CanvasSnapshot) => {
+    setNodes(hydrateCanvasNodes(snap.nodes));
+    setEdges(snap.edges.map(normalizeFlowEdge));
+    setSelectedNode(null);
+  }, [hydrateCanvasNodes, setNodes, setEdges]);
+
+  const performUndo = useCallback(() => {
+    const snap = canvasHistory.undo(nodesRef.current, edgesRef.current);
+    if (snap) applyCanvasSnapshot(snap);
+  }, [canvasHistory, applyCanvasSnapshot]);
+
+  const performRedo = useCallback(() => {
+    const snap = canvasHistory.redo(nodesRef.current, edgesRef.current);
+    if (snap) applyCanvasSnapshot(snap);
+  }, [canvasHistory, applyCanvasSnapshot]);
+
+  const handleNodesChange = useCallback((changes: NodeChange[]) => {
+    const recordable = changes.some(c => c.type === 'remove' || c.type === 'add');
+    if (recordable && !canvasHistory.isApplying()) {
+      recordCanvasHistory();
+    }
+    onNodesChange(changes);
+  }, [onNodesChange, canvasHistory, recordCanvasHistory]);
+
+  const handleEdgesChange = useCallback((changes: EdgeChange[]) => {
+    const recordable = changes.some(c => c.type === 'remove' || c.type === 'add');
+    if (recordable && !canvasHistory.isApplying()) {
+      recordCanvasHistory();
+    }
+    onEdgesChange(changes);
+  }, [onEdgesChange, canvasHistory, recordCanvasHistory]);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod) return;
+      const el = e.target as HTMLElement | null;
+      if (el?.tagName === 'INPUT' || el?.tagName === 'TEXTAREA' || el?.isContentEditable) return;
+
+      if (e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        performUndo();
+      } else if ((e.key === 'z' && e.shiftKey) || e.key === 'y') {
+        e.preventDefault();
+        performRedo();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [performUndo, performRedo]);
 
   // ── Open a saved flow ───────────────────────────────────────────────────────
   const openFlow = async (flow: FloMeta) => {
@@ -713,70 +814,11 @@ const DesignerInner: React.FC<DesignerProps> = ({
         ...(!hasEnd   ? [defaults[1]] : []),
       ];
 
-      const hydrated = merged.map(n => {
-        const baseData = {
-          ...n.data,
-          hubId,
-          tenantId,
-          onUpdate:       updateNodeData,
-          onDelete:       deleteNode,
-          availablePlugs: plugs.filter(p =>
-            p.connectorId === n.type || p.connectorId === 'genericNode'
-          ),
-          ...(n.type === 'plugNode' ? {
-            _placeholders: getPlugPlaceholders(n.data?.category as string),
-          } : {}),
-          availableFlos: flos.map(f => ({ id: f.id, name: f.name })),
-        };
-
-        if (n.type === 'floActionNode') {
-          const liveDoc = floActionNodeMap.current.get(n.data?.floKitId as string);
-          if (liveDoc) {
-            return {
-              ...n,
-              ...(n.width  != null ? { width:  n.width  } : {}),
-              ...(n.height != null ? { height: n.height } : {}),
-              data: {
-                ...baseData,
-                // Live from FloActionNodeDoc — always fresh, never stale
-                actionIds:            liveDoc.actionIds            ?? [],
-                allowedConnectionIds: liveDoc.allowedConnectionIds ?? [],
-                defaultConnectionId:  liveDoc.defaultConnectionId  ?? '',
-                templateActionId:     liveDoc.templateActionId     ?? liveDoc.actionIds?.[0] ?? '',
-                connectorId:          liveDoc.connectorId,
-                flaLabel:             liveDoc.displayName,
-                floKitId:             liveDoc.floKitId,
-                // Developer's saved choices — fall back to live defaults
-                connectionId: (n.data?.connectionId as string) || liveDoc.defaultConnectionId || liveDoc.allowedConnectionIds?.[0] || '',
-                actionId:     (n.data?.actionId     as string) || liveDoc.templateActionId    || liveDoc.actionIds?.[0]            || '',
-              },
-            };
-          }
-          // Map not yet populated (race) — re-hydration fires in loadFloActions
-          console.warn(`[Designer] openFlow: floActionNode ${n.id} floKitId="${n.data?.floKitId}" not in map yet — will re-hydrate`);
-          return {
-            ...n,
-            ...(n.width  != null ? { width:  n.width  } : {}),
-            ...(n.height != null ? { height: n.height } : {}),
-            data: {
-              ...baseData,
-              actionIds:            (n.data?.actionIds            as string[]) ?? [],
-              allowedConnectionIds: (n.data?.allowedConnectionIds as string[]) ?? [],
-              defaultConnectionId:  (n.data?.defaultConnectionId  as string)  ?? '',
-            },
-          };
-        }
-
-        return {
-          ...n,
-          ...(n.width  != null ? { width:  n.width  } : {}),
-          ...(n.height != null ? { height: n.height } : {}),
-          data: baseData,
-        };
-      });
+      const hydrated = hydrateCanvasNodes(merged);
 
       setNodes(hydrated);
-      setEdges(data.edges ?? []);
+      setEdges((data.edges ?? []).map(normalizeFlowEdge));
+      canvasHistory.resetHistory();
       setActiveFlo(flow);
       setSelectedNode(null);
       setRunResult(null);
@@ -829,6 +871,7 @@ const DesignerInner: React.FC<DesignerProps> = ({
     setFlos(prev => [meta, ...prev]);
     setNodes(defaults);
     setEdges([]);
+    canvasHistory.resetHistory();
     setActiveFlo(meta);
     setSelectedNode(null);
     setRunResult(null);
@@ -943,35 +986,69 @@ const DesignerInner: React.FC<DesignerProps> = ({
   };
 
   // ── ReactFlow event handlers ────────────────────────────────────────────────
+  const isValidConnection = useCallback((connection: Connection) => (
+    isValidFlowConnection(
+      connection,
+      edgesRef.current,
+      nodesRef.current,
+      reconnectingEdgeId.current ?? undefined,
+    )
+  ), []);
+
   const onConnect = useCallback((params: Connection) => {
-    const hasOutgoing = edgesRef.current.some(
-      e => e.source === params.source && e.sourceHandle === (params.sourceHandle ?? null)
-    );
-    if (hasOutgoing) {
-      console.warn('[Designer] onConnect: source already has an outgoing wire — blocked');
+    if (!isValidFlowConnection(params, edgesRef.current, nodesRef.current)) {
+      console.warn('[Designer] onConnect: blocked by flow wiring rules');
       return;
     }
-    const targetNode = nodesRef.current.find(n => n.id === params.target);
-    if (targetNode?.type === 'endNode') {
-      const hasIncoming = edgesRef.current.some(e => e.target === params.target);
-      if (hasIncoming) {
-        console.warn('[Designer] onConnect: endNode already has an incoming wire — blocked');
-        return;
-      }
-    }
+    recordCanvasHistory();
     setEdges(eds => addEdge({
       ...params,
-      type:     'deletable',
-      animated: true,
-      style:    { stroke: '#4f8ef7', strokeWidth: 1.5 },
+      type:          'deletable',
+      animated:      true,
+      reconnectable: true,
+      style:         { stroke: '#4f8ef7', strokeWidth: 1.5 },
     }, eds));
-  }, [setEdges]);
+  }, [setEdges, recordCanvasHistory]);
+
+  const onReconnect = useCallback((oldEdge: Edge, newConnection: Connection) => {
+    if (!newConnection.source || !newConnection.target) return;
+    if (!isValidFlowConnection(
+      newConnection,
+      edgesRef.current,
+      nodesRef.current,
+      oldEdge.id,
+    )) {
+      setStatusMsg('Cannot rewire: target already has a connection or source already has an outgoing wire');
+      setTimeout(() => setStatusMsg(''), 3000);
+      return;
+    }
+    recordCanvasHistory();
+    setEdges(eds => reconnectEdge(oldEdge, newConnection, eds));
+  }, [setEdges, recordCanvasHistory]);
+
+  const edgeRewireApi = useMemo<EdgeRewireApi>(() => ({
+    onReconnect,
+    onReconnectStart: (edge) => { reconnectingEdgeId.current = edge.id; },
+    onReconnectEnd:   () => { reconnectingEdgeId.current = null; },
+    isValidConnection,
+    recordHistory: recordCanvasHistory,
+  }), [onReconnect, isValidConnection, recordCanvasHistory]);
 
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
     const latest = nodesRef.current.find(n => n.id === node.id) ?? node;
     setSelectedNode(latest);
-  }, []);
-  const onPaneClick = useCallback(() => setSelectedNode(null), []);
+    setEdges((eds) => eds.map((e) => (e.selected ? { ...e, selected: false } : e)));
+  }, [setEdges]);
+
+  const onEdgeClick = useCallback((_: React.MouseEvent, edge: Edge) => {
+    setSelectedNode(null);
+    setEdges((eds) => eds.map((e) => ({ ...e, selected: e.id === edge.id })));
+  }, [setEdges]);
+
+  const onPaneClick = useCallback(() => {
+    setSelectedNode(null);
+    setEdges((eds) => eds.map((e) => (e.selected ? { ...e, selected: false } : e)));
+  }, [setEdges]);
   const onDragOver  = useCallback((e: React.DragEvent) => {
     e.preventDefault(); e.dataTransfer.dropEffect = 'move';
   }, []);
@@ -1047,6 +1124,9 @@ const DesignerInner: React.FC<DesignerProps> = ({
                   connectionId:  liveDoc.defaultConnectionId ?? liveDoc.allowedConnectionIds?.[0] ?? '',
                   outputTarget:  'cStream',
                   outputVarName: '',
+                  inputSource:       'cStream',
+                  inputVarName:      '',
+                  inputContentType:  'application/json',
                 };
               }
               // Fallback: map not ready — use palette meta, re-hydration will correct it
@@ -1062,10 +1142,14 @@ const DesignerInner: React.FC<DesignerProps> = ({
                 connectionId:  (nodeMeta.defaultConnectionId as string) ?? (nodeMeta.allowedConnectionIds as string[])?.[0] ?? '',
                 outputTarget:  'cStream',
                 outputVarName: '',
+                inputSource:       'cStream',
+                inputVarName:      '',
+                inputContentType:  'application/json',
               };
             })()
           : {};
 
+    recordCanvasHistory();
     setNodes(prev => [...prev, {
       id:   `${type}-${Date.now()}`,
       type,
@@ -1085,7 +1169,11 @@ const DesignerInner: React.FC<DesignerProps> = ({
         availableFlos: flos.map(f => ({ id: f.id, name: f.name })),
       },
     }]);
-  }, [rfInstance, hubId, tenantId, updateNodeData, deleteNode, plugs, flos]);
+  }, [rfInstance, hubId, tenantId, updateNodeData, deleteNode, plugs, flos, recordCanvasHistory]);
+
+  const onNodeDragStart = useCallback(() => {
+    if (!canvasHistory.isApplying()) recordCanvasHistory();
+  }, [canvasHistory, recordCanvasHistory]);
 
   // ── Guards ──────────────────────────────────────────────────────────────────
   if (wsLoading) {
@@ -1145,7 +1233,7 @@ const DesignerInner: React.FC<DesignerProps> = ({
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
-    <div style={s.root}>
+    <div className="floplug-designer" style={s.root}>
 
       <NewFlowModal
         open={newFlowModalOpen}
@@ -1273,6 +1361,25 @@ const DesignerInner: React.FC<DesignerProps> = ({
           )}
           <div style={s.tbSep} />
           <button
+            type="button"
+            onClick={performUndo}
+            disabled={!canvasHistory.canUndo}
+            title="Undo (⌘Z)"
+            style={{ ...s.btnGhost, opacity: canvasHistory.canUndo ? 1 : 0.4, cursor: canvasHistory.canUndo ? 'pointer' : 'not-allowed' }}
+          >
+            ↶ Undo
+          </button>
+          <button
+            type="button"
+            onClick={performRedo}
+            disabled={!canvasHistory.canRedo}
+            title="Redo (⌘⇧Z)"
+            style={{ ...s.btnGhost, opacity: canvasHistory.canRedo ? 1 : 0.4, cursor: canvasHistory.canRedo ? 'pointer' : 'not-allowed' }}
+          >
+            ↷ Redo
+          </button>
+          <div style={s.tbSep} />
+          <button
             onClick={saveFlo}
             disabled={saving || !activeFlo}
             style={{ ...s.btnGhost, opacity: saving || !activeFlo ? 0.5 : 1, cursor: !activeFlo ? 'not-allowed' : 'pointer' }}
@@ -1320,6 +1427,7 @@ const DesignerInner: React.FC<DesignerProps> = ({
           onDrop={onDrop}
           onDragOver={onDragOver}
         >
+          <EdgeRewireContext.Provider value={edgeRewireApi}>
           <ReactFlow
             snapToGrid={true}
             snapGrid={[20, 20]}
@@ -1327,10 +1435,12 @@ const DesignerInner: React.FC<DesignerProps> = ({
             edges={edges}
             nodeTypes={NODE_TYPES}
             edgeTypes={EDGE_TYPES}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
+            onNodesChange={handleNodesChange}
+            onEdgesChange={handleEdgesChange}
             onConnect={onConnect}
+            onNodeDragStart={onNodeDragStart}
             onNodeClick={onNodeClick}
+            onEdgeClick={onEdgeClick}
             onPaneClick={onPaneClick}
             onInit={(instance) => {
               setRfInstance(instance);
@@ -1341,23 +1451,16 @@ const DesignerInner: React.FC<DesignerProps> = ({
             }}
             defaultViewport={{ x: 0, y: 0, zoom: 1 }}
             nodeOrigin={[0, 0]}
-            elevateEdgesOnSelect
-            reconnectRadius={20}
-            onReconnect={(oldEdge, newConnection) => {
-              setEdges(eds => eds.map(e =>
-                e.id === oldEdge.id
-                  ? {
-                      ...e,
-                      source:       newConnection.source!,
-                      target:       newConnection.target!,
-                      sourceHandle: newConnection.sourceHandle ?? null,
-                      targetHandle: newConnection.targetHandle ?? null,
-                    }
-                  : e
-              ));
-            }}
+            elevateEdgesOnSelect={false}
+            edgesReconnectable
+            reconnectRadius={28}
+            connectionRadius={28}
+            isValidConnection={isValidConnection}
+            onReconnect={onReconnect}
+            onReconnectStart={(_, edge) => { reconnectingEdgeId.current = edge.id; }}
+            onReconnectEnd={() => { reconnectingEdgeId.current = null; }}
             style={{ background: '#0f1117' }}
-            defaultEdgeOptions={{ type: 'deletable', animated: true }}
+            defaultEdgeOptions={{ type: 'deletable', animated: true, reconnectable: true }}
           >
             <Background
               variant={BackgroundVariant.Lines}
@@ -1367,6 +1470,7 @@ const DesignerInner: React.FC<DesignerProps> = ({
             <Controls style={{ background: '#181b24', border: '0.5px solid rgba(255,255,255,.1)', borderRadius: 8 }} />
             <MiniMap style={{ background: '#141720', borderRadius: 8 }} nodeColor="#4f8ef7" maskColor="rgba(15,17,23,.7)" />
           </ReactFlow>
+          </EdgeRewireContext.Provider>
 
           {flos.length === 0 && (
             <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, pointerEvents: 'none' }}>
@@ -1509,6 +1613,17 @@ if (typeof document !== 'undefined') {
         margin-top: 3px;
         font-style: italic;
         opacity: 0.85;
+      }
+      /* Selected edge: blue line (override React Flow default orange) */
+      .floplug-designer .react-flow__edge.selected .react-flow__edge-path {
+        stroke: #93c5fd !important;
+        stroke-width: 3px !important;
+      }
+      .floplug-designer .react-flow__edgeupdater {
+        display: none !important;
+      }
+      .floplug-designer .edge-rewire-handle:active {
+        cursor: grabbing;
       }
     `;
     document.head.appendChild(style);

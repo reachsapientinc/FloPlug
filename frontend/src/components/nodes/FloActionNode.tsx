@@ -1,6 +1,6 @@
 import React from 'react';
 import { type NodeProps } from '@xyflow/react';
-import { CompactNode, deriveNodeStatus, outputTargetBadge } from './CompactNode';
+import { CompactNode, deriveNodeStatus, floActionIoBadge } from './CompactNode';
 
 interface FloActionNodeData {
   floActionName?:       string;
@@ -8,8 +8,11 @@ interface FloActionNodeData {
   connectorId?:         string;
   actionIds?:           string[];
   connectionId?:        string;
+  inputSource?:         'cStream' | 'local' | 'global';
+  inputVarName?:        string;
+  inputContentType?:    string;
   outputTarget?:        'cStream' | 'local' | 'global';
-  varName?:             string;
+  outputVarName?:       string;
   onDelete?:            (id: string) => void;
   [key: string]:        unknown;
 }
@@ -17,9 +20,7 @@ interface FloActionNodeData {
 const FloActionNode: React.FC<NodeProps> = ({ id, data, selected }) => {
   const d = data as FloActionNodeData;
   const title = d.flaLabel ?? d.floActionName ?? 'FloAction';
-  const subtitle = d.varName
-    ? `→ ${d.outputTarget}:${d.varName}`
-    : (d.connectorId ?? '');
+  const subtitle = d.connectorId ?? '';
 
   return (
     <CompactNode
@@ -28,9 +29,8 @@ const FloActionNode: React.FC<NodeProps> = ({ id, data, selected }) => {
       color="#10b981"
       icon="⚡"
       title={title}
-      //subtitle={d.floActionName && d.flaLabel !== d.floActionName ? d.floActionName : (d.connectorId ?? '')}
       subtitle={subtitle}
-      badge={outputTargetBadge(d as Record<string, unknown>)}
+      badge={floActionIoBadge(d as Record<string, unknown>)}
       status={deriveNodeStatus(d as Record<string, unknown>)}
       onDelete={() => d.onDelete?.(id)}
     />
