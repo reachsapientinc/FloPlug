@@ -10,7 +10,11 @@ import {
   resolveKitDataModelSchemaId,
 } from '@floplug/shared';
 import { CURRENT_SCHEMA_BUCKET } from '../constants.js';
-import { parseSchemaFields } from './actionSchemaParser.js';
+import {
+  listXsdRootElementNames,
+  parseSchemaFields,
+} from './actionSchemaParser.js';
+import { XMLParser } from 'fast-xml-parser';
 import { loadActionDocWithSchema } from './resolveActionSchema.js';
 
 const db = getFirestore();
@@ -104,17 +108,31 @@ async function loadKit(connectorId: string, floKitId: string): Promise<FloKitDoc
 }
 
 async function loadKitAction(connectorId: string, floKitId: string, actionId: string): Promise<ActionDoc | null> {
-  const snap = await db
-    .doc(`${COLLECTIONS.CONNECTORS}/${connectorId}/${SUB_COLLECTIONS.FLOKITS}/${floKitId}/${SUB_COLLECTIONS.FLOKITACTIONS}/${actionId}`)
+  const kitPath = `${COLLECTIONS.CONNECTORS}/${connectorId}/${SUB_COLLECTIONS.FLOKITS}/${floKitId}/${SUB_COLLECTIONS.FLOKITACTIONS}/${actionId}`;
+  const kitSnap = await db.doc(kitPath).get();
+  if (kitSnap.exists) {
+    return { id: kitSnap.id, ...kitSnap.data() } as ActionDoc;
+  }
+  const globalSnap = await db
+    .doc(`${COLLECTIONS.CONNECTORS}/${connectorId}/${SUB_COLLECTIONS.ACTIONS}/${actionId}`)
     .get();
-  if (!snap.exists) return null;
-  return { id: snap.id, ...snap.data() } as ActionDoc;
+  if (globalSnap.exists) {
+    return { id: globalSnap.id, ...globalSnap.data() } as ActionDoc;
+  }
+  return null;
 }
+
+const xmlParser = new XMLParser({
+  ignoreAttributes:    false,
+  attributeNamePrefix: '@_',
+  isArray: (name) => ['xsd:element', 'element', 'xsd:complexType', 'complexType'].includes(name),
+});
 
 async function parseFieldsFromSchemaDoc(
   connectorId: string,
-  schemaId: string,
-  schemaType: string,
+  schemaId:    string,
+  schemaType:  string,
+  actionId:    string,
   operationName: string,
 ): Promise<ParsedField[]> {
   const schemaSnap = await db
@@ -123,10 +141,23 @@ async function parseFieldsFromSchemaDoc(
   if (!schemaSnap.exists) {
     throw new Error(`Schema document not found: ${schemaId}`);
   }
-  const schema = schemaSnap.data()!;
-  const [fileContents] = await storageBucket.file(schema.storagePath as string).download();
+  const schemaDoc = schemaSnap.data()!;
+  const [fileContents] = await storageBucket.file(schemaDoc.storagePath as string).download();
   const rawSchema      = fileContents.toString('utf-8');
-  return parseSchemaFields(rawSchema, (schema.schemaType as string) ?? schemaType, operationName);
+  const effectiveType  = (schemaDoc.schemaType as string) ?? schemaType;
+
+  if (effectiveType === 'xsd') {
+    const parsed = xmlParser.parse(rawSchema);
+    const xsdSchema = parsed['xsd:schema'] ?? parsed['schema'] ?? {};
+    const roots = listXsdRootElementNames(xsdSchema);
+    console.log(
+      `[resolveFloActionMappingTarget] XSD ${schemaId}: ${roots.length} root elements, ` +
+      `actionId=${actionId} operationName=${operationName}`,
+    );
+    return parseSchemaFields(rawSchema, 'xsd', operationName, actionId);
+  }
+
+  return parseSchemaFields(rawSchema, effectiveType, operationName, actionId);
 }
 
 export async function resolveFloActionMappingTarget(
@@ -185,11 +216,32 @@ export async function resolveFloActionMappingTarget(
 
   if (dataModelId) {
     try {
-      fields = await parseFieldsFromSchemaDoc(connectorId, dataModelId, 'xsd', operationName);
+      fields = await parseFieldsFromSchemaDoc(
+        connectorId, dataModelId, 'xsd', actionId, operationName,
+      );
       schemaSource      = 'dataModel';
       dataModelSchemaId = dataModelId;
     } catch (err) {
       console.warn(`[resolveFloActionMappingTarget] data model parse failed: ${err}`);
+    }
+  }
+
+  if (fields.length === 0 && connectorAction?.schemaRef) {
+    try {
+      const svcType = connectorAction.schemaSource === 'wsdl' ? 'wsdl' : 'xsd';
+      fields = await parseFieldsFromSchemaDoc(
+        connectorId,
+        connectorAction.schemaRef,
+        svcType,
+        actionId,
+        operationName,
+      );
+      if (fields.length > 0) {
+        schemaSource = 'services';
+        console.log(`[resolveFloActionMappingTarget] fallback to services schema ${connectorAction.schemaRef}`);
+      }
+    } catch (err) {
+      console.warn(`[resolveFloActionMappingTarget] services schema fallback failed: ${err}`);
     }
   }
 
