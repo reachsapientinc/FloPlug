@@ -27,6 +27,8 @@ export { listSchemaOperations } from "./helpers/listSchemaOperations.js";
 
 // Any other existing functions you already have
 export { resolveActionSchema } from './utils/resolveActionSchema.js';
+export { executeFloAction } from './executeFloAction.js';
+export { resolveFloActionMappingTargetCallable as resolveFloActionMappingTarget } from './resolveFloActionMappingTarget.js';
 export { invokeFlo } from './services/floWebhook.js';
 import { db } from './utils/firebase.js';
 import { executeFloNodes} from './engine/executeFloNodes.js';

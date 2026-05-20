@@ -6,6 +6,8 @@ import { InputSourceSection } from './InputSourceSection';
 import { NodeTestPanel } from './InspectorChrome';
 import { TemplateEditorModal, CONTENT_TYPES } from '../components/nodes/TemplateNode';
 import type { StoreRow } from '../components/nodes/AdvancedNodes';
+import { FloActionFieldMapper } from './FloActionFieldMapper';
+import type { MappingRuleClient } from '../lib/floActionMapper';
 
 const SF_OBJECTS = ['Contact', 'Account', 'Opportunity', 'Lead', 'Case'];
 const SF_OPS = ['Query', 'Upsert', 'Insert', 'Update', 'Delete'];
@@ -327,7 +329,7 @@ export const EndInspector: React.FC<NodeInspectorProps> = ({ node, onUpdate, ctx
   );
 };
 
-export const FloActionInspector: React.FC<NodeInspectorProps> = withOutput(({ node, onUpdate }) => {
+export const FloActionInspector: React.FC<NodeInspectorProps> = withOutput(({ node, onUpdate, ctx }) => {
   const d = node.data as Record<string, unknown>;
 
   // Live arrays injected at hydration from FloActionNodeDoc — never fetched here
@@ -460,6 +462,20 @@ export const FloActionInspector: React.FC<NodeInspectorProps> = withOutput(({ no
           </>
         )}
       </Field>
+
+      {selectedActionId && connectorId && floKitId && (
+        <FloActionFieldMapper
+          functions={ctx.functions}
+          hubId={ctx.hubId}
+          tenantId={ctx.tenantId}
+          connectorId={connectorId}
+          floKitId={floKitId}
+          actionId={selectedActionId}
+          connectionId={selectedConnectionId}
+          mappingRules={(d.mappingRules as MappingRuleClient[]) ?? []}
+          onRulesChange={rules => onUpdate(node.id, { mappingRules: rules })}
+        />
+      )}
     </>
   );
   // withOutput() adds OutputTargetSection + NodeTestPanel automatically

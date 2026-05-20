@@ -18,6 +18,7 @@ import { executeFifNode }            from '../nodes/fifNode.js';
 import { executeLoopNode }           from '../nodes/loopNode.js';
 import { executePlugNode }           from '../nodes/plugNode.js';
 import { executeEmailNode }          from '../nodes/emailNode.js';
+import { executeFloActionNode }      from './executeFloActionNode.js';
 import {
   executeWorkdayNode, executeSalesforceNode,
   executeSapNode, executeOracleNode,
@@ -279,6 +280,35 @@ export async function executeFloNodes(
           result = next;
           for (const line of logLine.split(' | '))
             log.push(`${'  '.repeat(ctx.depth)}  ${line}`);
+          break;
+        }
+
+        // ── FloAction (connector API call with semantic field mapping) ─────────
+        case 'floActionNode': {
+          const floResult = await executeFloActionNode({
+            node: {
+              actionId:      String(nd.actionId ?? ''),
+              floKitId:      String(nd.floKitId ?? ''),
+              connectorId:   String(nd.connectorId ?? ''),
+              connectionId:  String(nd.connectionId ?? ''),
+              outputTarget:  (nd.outputTarget as 'cStream' | 'local' | 'global') ?? 'cStream',
+              outputVarName: String(nd.outputVarName ?? nd.varName ?? ''),
+              flaLabel:      nd.flaLabel as string | undefined,
+              mappingRules:  nd.mappingRules,
+              inputSource:   nd.inputSource,
+              inputVarName:  nd.inputVarName,
+            },
+            cStream:     cStream as Record<string, unknown>,
+            localStore:  store.local,
+            globalStore: store.global,
+            hubId,
+            tenantId,
+            nodeId:      node.id,
+          });
+          store.local  = floResult.localStore;
+          store.global = floResult.globalStore;
+          result = floResult.cStream;
+          log.push(`${'  '.repeat(ctx.depth)}  ${floResult.logLine}`);
           break;
         }
 
