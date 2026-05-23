@@ -2,8 +2,12 @@
 import { onRequest }      from 'firebase-functions/v2/https';
 import { getAuth }        from 'firebase-admin/auth';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
-import { executeFloNodes } from '../engine/executeFloNodes.js'; // ← shared engine
-import type { RunContext }  from '@floplug/shared';
+import { executeFloNodes } from '../engine/executeFloNodes.js';
+import type { RunContext, NodeExecutionHubPayload } from '@floplug/shared';
+import { HUB_COLLECTIONS } from '@floplug/shared';
+import { getPublishedGraph } from '@floplug/shared';
+import { getFloRunnableBlockReason } from './floValidationService.js';
+import { persistNodeExecutionRecord } from './floExecutionHubService.js';
 
 const db = getFirestore();
 
@@ -15,27 +19,23 @@ export const invokeFlo = onRequest(async (req, res) => {
   if (req.method === 'OPTIONS') { res.status(204).send(''); return; }
   if (req.method !== 'POST')   { res.status(405).json({ error: 'POST only' }); return; }
 
-  // 1. Verify token
   const authHeader = req.headers.authorization ?? '';
   if (!authHeader.startsWith('Bearer ')) { res.status(401).json({ error: 'Missing Bearer token' }); return; }
 
-  let decodedToken: any;
-  try { decodedToken = await getAuth().verifyIdToken(authHeader.slice(7)); }
+  let decodedToken: { uid: string; permissions?: string[]; allowedFlos?: string[]; isHubAdmin?: boolean; hubId?: string; tenantId?: string };
+  try { decodedToken = await getAuth().verifyIdToken(authHeader.slice(7)) as typeof decodedToken; }
   catch { res.status(401).json({ error: 'Invalid or expired token' }); return; }
 
-  // 2. Read permissions from claims — never role strings
   const permissions:   string[] = decodedToken.permissions  ?? [];
   const allowedFlos:  string[] = decodedToken.allowedFlos ?? [];
   const isHubAdmin:    boolean  = decodedToken.isHubAdmin   ?? false;
   const tokenHubId:    string   = decodedToken.hubId        ?? '';
   const tokenTenantId: string   = decodedToken.tenantId     ?? '';
 
-  // 3. Validate params
   const { hubId, tenantId, floId } = req.query as Record<string, string>;
   if (!hubId || !tenantId || !floId) { res.status(400).json({ error: 'hubId, tenantId, floId required' }); return; }
   if (tokenHubId !== hubId || tokenTenantId !== tenantId) { res.status(403).json({ error: 'Token does not match hub/tenant' }); return; }
 
-  // 4. Permission checks — no role string comparisons
   if (!isHubAdmin && !permissions.includes('invoke:flows')) {
     res.status(403).json({ error: 'invoke:flows permission required' }); return;
   }
@@ -43,60 +43,113 @@ export const invokeFlo = onRequest(async (req, res) => {
     res.status(403).json({ error: `Not authorised for flo: ${floId}` }); return;
   }
 
-  // 5. Find flo across workspaces
   const wsSnap = await db.collection(`FloPlugHubs/${hubId}/Tenants/${tenantId}/Workspaces`).get();
-  let flo: { nodes: any[]; edges: any[]; workspaceId: string } | null = null;
+  let flo: {
+    nodes: unknown[];
+    edges: unknown[];
+    workspaceId: string;
+    doc: Record<string, unknown>;
+    publishedVersion: number;
+  } | null = null;
   for (const ws of wsSnap.docs) {
     const fSnap = await db
       .collection(`FloPlugHubs/${hubId}/Tenants/${tenantId}/Workspaces/${ws.id}/Flos`)
       .doc(floId).get();
     if (fSnap.exists) {
       const d = fSnap.data()!;
-      flo = { nodes: d.nodes ?? [], edges: d.edges ?? [], workspaceId: ws.id };
+      const published = getPublishedGraph(d as Record<string, unknown>);
+      if (!published) {
+        res.status(403).json({
+          error: `Flo ${floId} has no published graph. Publish from the designer first.`,
+          code: 'FLO_NOT_PUBLISHED',
+        });
+        return;
+      }
+      flo = {
+        nodes: published.nodes,
+        edges: published.edges,
+        workspaceId: ws.id,
+        doc: d as Record<string, unknown>,
+        publishedVersion: Number(d.publishedVersion ?? 0),
+      };
       break;
     }
   }
   if (!flo) { res.status(404).json({ error: `Flo not found: ${floId}` }); return; }
 
-  // 6. Parse body
+  const blockReason = getFloRunnableBlockReason(flo.doc, floId);
+  if (blockReason) {
+    res.status(403).json({ error: blockReason, code: 'FLO_NOT_RUNNABLE' });
+    return;
+  }
+
   const ct = req.headers['content-type'] ?? '';
   const inputJson: Record<string, unknown> = ct.includes('application/json')
     ? (typeof req.body === 'string' ? JSON.parse(req.body) : (req.body ?? {}))
     : { value: req.body, contentType: ct };
 
-  // 7. Create run log doc upfront
-  const runRef = db.collection(`FloPlugHubs/${hubId}/Tenants/${tenantId}/ExecutionLog`).doc();
+  const runRef = db.collection(`FloPlugHubs/${hubId}/Tenants/${tenantId}/${HUB_COLLECTIONS.EXEC_LOG}`).doc();
   const runId  = runRef.id;
   const log:   string[] = [];
-  const store = { global: {} as Record<string, any>, local: {} as Record<string, any> };
+  const store = { global: {} as Record<string, unknown>, local: {} as Record<string, unknown> };
+
+  const pubVer = Number(flo.doc.publishedVersion ?? 0);
+  const floVersion = pubVer > 0 ? pubVer : 1;
 
   await runRef.set({
     runId, floId, callerUid: decodedToken.uid, source: 'webhook',
+    floVersion,
+    executedGraph: 'published',
     inputJson, status: 'running', log: [], output: null,
+    nodeRecordCount: 0,
     startedAt: FieldValue.serverTimestamp(), timestamp: FieldValue.serverTimestamp(),
   });
 
   log.push(`╔══ WEBHOOK RUN: ${runId} ══╗`);
   log.push(`Flow: ${floId} · Caller: ${decodedToken.uid}`);
 
-  // 8. Execute — same engine as Designer Run button
+  const onNodeComplete = async (payload: NodeExecutionHubPayload) => {
+    await persistNodeExecutionRecord({
+      hubId, tenantId, runId, floId,
+      nodeId:    payload.nodeId,
+      nodeType:  payload.nodeType,
+      nodeLabel: payload.nodeLabel,
+      status:    payload.status,
+      before:    payload.before,
+      after:     payload.after,
+      logLine:   payload.logLine,
+      httpTrace: payload.httpTrace,
+      error:     payload.error,
+      durationMs: payload.durationMs,
+    });
+  };
+
   let floOutput: unknown = null;
   try {
     const ctx: RunContext = {
       hubId, tenantId, wsId: flo.workspaceId,
-      runId, store, log, depth: 0,
+      runId, floId, store, log, depth: 0,
+      onNodeComplete,
     };
-    floOutput = await executeFloNodes(flo.nodes, flo.edges, inputJson, ctx);
-  } catch (err: any) {
-    log.push(`Fatal error: ${err.message}`);
+    floOutput = await executeFloNodes(
+      flo.nodes as Parameters<typeof executeFloNodes>[0],
+      flo.edges as Parameters<typeof executeFloNodes>[1],
+      inputJson,
+      ctx,
+    );
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.push(`Fatal error: ${message}`);
   }
 
   log.push(`╚══ END WEBHOOK RUN: ${runId} ══╝`);
-  const status = log.some(l => l.includes('Error in') || l.includes('Fatal')) ? 'error' : 'success';
+  const status = log.some(l => l.includes('Error in') || l.includes('Fatal error')) ? 'error' : 'success';
+  const { extractRunErrorFromLog } = await import('@floplug/shared');
+  const errorMessage = status === 'error' ? extractRunErrorFromLog(log) : undefined;
 
-  // 9. Update log
   await runRef.update({
     log, output: floOutput, status,
+    ...(errorMessage ? { errorMessage } : {}),
     completedAt: FieldValue.serverTimestamp(),
     updatedAt:   FieldValue.serverTimestamp(),
   });

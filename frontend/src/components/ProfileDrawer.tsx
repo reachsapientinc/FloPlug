@@ -7,7 +7,7 @@
  * Shows:
  *   - User name + email + role badge
  *   - Admin Dashboard link (isHubAdmin only)
- *   - Execution Viewer link (view:logs permission)
+ *   - FloExecution Hub link (all authenticated users)
  *   - Scheduler link (invoke:flos permission)
  *   - Preferences (placeholder)
  *   - Sign out
@@ -72,7 +72,6 @@ const ProfileDrawer: React.FC<ProfileDrawerProps> = ({
   }, [open]);
 
   const initials = (user.displayName ?? user.email).slice(0, 2).toUpperCase();
-  const canViewLogs    = isHubAdmin || permissions.includes(PERMISSIONS.VIEW_LOGS);
   const canSchedule    = isHubAdmin || permissions.includes(PERMISSIONS.INVOKE_FLOS);
 
   const navItem = (
@@ -223,7 +222,7 @@ const ProfileDrawer: React.FC<ProfileDrawerProps> = ({
           {/* Navigation items */}
           <div style={{ padding: '6px 0' }}>
             {isHubAdmin && navItem('Admin Dashboard', '⚙️', 'admin', 'ADMIN')}
-            {canViewLogs && navItem('Execution Viewer', '📊', 'executions')}
+            {navItem('FloExecution Hub', '📊', 'executions')}
             {canSchedule  && navItem('Scheduler', '⏰', 'scheduler')}
             {navItem('Preferences', '🎨', 'preferences')}
           </div>

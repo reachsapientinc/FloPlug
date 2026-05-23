@@ -69,6 +69,7 @@ export async function testPlugNode(
       nodeConfig: {
         urlVariables:  d.urlVariables,
         emailBindings: d.emailBindings,
+        connectionId:  d.connectionId,
         outputTarget:  d.outputTarget ?? 'cStream',
         outputVarName: d.outputVarName ?? '',
         method:        d.method,

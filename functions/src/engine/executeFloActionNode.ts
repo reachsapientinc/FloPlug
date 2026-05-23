@@ -12,7 +12,7 @@ import {
   FloActionAuthError,
   FloActionSchemaError,
 } from './floActionErrors.js';
-import type { StreamSource } from '@floplug/shared';
+import type { StreamSource, NodeHttpTrace } from '@floplug/shared';
 
 export interface FloActionNodeData {
   actionId:      string;
@@ -43,6 +43,7 @@ export interface FloActionNodeResult {
   localStore:  Record<string, unknown>;
   globalStore: Record<string, unknown>;
   logLine:     string;
+  httpTrace?:  NodeHttpTrace;
 }
 
 function resolveInputPayload(
@@ -117,7 +118,11 @@ export async function executeFloActionNode(
     if (err instanceof FloActionValidationError) throw err;
     if (err instanceof FloActionAuthError) throw err;
     if (err instanceof FloActionSchemaError) throw err;
-    if (err instanceof FloActionNetworkError) throw err;
+    if (err instanceof FloActionNetworkError) {
+      const netErr = err as FloActionNetworkError & { httpTrace?: NodeHttpTrace };
+      if (netErr.httpTrace) throw netErr;
+      throw err;
+    }
     throw err;
   }
 
@@ -170,5 +175,6 @@ export async function executeFloActionNode(
     localStore: nextLocal,
     globalStore: nextGlobal,
     logLine,
+    httpTrace:  result.httpTrace,
   };
 }

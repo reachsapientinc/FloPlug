@@ -58,6 +58,8 @@ export interface TenantUser {
   isHubAdmin : boolean;
   isActive : boolean;
   forcePasswordReset : boolean;
+  /** User's preferred workspace to open in designer */
+  defaultWorkspaceId?: string;
 }
 
 // ── Cloud Function payloads ───────────────────────────────────────────────────

@@ -5,9 +5,9 @@
 
 import { getFirestore } from 'firebase-admin/firestore';
 import type {
-  AuthProtocol, ConnectorDoc, FloConnectionDoc, PlugCredentialValues,
+  AuthProtocol, ConnectorDoc, FloConnectionDoc, PlugCredentialValues, NodeHttpTrace,
 } from '@floplug/shared';
-import { COLLECTIONS, HUB_COLLECTIONS, SUB_COLLECTIONS } from '@floplug/shared';
+import { COLLECTIONS, HUB_COLLECTIONS, SUB_COLLECTIONS, redactSecretHeaders } from '@floplug/shared';
 import { applyAuth } from './applyAuth.js';
 import { loadActionDocWithSchema } from './resolveActionSchema.js';
 import { resolveFloActionMappingTarget } from './resolveFloActionMappingTarget.js';
@@ -66,6 +66,7 @@ export interface ExecuteFloActionResult {
   executionMs:     number;
   _actionStatus:   'success' | 'error';
   debug?:          FloActionDebugInfo;
+  httpTrace?:      NodeHttpTrace;
 }
 
 function errorContext(input: ExecuteFloActionInput): FloActionErrorContext {
@@ -201,19 +202,6 @@ function primaryMappingStore(
   return { cStream: payload, localStore, globalStore };
 }
 
-function redactHeaders(headers: Record<string, string>): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(headers)) {
-    const lower = k.toLowerCase();
-    if (lower === 'authorization' || lower.includes('api-key') || lower.includes('token')) {
-      out[k] = '[REDACTED]';
-    } else {
-      out[k] = v;
-    }
-  }
-  return out;
-}
-
 export async function executeFloActionCore(
   input: ExecuteFloActionInput,
 ): Promise<ExecuteFloActionResult> {
@@ -279,7 +267,8 @@ export async function executeFloActionCore(
     localStore:   stores.localStore,
     globalStore:  stores.globalStore,
     mappingRules: input.mappingRules,
-    explicitRulesOnly: (input.mappingRules?.length ?? 0) > 0,
+    /** Production: never server-side guess mappings — explicit rules only */
+    explicitRulesOnly: true,
   });
 
   const requestBodyInner = buildRequestBody(actionDoc, resolved);
@@ -330,7 +319,7 @@ export async function executeFloActionCore(
     unmappedRequired,
     mappedFieldCount:    Object.keys(resolved).length,
     schemaFieldCount:    actionDoc.inputSchema?.length ?? 0,
-    headersSafe:         redactHeaders(headers),
+    headersSafe:         redactSecretHeaders(headers),
     validationWouldFail,
   } : undefined;
 
@@ -354,17 +343,32 @@ export async function executeFloActionCore(
 
   const response = await fetchWithRetry(url, init, ctx);
   const responseText = await response.text();
+  const responseContentType = response.headers.get('content-type')
+    ?? actionDoc.contentType ?? 'application/json';
+
+  const httpTrace: NodeHttpTrace = {
+    method,
+    url,
+    requestHeaders: redactSecretHeaders(headers),
+    requestBody:    body,
+    status:         response.status,
+    statusText:     response.statusText,
+    responseBody:   responseText,
+    responseContentType,
+  };
 
   if (!response.ok) {
-    console.error(`[executeFloAction] Error response (${response.status}): ${responseText.slice(0, 500)}`);
-    throw new FloActionNetworkError(
+    const netErr = new FloActionNetworkError(
       `Connector request failed with status ${response.status}`,
       ctx,
       response.status,
-    );
+    ) as FloActionNetworkError & { httpTrace?: NodeHttpTrace };
+    netErr.httpTrace = httpTrace;
+    console.error(`[executeFloAction] Error response (${response.status}): ${responseText.slice(0, 500)}`);
+    throw netErr;
   }
 
-  const contentType = response.headers.get('content-type') ?? actionDoc.contentType ?? 'application/json';
+  const contentType = responseContentType;
   const payload     = parseActionResponse(responseText, actionDoc, contentType, ctx);
 
   return {
@@ -373,5 +377,6 @@ export async function executeFloActionCore(
     executionMs: Date.now() - startMs,
     _actionStatus: 'success',
     debug: debugInfo,
+    httpTrace,
   };
 }

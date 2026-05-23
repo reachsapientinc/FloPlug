@@ -45,6 +45,8 @@ export interface TenantUser {
     isHubAdmin: boolean;
     isActive: boolean;
     forcePasswordReset: boolean;
+    /** User's preferred workspace to open in designer */
+    defaultWorkspaceId?: string;
 }
 export interface InviteAdminData {
     email: string;

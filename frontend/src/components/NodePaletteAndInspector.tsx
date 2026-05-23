@@ -266,14 +266,17 @@ export const NodePalette: React.FC<NodePaletteProps> = ({ plugs = [], floActions
     e.dataTransfer.setData('application/flonode-type',  'plugNode');
     e.dataTransfer.setData('application/flonode-label', plug.name);
     e.dataTransfer.setData('application/flonode-meta',  JSON.stringify({
-      plugId:         plug.id,
-      plugName:       plug.name,
-      urlPattern:     plug.urlPattern,
-      variableHints:  plug.variableHints ?? [],
-      connectorId:    plug.connectorId,
-      connectorLabel: plug.connectorLabel ?? plug.connectorId,
-      authProtocol:   plug.authProtocol,
-      category:       plug.authProtocol === 'smtp_basic' ? 'email' : (plug.connectorId ?? ''),
+      plugId:               plug.id,
+      plugName:             plug.name,
+      urlPattern:           plug.urlPattern,
+      variableHints:        plug.variableHints ?? [],
+      connectorId:          plug.connectorId,
+      connectorLabel:       plug.connectorLabel ?? plug.connectorId,
+      authProtocol:         plug.authProtocol,
+      category:             plug.authProtocol === 'smtp_basic' ? 'email' : (plug.connectorId ?? ''),
+      defaultConnectionId:  plug.defaultConnectionId ?? plug.connectionId ?? '',
+      allowedConnectionIds: plug.allowedConnectionIds ?? [],
+      connectionId:         plug.defaultConnectionId ?? plug.connectionId ?? '',
     }));
     e.dataTransfer.effectAllowed = 'move';
   };

@@ -1,0 +1,995 @@
+.flo-hub {
+  --bg: #07090f;
+  --panel: #0c0f1a;
+  --card: #111622;
+  --card2: #161c2e;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-md: rgba(255, 255, 255, 0.14);
+  --cyan: #38bdf8;
+  --cyan-dim: rgba(56, 189, 248, 0.13);
+  --cyan-border: rgba(56, 189, 248, 0.38);
+  --amber: #fbbf24;
+  --amber-dim: rgba(251, 191, 36, 0.13);
+  --green: #34d399;
+  --green-dim: rgba(52, 211, 153, 0.13);
+  --green-border: rgba(52, 211, 153, 0.32);
+  --red: #f87171;
+  --red-dim: rgba(248, 113, 113, 0.13);
+  --red-border: rgba(248, 113, 113, 0.32);
+  --purple: #c084fc;
+  --slate: #94a3b8;
+  --t1: #f1f5f9;
+  --t2: #94a3b8;
+  --t3: #4a5a72;
+  --t4: #2a3548;
+  --mono: 'JetBrains Mono', 'Courier New', monospace;
+
+  background: var(--bg);
+  color: var(--t1);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+@keyframes flo-pdot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.65); }
+}
+
+@keyframes flo-fadein {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.flo-hub .topbar {
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 18px;
+  height: 50px;
+  flex-shrink: 0;
+  gap: 12px;
+}
+
+.flo-hub .logo-text {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.3px;
+}
+
+.flo-hub .logo-text em {
+  color: var(--cyan);
+  font-style: normal;
+}
+
+.flo-hub .ntab {
+  font-size: 12px;
+  color: var(--t3);
+  padding: 6px 13px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  transition: all 0.14s;
+}
+
+.flo-hub .ntab:hover {
+  color: var(--t2);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.flo-hub .ntab.on {
+  color: var(--cyan);
+  background: var(--cyan-dim);
+}
+
+.flo-hub .back-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-md);
+  background: transparent;
+  color: var(--t2);
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.flo-hub .back-btn:hover {
+  color: var(--t1);
+  border-color: var(--cyan-border);
+}
+
+.flo-hub .live {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--green);
+  background: var(--green-dim);
+  padding: 3px 10px;
+  border-radius: 20px;
+  border: 1px solid var(--green-border);
+}
+
+.flo-hub .ldot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  animation: flo-pdot 1.4s ease-in-out infinite;
+}
+
+.flo-hub .body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.flo-hub .view {
+  display: none;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+  animation: flo-fadein 0.2s ease;
+}
+
+.flo-hub .view.on {
+  display: flex;
+}
+
+.flo-hub .metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  padding: 14px 20px;
+  flex-shrink: 0;
+}
+
+.flo-hub .mc {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+
+.flo-hub .mc.cc { border-left: 3px solid var(--cyan); }
+.flo-hub .mc.cg { border-left: 3px solid var(--green); }
+.flo-hub .mc.ca { border-left: 3px solid var(--amber); }
+.flo-hub .mc.cr { border-left: 3px solid var(--red); }
+
+.flo-hub .mc-lbl {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--t3);
+  margin-bottom: 5px;
+}
+
+.flo-hub .mc-val {
+  font-size: 22px;
+  font-weight: 600;
+  font-family: var(--mono);
+}
+
+.flo-hub .run-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 16px;
+  cursor: pointer;
+  transition: border-color 0.14s;
+  margin-bottom: 8px;
+}
+
+.flo-hub .run-card:hover { border-color: var(--border-md); }
+.flo-hub .run-card.sel {
+  border-color: var(--cyan-border);
+  background: rgba(56, 189, 248, 0.04);
+}
+
+.flo-hub .status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.flo-hub .status-dot.running {
+  background: var(--cyan);
+  animation: flo-pdot 1.2s ease-in-out infinite;
+}
+
+.flo-hub .status-dot.success { background: var(--green); }
+.flo-hub .status-dot.error { background: var(--red); }
+.flo-hub .status-dot.unknown { background: var(--t4); }
+
+.flo-hub .pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  border-radius: 20px;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.flo-hub .pill.running { color: var(--cyan); background: var(--cyan-dim); border: 1px solid var(--cyan-border); }
+.flo-hub .pill.success { color: var(--green); background: var(--green-dim); border: 1px solid var(--green-border); }
+.flo-hub .pill.error { color: var(--red); background: var(--red-dim); border: 1px solid var(--red-border); }
+.flo-hub .pill.unknown { color: var(--slate); background: rgba(148, 163, 184, 0.1); border: 1px solid var(--border-md); }
+
+.flo-hub .pulse-layout {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.flo-hub .sidebar {
+  width: 200px;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  overflow-y: auto;
+  padding: 12px 10px;
+}
+
+.flo-hub .sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  margin-bottom: 2px;
+  border: 1px solid transparent;
+  color: var(--t2);
+  font-size: 11.5px;
+}
+
+.flo-hub .sidebar-item:hover { background: rgba(255, 255, 255, 0.04); }
+.flo-hub .sidebar-item.on {
+  background: var(--cyan-dim);
+  border-color: var(--cyan-border);
+  color: var(--cyan);
+}
+
+.flo-hub .pulse-main {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.flo-hub .run-list {
+  width: 320px;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  padding: 12px;
+  flex-shrink: 0;
+}
+
+.flo-hub .detail-panel {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+  background: var(--panel);
+}
+
+.flo-hub .node-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+
+.flo-hub .node-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+
+.flo-hub .node-card-body {
+  border-top: 1px solid var(--border);
+  padding: 12px 14px;
+}
+
+.flo-hub .json-block {
+  background: var(--card2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--t2);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.flo-hub .empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 24px;
+  color: var(--t3);
+  text-align: center;
+}
+
+.flo-hub .alert-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 10px;
+}
+
+.flo-hub .alert-card.critical { border-left: 3px solid var(--red); }
+.flo-hub .alert-card.warning { border-left: 3px solid var(--amber); }
+
+.flo-hub .refresh-btn {
+  font-size: 11px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-md);
+  background: transparent;
+  color: var(--t2);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.flo-hub .refresh-btn:hover {
+  color: var(--t1);
+  border-color: var(--cyan-border);
+}
+
+.flo-hub .scroll-area {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 20px 20px;
+}
+
+.flo-hub .dash-header {
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+
+.flo-hub .error-banner {
+  margin: 12px 20px 0;
+  padding: 10px 14px;
+  background: var(--red-dim);
+  border: 1px solid var(--red-border);
+  border-radius: 8px;
+  color: var(--red);
+  font-size: 12px;
+}
+
+.flo-hub .detail-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.flo-hub .hub-detail-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.flo-hub .hub-detail-tab {
+  font-size: 11px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--t3);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.flo-hub .hub-detail-tab.on {
+  color: var(--cyan);
+  border-color: var(--cyan-border);
+  background: var(--cyan-dim);
+}
+
+.flo-hub .hub-pipeline-wrap {
+  height: 320px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  margin-bottom: 14px;
+  background: var(--card);
+}
+
+.flo-hub .hub-pipeline-empty {
+  font-size: 12px;
+  color: var(--t3);
+  padding: 24px;
+  border: 1px dashed var(--border-md);
+  border-radius: 10px;
+  margin-bottom: 14px;
+}
+
+.flo-hub .hub-exec-node {
+  width: 190px;
+  padding: 10px 12px 8px;
+  border-radius: 10px;
+  background: var(--card2);
+  border: 1.5px solid var(--border-md);
+  font-size: 11px;
+  transition: box-shadow 0.15s;
+}
+
+.flo-hub .hub-exec-node.err {
+  animation: hub-pulse-err 2s ease-in-out infinite;
+}
+
+.flo-hub .hub-exec-node.sel {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+@keyframes hub-pulse-err {
+  0%, 100% { box-shadow: 0 0 8px rgba(248, 113, 113, 0.25); }
+  50% { box-shadow: 0 0 18px rgba(248, 113, 113, 0.5); }
+}
+
+.flo-hub .hub-exec-step {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--t3);
+  margin-bottom: 4px;
+}
+
+.flo-hub .hub-exec-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--t1);
+  margin-bottom: 2px;
+}
+
+.flo-hub .hub-exec-type {
+  font-size: 9px;
+  color: var(--t3);
+  font-family: var(--mono);
+  margin-bottom: 8px;
+}
+
+.flo-hub .hub-exec-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.flo-hub .hub-exec-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid;
+}
+
+.flo-hub .hub-exec-metric {
+  font-size: 9px;
+  color: var(--t3);
+  font-family: var(--mono);
+}
+
+.flo-hub .hub-exec-error {
+  margin-top: 8px;
+  font-size: 9px;
+  color: var(--red);
+  line-height: 1.35;
+  padding: 6px 8px;
+  background: var(--red-dim);
+  border-radius: 6px;
+}
+
+.flo-hub .hub-exec-handle {
+  width: 6px !important;
+  height: 6px !important;
+  background: var(--t3) !important;
+  border: none !important;
+}
+
+/* ── Live Monitor layout (mockup-aligned) ───────────────────────────────── */
+.flo-hub .live-monitor-layout {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.flo-hub .hub-sidebar {
+  width: 220px;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  flex-shrink: 0;
+  overflow-y: auto;
+  padding: 14px 10px;
+}
+
+.flo-hub .hub-sidebar-section {
+  margin-bottom: 18px;
+}
+
+.flo-hub .hub-sidebar-heading {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--t4);
+  margin-bottom: 8px;
+  padding: 0 6px;
+}
+
+.flo-hub .hub-sidebar-count {
+  font-size: 10px;
+  font-family: var(--mono);
+  color: var(--t3);
+  background: rgba(255,255,255,0.04);
+  padding: 1px 6px;
+  border-radius: 10px;
+}
+
+.flo-hub .sidebar-item {
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.flo-hub .hub-legend-row {
+  display: flex;
+  gap: 8px;
+  padding: 5px 6px;
+  margin-bottom: 4px;
+}
+
+.flo-hub .hub-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 4px;
+}
+
+.flo-hub .hub-legend-label {
+  font-size: 11px;
+  color: var(--t2);
+  font-weight: 500;
+}
+
+.flo-hub .hub-legend-hint {
+  font-size: 9px;
+  color: var(--t3);
+  line-height: 1.3;
+}
+
+.flo-hub .live-monitor-center {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+}
+
+.flo-hub .live-monitor-detail {
+  width: min(520px, 42vw);
+  flex-shrink: 0;
+}
+
+.flo-hub .live-monitor-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  padding: 14px 18px 10px;
+  flex-shrink: 0;
+}
+
+.flo-hub .live-monitor-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.flo-hub .live-monitor-sub {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: var(--t3);
+}
+
+.flo-hub .live-monitor-metrics {
+  padding: 0 18px 12px;
+}
+
+.flo-hub .mc-sub {
+  font-size: 10px;
+  color: var(--t3);
+  margin-top: 4px;
+}
+
+.flo-hub .mc.cp { border-left: 3px solid var(--purple); }
+
+.flo-hub .live-monitor-runs-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--t3);
+  padding: 0 18px 8px;
+  flex-shrink: 0;
+}
+
+.flo-hub .live-monitor-runs {
+  flex: 1;
+  padding: 0 18px 16px;
+}
+
+.flo-hub .run-card-progress {
+  padding: 14px 16px;
+}
+
+.flo-hub .run-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--t1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flo-hub .run-card-runid {
+  font-weight: 400;
+  color: var(--t3);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.flo-hub .run-card-sub {
+  font-size: 10px;
+  color: var(--t3);
+  margin-top: 2px;
+}
+
+.flo-hub .run-card-version {
+  font-size: 9px;
+  font-weight: 700;
+  color: #fbbf24;
+  background: rgba(251,191,36,0.12);
+  border: 0.5px solid rgba(251,191,36,0.35);
+  border-radius: 4px;
+  padding: 1px 5px;
+  flex-shrink: 0;
+}
+
+.flo-hub .run-card-err-snippet {
+  margin-top: 8px;
+  font-size: 10px;
+  color: var(--red);
+  line-height: 1.4;
+}
+
+.flo-hub .run-progress-track {
+  height: 4px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.flo-hub .run-progress-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.flo-hub .run-progress-fill.pulsing {
+  animation: hub-progress-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes hub-progress-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+/* ── Run detail panel ─────────────────────────────────────────────────────── */
+.flo-hub .run-detail-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  height: 100%;
+  overflow-y: auto;
+  padding-bottom: 24px;
+}
+
+.flo-hub .run-detail-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.flo-hub .run-detail-meta {
+  font-size: 10px;
+  color: var(--t3);
+  font-family: var(--mono);
+}
+
+.flo-hub .run-detail-kpis {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.flo-hub .run-kpi {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.flo-hub .run-kpi-l {
+  display: block;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--t3);
+  margin-bottom: 3px;
+}
+
+.flo-hub .run-kpi-v {
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--mono);
+  color: var(--t1);
+}
+
+.flo-hub .run-detail-error {
+  font-size: 11px;
+  color: var(--red);
+  padding: 10px 12px;
+  background: var(--red-dim);
+  border-radius: 8px;
+  margin-bottom: 10px;
+  line-height: 1.45;
+}
+
+.flo-hub .run-detail-pipeline-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--t3);
+  margin-bottom: 8px;
+}
+
+.flo-hub .hub-pipeline-wrap-tall {
+  height: min(420px, 38vh);
+  min-height: 280px;
+  flex-shrink: 0;
+}
+
+.flo-hub .run-detail-records-toggle {
+  margin: 12px 0 8px;
+}
+
+/* ── Node inspector ───────────────────────────────────────────────────────── */
+.flo-hub .hub-node-inspector {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-top: 12px;
+}
+
+.flo-hub .hub-node-inspector-empty {
+  text-align: center;
+  color: var(--t3);
+  padding: 24px 16px;
+}
+
+.flo-hub .hub-inspector-empty-icon {
+  font-size: 24px;
+  margin-bottom: 8px;
+  opacity: 0.5;
+}
+
+.flo-hub .hub-inspector-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.flo-hub .hub-inspector-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--t1);
+}
+
+.flo-hub .hub-inspector-meta {
+  font-size: 10px;
+  color: var(--t3);
+  font-family: var(--mono);
+}
+
+.flo-hub .hub-inspector-close {
+  border: none;
+  background: transparent;
+  color: var(--t3);
+  font-size: 18px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+.flo-hub .hub-inspector-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.flo-hub .hub-inspector-metric {
+  background: var(--card2);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.flo-hub .hub-inspector-metric-lbl {
+  font-size: 9px;
+  color: var(--t3);
+  text-transform: uppercase;
+}
+
+.flo-hub .hub-inspector-metric-val {
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--mono);
+}
+
+.flo-hub .hub-inspector-metric-val.mono,
+.flo-hub .mono { font-family: var(--mono); }
+
+.flo-hub .hub-inspector-logline {
+  font-size: 11px;
+  color: var(--t2);
+  padding: 8px 10px;
+  background: var(--card2);
+  border-radius: 6px;
+  margin-bottom: 10px;
+  line-height: 1.45;
+}
+
+.flo-hub .hub-inspector-error {
+  font-size: 11px;
+  color: var(--red);
+  padding: 8px 10px;
+  background: var(--red-dim);
+  border-radius: 6px;
+  margin-bottom: 10px;
+}
+
+.flo-hub .hub-inspector-section {
+  margin-bottom: 12px;
+}
+
+.flo-hub .hub-inspector-section-title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--cyan);
+  margin-bottom: 8px;
+}
+
+.flo-hub .hub-inspector-subtitle {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--t3);
+  margin-bottom: 4px;
+}
+
+.flo-hub .hub-inspector-kv {
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+.flo-hub .hub-inspector-k {
+  color: var(--t3);
+  min-width: 64px;
+  flex-shrink: 0;
+}
+
+.flo-hub .hub-inspector-v {
+  color: var(--t2);
+}
+
+.flo-hub .hub-inspector-io {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.flo-hub .hub-inspector-muted {
+  font-size: 11px;
+  color: var(--t3);
+  font-style: italic;
+}
+
+.flo-hub .hub-node-error-ring {
+  position: absolute;
+  inset: -4px;
+  border: 2px solid var(--red);
+  border-radius: 12px;
+  pointer-events: none;
+  animation: hub-pulse-err 2s ease-in-out infinite;
+}
+
+.flo-hub .hub-node-active-ring {
+  position: absolute;
+  inset: -4px;
+  border: 2px solid var(--cyan);
+  border-radius: 12px;
+  pointer-events: none;
+  animation: hub-progress-pulse 1.4s ease-in-out infinite;
+}
+
+.flo-hub .hub-json-full {
+  max-height: 480px;
+}
+
+.flo-hub .hub-inspector-storage {
+  font-size: 10px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  background: var(--card2);
+  border-radius: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -22px;
+  font-size: 9px;
+  color: var(--red);
+  text-align: center;
+  pointer-events: none;
+}

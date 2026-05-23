@@ -42,7 +42,16 @@ export declare const HUB_COLLECTIONS: {
     readonly PLUGS: "Plugs";
     readonly FLO_CONNECTIONS: "FloConnections";
     readonly USERS: "Users";
-    readonly EXEC_LOG: "ExecutionLog";
+    /** Flo run log: FloPlugHubs/{hubId}/Tenants/{tenantId}/FloExecutionLog/{runId} */
+    readonly EXEC_LOG: "FloExecutionLog";
+    /** Per-run node JSON: …/FloExecutionLog/{runId}/FloNodeRecords/{nodeId} */
+    readonly EXEC_NODE_RECORDS: "FloNodeRecords";
+    /** Latest validation per flo: …/Tenants/{tenantId}/FloValidation/{floId} */
+    readonly FLO_VALIDATION: "FloValidation";
+    /** Tenant alerts: …/Tenants/{tenantId}/FloAlerts/{alertId} */
+    readonly FLO_ALERTS: "FloAlerts";
+    /** Immutable publish snapshots: …/Flos/{floId}/Versions/{version} */
+    readonly FLO_VERSIONS: "Versions";
     readonly CONNECTORS: "ConnectorCredentials";
     readonly EMAIL_LOG: "EmailLog";
     readonly SCHEMAS: "Schemas";

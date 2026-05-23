@@ -6,10 +6,11 @@ export interface DesignerProps {
   userId:       string;
   userRole:     string;
   workspaceIds: string[];
-  floId?:      string;
+  floId?:       string;
   isAdmin?:     boolean;
-  permissions?: string[];    // ← ADD
+  permissions?: string[];
   onSignOut?:   () => void;
+  onActiveFloChange?: (flo: FloMeta | null) => void;
 }
 
 export interface WorkspaceMeta {
@@ -19,6 +20,8 @@ export interface WorkspaceMeta {
   defaultToLoad: boolean;
 }
 
+export type FloCanvasStatus = 'idle' | 'draft' | 'active' | 'invalid';
+
 export interface FloMeta {
   id:             string;
   name:           string;
@@ -26,9 +29,19 @@ export interface FloMeta {
   integrationId:  string;
   workspaceId:    string;
   status:         string;
+  /** draft | published — set when user publishes */
+  publishState?:  'draft' | 'published';
+  validationStatus?: 'valid' | 'invalid' | 'warnings' | 'unknown';
+  validationErrorCount?: number;
+  validationWarningCount?: number;
+  lastValidatedAt?: string;
+  /** @deprecated use defaultToLoad — workspace default flo */
   isDefault?:     boolean;
+  /** Opens automatically when entering this workspace */
   defaultToLoad?: boolean;
-  invokePermissions?: FloInvokePermissions; 
+  publishedVersion?: number;
+  hasUnpublishedChanges?: boolean;
+  invokePermissions?: FloInvokePermissions;
 }
 
 export interface NewFloForm {

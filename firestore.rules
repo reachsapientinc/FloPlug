@@ -9,8 +9,8 @@ service cloud.firestore {
     function isProductAdmin() {
       return isSignedIn() &&
         request.auth.token.get('role', '') in
-          ['product_admin', 'developer', 'admin_sales'] && 
-          request.auth.token.get('isAdmin', 'false') == true;
+          ['product_admin', 'developer', 'admin_sales'] &&
+        request.auth.token.get('isAdmin', 'false') == true;
     }
 
     function isHubAdmin() {
@@ -29,23 +29,57 @@ service cloud.firestore {
         perm in request.auth.token.get('permissions', []);
     }
 
+    function canReadTenantFloData(hubId, tenantId) {
+      return isProductAdmin() ||
+        (belongsToHub(hubId, tenantId) && hasPermission('view:logs'));
+    }
+
+    function canReadTenantFloAlerts(hubId, tenantId) {
+      return isProductAdmin() ||
+        (belongsToHub(hubId, tenantId) &&
+          (isHubAdmin() || hasPermission('view:logs')));
+    }
+
     // ── CollectionGroup — Tenants slug resolution (BEFORE login) ─────────────
-    // Must be top-level with {path=**} for collectionGroup queries to work.
-    // tenantResolver.ts uses collectionGroup('Tenants') unauthenticated.
 
     match /{path=**}/Tenants/{tenantId} {
       allow read: if true;
     }
 
+    // ── Product dashboard: cross-hub collectionGroup on Flo* tenant data ─────
+    // FloAlerts / FloValidation / FloNodeRecords / FloExecutionLog live under
+    // FloPlugHubs/{hubId}/Tenants/{tenantId}/ — never at hub root without tenant.
+
+    match /{path=**}/FloAlerts/{alertId} {
+      allow read, write: if isProductAdmin();
+    }
+
+    match /{path=**}/FloValidation/{floId} {
+      allow read, write: if isProductAdmin();
+    }
+
+    match /{path=**}/FloNodeRecords/{nodeId} {
+      allow read, write: if isProductAdmin();
+    }
+
+    match /{path=**}/FloExecutionLog/{runId} {
+      allow read, write: if isProductAdmin();
+    }
+
+    // Legacy execution log path (read-only for hub users; product admin via group above)
+    match /{path=**}/ExecutionLog/{runId} {
+      allow read: if isProductAdmin();
+      allow write: if isProductAdmin();
+    }
+
     // ── FloPlugGlobalSettings ─────────────────────────────────────────────────
 
-// CORRECT SYNTAX: This instantly covers all documents and subcollections at any depth
-      match /FloPlugGlobalSettings/{allChildren=**} {
-        allow read:  if isSignedIn();
-        allow write: if isProductAdmin();
-      }
+    match /FloPlugGlobalSettings/{allChildren=**} {
+      allow read:  if isSignedIn();
+      allow write: if isProductAdmin();
+    }
 
-    // ── FloPlugRegistry (product-level: hub slug locks, schema index, …) ───────
+    // ── FloPlugRegistry (product-level) ───────────────────────────────────────
 
     match /FloPlugRegistry/{globalConfigId} {
       allow read:  if isSignedIn();
@@ -57,7 +91,7 @@ service cloud.firestore {
       }
     }
 
-    // ── FloPlugConnectors ─────────────────────────────────────────────────────
+    // ── FloPlugConnectors (product-level) ─────────────────────────────────────
 
     match /FloPlugConnectors/{connectorId} {
       allow read:  if isSignedIn();
@@ -82,31 +116,28 @@ service cloud.firestore {
           allow write: if isProductAdmin();
         }
 
-        // Product templates: FloPlugConnectors/{id}/FloKits/{kitId}/ActionNodes
-        // (distinct from connector-level /ActionNodes used elsewhere)
         match /ActionNodes/{actionNodeId} {
           allow read:  if isSignedIn();
           allow write: if isProductAdmin();
         }
       }
-      
+
       match /ActionNodes/{actionId} {
         allow read:  if isSignedIn();
         allow write: if isProductAdmin();
       }
     }
 
-    // ── FloPlugAdmins ─────────────────────────────────────────────────────────
+    // ── FloPlugAdmins (product-level) ─────────────────────────────────────────
 
     match /FloPlugAdmins/{uid} {
       allow read:  if isProductAdmin() || request.auth.uid == uid;
       allow write: if isProductAdmin();
     }
 
-    //---FloPlugTiers
     match /FloPlugTiers/{tierId} {
-        allow read:  if isSignedIn() && (isHubAdmin() || isProductAdmin());
-        allow write: if isProductAdmin();
+      allow read:  if isSignedIn() && (isHubAdmin() || isProductAdmin());
+      allow write: if isProductAdmin();
     }
 
     // ── FloPlugHubs ───────────────────────────────────────────────────────────
@@ -126,10 +157,20 @@ service cloud.firestore {
         }
 
         match /Workspaces/{wsId} {
-          allow read:  if belongsToHub(hubId, tenantId);
-          allow write: if isHubAdmin() && belongsToHub(hubId, tenantId);
+          allow read: if belongsToHub(hubId, tenantId);
+          // Developers own workspaces; hub admins retain full control
+          allow create: if belongsToHub(hubId, tenantId) && (
+            (isHubAdmin()) ||
+            (hasPermission('design:flows') &&
+              request.resource.data.ownerUid == request.auth.uid)
+          );
+          allow update, delete: if belongsToHub(hubId, tenantId) && (
+            (isHubAdmin()) ||
+            (hasPermission('design:flows') &&
+              resource.data.ownerUid == request.auth.uid)
+          );
 
-        match /FloConnections/{connectionId} {
+          match /FloConnections/{connectionId} {
             allow read: if belongsToHub(hubId, tenantId);
             allow write: if isProductAdmin() || (isHubAdmin() && belongsToHub(hubId, tenantId));
           }
@@ -137,6 +178,11 @@ service cloud.firestore {
           match /Flos/{floId} {
             allow read:  if belongsToHub(hubId, tenantId);
             allow write: if belongsToHub(hubId, tenantId) && hasPermission('design:flows');
+
+            match /Versions/{versionId} {
+              allow read:  if belongsToHub(hubId, tenantId);
+              allow write: if belongsToHub(hubId, tenantId) && hasPermission('design:flows');
+            }
           }
         }
 
@@ -149,18 +195,55 @@ service cloud.firestore {
         match /Users/{uid} {
           allow read:  if belongsToHub(hubId, tenantId) ||
                           (isSignedIn() && request.auth.uid == uid);
-          allow write: if isHubAdmin() && belongsToHub(hubId, tenantId);
+          allow create, delete: if isHubAdmin() && belongsToHub(hubId, tenantId);
+          allow update: if belongsToHub(hubId, tenantId) && (
+            (isHubAdmin()) ||
+            (request.auth.uid == uid &&
+              request.resource.data.diff(resource.data).affectedKeys()
+                .hasOnly(['defaultWorkspaceId', 'workspaceIds']))
+          );
         }
 
+        // ── Flo execution & validation (tenant / environment scoped) ─────────
+
+        match /FloExecutionLog/{runId} {
+          allow read:  if canReadTenantFloData(hubId, tenantId);
+          allow write: if isProductAdmin();
+
+          match /FloNodeRecords/{nodeId} {
+            allow read:  if canReadTenantFloData(hubId, tenantId);
+            allow write: if isProductAdmin();
+          }
+        }
+
+        // Legacy path — keep read access for existing runs
         match /ExecutionLog/{runId} {
-          allow read:  if belongsToHub(hubId, tenantId) &&
-                          hasPermission('view:logs');
-          allow write: if false;
+          allow read:  if canReadTenantFloData(hubId, tenantId);
+          allow write: if isProductAdmin();
+
+          match /NodeRecords/{nodeId} {
+            allow read:  if canReadTenantFloData(hubId, tenantId);
+            allow write: if isProductAdmin();
+          }
+
+          match /FloNodeRecords/{nodeId} {
+            allow read:  if canReadTenantFloData(hubId, tenantId);
+            allow write: if isProductAdmin();
+          }
+        }
+
+        match /FloValidation/{floId} {
+          allow read:  if canReadTenantFloData(hubId, tenantId);
+          allow write: if isProductAdmin();
+        }
+
+        match /FloAlerts/{alertId} {
+          allow read:  if canReadTenantFloAlerts(hubId, tenantId);
+          allow write: if isProductAdmin();
         }
       }
     }
 
-    // ── Deny everything else ──────────────────────────────────────────────────
     match /{document=**} {
       allow read, write: if false;
     }

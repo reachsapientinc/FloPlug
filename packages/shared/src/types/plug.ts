@@ -27,6 +27,10 @@ export interface PlugConfig {
    * Legacy plugs may still store credentials inline until migrated (Phase 4).
    */
   connectionId?:  string;
+  /** Hub-admin default connection for this plug (developer may override on canvas) */
+  defaultConnectionId?: string;
+  /** Connections developers may choose (empty = any active connection for authProtocol) */
+  allowedConnectionIds?: string[];
   /** Inline auth — used when connectionId is absent (legacy) */
   credentials?:   PlugCredentialValues;
   urlVariables?:  Record<string, PlugVariableBinding>; // dev fills on node
@@ -37,12 +41,30 @@ export interface PlugConfig {
   updatedAt?:     any;
 }
 
+import type { NodeHttpTrace } from './floExecutionHub.js';
+
+export interface NodeExecutionHubPayload {
+  nodeId:     string;
+  nodeType:   string;
+  nodeLabel?: string;
+  status:     'ok' | 'error' | 'skipped' | 'running';
+  before?:    Record<string, unknown>;
+  after?:     Record<string, unknown>;
+  logLine?:   string;
+  httpTrace?: NodeHttpTrace;
+  error?:     string;
+  durationMs?: number;
+}
+
 export interface RunContext {
   hubId:    string;
   tenantId: string;
   wsId:     string;
   runId:    string;
+  floId?:   string;
   store:    { global: Record<string, any>; local: Record<string, any> };
   log:      string[];
   depth:    number;
+  /** When set, engine persists per-node before/after JSON for Execution Hub */
+  onNodeComplete?: (payload: NodeExecutionHubPayload) => void | Promise<void>;
 }

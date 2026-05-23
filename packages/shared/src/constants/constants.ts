@@ -42,7 +42,9 @@ export const SUB_COLLECTIONS = {
   FLOACTIONNODES: 'FloActionNodes',
 } as const;
 
-// ── Sub-collection names ──────────────────────────────────────────────────────
+// ── Sub-collection names (under FloPlugHubs/{hubId}/Tenants/{tenantId}/…) ───────
+// Flo* = flo/runtime data scoped to one hub environment (tenant).
+// Product-wide config uses FloPlug* top-level collections (FloPlugConnectors, …).
 export const HUB_COLLECTIONS = {
   TENANTS:     'Tenants',
   WORKSPACES:  'Workspaces',
@@ -51,7 +53,16 @@ export const HUB_COLLECTIONS = {
   PLUGS:           'Plugs',
   FLO_CONNECTIONS: 'FloConnections',
   USERS:       'Users',
-  EXEC_LOG:    'ExecutionLog',
+  /** Flo run log: FloPlugHubs/{hubId}/Tenants/{tenantId}/FloExecutionLog/{runId} */
+  EXEC_LOG:    'FloExecutionLog',
+  /** Per-run node JSON: …/FloExecutionLog/{runId}/FloNodeRecords/{nodeId} */
+  EXEC_NODE_RECORDS: 'FloNodeRecords',
+  /** Latest validation per flo: …/Tenants/{tenantId}/FloValidation/{floId} */
+  FLO_VALIDATION: 'FloValidation',
+  /** Tenant alerts: …/Tenants/{tenantId}/FloAlerts/{alertId} */
+  FLO_ALERTS: 'FloAlerts',
+  /** Immutable publish snapshots: …/Flos/{floId}/Versions/{version} */
+  FLO_VERSIONS: 'Versions',
   CONNECTORS:  'ConnectorCredentials',
   EMAIL_LOG:   'EmailLog',
   SCHEMAS:     'Schemas',

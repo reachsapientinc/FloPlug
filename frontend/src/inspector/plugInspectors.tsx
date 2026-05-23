@@ -1,6 +1,11 @@
 /** Plug + email inspectors (moved from NodePaletteAndInspector). */
-import React from 'react';
-import type { PlugVariableHint, PlugVariableBinding } from '@floplug/shared';
+import React, { useState, useEffect, useCallback } from 'react';
+import { getFunctions, httpsCallable } from 'firebase/functions';
+import type { PlugVariableHint, PlugVariableBinding, FloConnectionSafe } from '@floplug/shared';
+import {
+  extractUrlTemplateVarNames,
+  isDeveloperPlugUrlVar,
+} from '@floplug/shared';
 import type { NodeInspectorProps } from './types';
 import { Section, Field, Inp, Sel, Help } from './ui';
 import { NodeTestPanel } from './InspectorChrome';
@@ -96,6 +101,49 @@ export const PlugNodeInspectorPanel: React.FC<NodeInspectorProps> = ({ node, onU
   const d = node.data as Record<string, unknown>;
   const isEmail = d.authProtocol === 'smtp_basic' || d.nodeType === 'emailNode';
 
+  const authProtocol = String(d.authProtocol ?? '');
+  const allowedConnectionIds = (d.allowedConnectionIds as string[]) ?? [];
+  const defaultConnectionId = String(d.defaultConnectionId ?? '');
+  const selectedConnectionId = String(d.connectionId ?? defaultConnectionId ?? '');
+
+  const [connections, setConnections] = useState<FloConnectionSafe[]>([]);
+  const [loadingConns, setLoadingConns] = useState(false);
+  const [connError, setConnError] = useState('');
+
+  const fetchConnections = useCallback(async () => {
+    if (!authProtocol || !ctx.hubId || !ctx.tenantId) return;
+    setLoadingConns(true);
+    setConnError('');
+    try {
+      const fn = httpsCallable<
+        { hubId: string; tenantId: string; authProtocol: string },
+        { connections: FloConnectionSafe[] }
+      >(getFunctions(), 'getFloConnectionsForPlug');
+      const res = await fn({ hubId: ctx.hubId, tenantId: ctx.tenantId, authProtocol });
+      let list = res.data.connections ?? [];
+      if (allowedConnectionIds.length > 0) {
+        const allowed = new Set(allowedConnectionIds);
+        list = list.filter(c => allowed.has(c.id));
+      }
+      setConnections(list);
+    } catch (e: unknown) {
+      setConnError(e instanceof Error ? e.message : 'Failed to load connections.');
+    } finally {
+      setLoadingConns(false);
+    }
+  }, [authProtocol, ctx.hubId, ctx.tenantId, allowedConnectionIds.join(',')]);
+
+  useEffect(() => { fetchConnections(); }, [fetchConnections]);
+
+  useEffect(() => {
+    if (isEmail) return;
+    const patch: Record<string, unknown> = {};
+    if (!d.connectionId && (defaultConnectionId || connections[0]?.id)) {
+      patch.connectionId = defaultConnectionId || connections[0]?.id;
+    }
+    if (Object.keys(patch).length > 0) onUpdate(node.id, patch);
+  }, [node.id, isEmail]); // eslint-disable-line react-hooks/exhaustive-deps
+
   if (isEmail) {
     const bindings = (d.emailBindings ?? {}) as EmailBindings;
     const get = (k: string): EmailFieldBinding => bindings[k] ?? { source: 'static', value: '' };
@@ -127,21 +175,71 @@ export const PlugNodeInspectorPanel: React.FC<NodeInspectorProps> = ({ node, onU
     );
   }
 
-  const urlVars = [...(String(d.urlPattern ?? '').matchAll(/\{\{(\w+)\}\}/g))].map(m => m[1]);
+  const devUrlVars = extractUrlTemplateVarNames(String(d.urlPattern ?? ''))
+    .filter(isDeveloperPlugUrlVar);
   const urlVariables = (d.urlVariables ?? {}) as Record<string, PlugVariableBinding>;
+  const selectedConn = connections.find(c => c.id === selectedConnectionId);
 
   return (
     <>
       <Section>
         <div style={{ fontSize: 11, fontWeight: 600, color: t.accent }}>{String(d.plugName ?? 'Plug')}</div>
-        <div style={{ fontSize: 9, color: t.warning }}>{String(d.connectorLabel ?? '')}</div>
-        <div style={{ fontSize: 8, color: t.textDim, fontFamily: 'monospace', wordBreak: 'break-all' }}>{String(d.urlPattern ?? '')}</div>
+        <div style={{ fontSize: 9, color: t.textMuted }}>{String(d.connectorLabel ?? '')}</div>
+        {authProtocol && (
+          <span style={{
+            display: 'inline-block', marginTop: 6, fontSize: 9, padding: '2px 8px', borderRadius: 12,
+            background: `${t.accent}22`, color: t.accent, border: `0.5px solid ${t.accent}44`,
+          }}>
+            {authProtocol}
+          </span>
+        )}
       </Section>
-      {urlVars.map(varName => {
+
+      <Field label="Connection">
+        {connError && (
+          <div style={{ fontSize: 10, color: '#e05555', marginBottom: 6 }}>{connError}</div>
+        )}
+        {loadingConns ? (
+          <span style={{ fontSize: 10, color: t.textMuted, fontStyle: 'italic' }}>Loading connections…</span>
+        ) : connections.length === 0 ? (
+          <span style={{ fontSize: 10, color: t.warning, fontStyle: 'italic' }}>
+            No connections for this protocol. Ask your hub admin to create one.
+          </span>
+        ) : (
+          <Sel
+            value={selectedConnectionId}
+            onChange={e => onUpdate(node.id, {
+              connectionId: e.target.value,
+              connectionName: connections.find(c => c.id === e.target.value)?.name ?? '',
+            })}
+          >
+            <option value="">— select connection —</option>
+            {connections.map(c => (
+              <option key={c.id} value={c.id}>
+                {c.name}{c.environmentLabel ? ` (${c.environmentLabel})` : ''}
+                {c.id === defaultConnectionId ? ' (default)' : ''}
+              </option>
+            ))}
+          </Sel>
+        )}
+        {allowedConnectionIds.length > 0 ? (
+          <Help>
+            Connections are limited to those configured by your hub admin for this plug.
+            {defaultConnectionId ? ` Default: ${connections.find(c => c.id === defaultConnectionId)?.name ?? defaultConnectionId}.` : ''}
+          </Help>
+        ) : selectedConn ? (
+          <Help>
+            Host and tenant come from connection “{selectedConn.name}” — not configured here.
+          </Help>
+        ) : null}
+      </Field>
+
+      {devUrlVars.map(varName => {
         const hint = (d.variableHints as PlugVariableHint[] | undefined)?.find(h => h.name === varName);
         const binding = urlVariables[varName];
+        const label = varName === 'version' ? 'API version' : varName === 'module' ? 'Module' : varName;
         return (
-          <Field key={varName} label={`{{${varName}}}`}>
+          <Field key={varName} label={label}>
             <div style={{ display: 'flex', gap: 5 }}>
               <Sel style={{ flex: '0 0 75px' }} value={binding?.source ?? 'static'}
                 onChange={e => onUpdate(node.id, {

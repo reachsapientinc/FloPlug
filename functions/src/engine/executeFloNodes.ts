@@ -26,10 +26,23 @@ import {
 import { unwrapWithMeta }            from '../nodes/cStreamMeta.js';
 import { wrapMessage }               from '../nodes/cStreamMeta.js';
 import { getValue, setValue }        from '../utils/pathUtils.js';
-import type { RunContext }           from '@floplug/shared';
-import { NODE_TYPES, COLLECTIONS, HUB_COLLECTIONS } from '@floplug/shared';
+import type { RunContext, NodeExecutionHubPayload, NodeHttpTrace } from '@floplug/shared';
+import { NODE_TYPES, COLLECTIONS, HUB_COLLECTIONS, getPublishedGraph } from '@floplug/shared';
+import { nodeLabel } from '@floplug/shared';
 
 const db = getFirestore();
+
+function cloneForHubRecord(value: unknown): Record<string, unknown> | undefined {
+  if (value === null || value === undefined) return undefined;
+  try {
+    const cloned = JSON.parse(JSON.stringify(value));
+    return typeof cloned === 'object' && !Array.isArray(cloned)
+      ? cloned as Record<string, unknown>
+      : { value: cloned };
+  } catch {
+    return { _summary: String(value).slice(0, 500) };
+  }
+}
 
 interface FloNode { id: string; type: string; data: Record<string, unknown>; }
 interface FloEdge { source: string; target: string; }
@@ -76,7 +89,11 @@ export async function loadFlo(
     .get();
   if (!snap.exists) throw new Error(`Flo ${floId} not found in ws ${wsId}`);
   const d = snap.data()!;
-  return { nodes: d.nodes ?? [], edges: d.edges ?? [] };
+  const published = getPublishedGraph(d as Record<string, unknown>);
+  if (!published?.nodes?.length) {
+    throw new Error(`Flo ${floId} has no published graph — publish before invoking as sub-flow.`);
+  }
+  return { nodes: published.nodes as FloNode[], edges: published.edges as FloEdge[] };
 }
 
 async function getConnectorCreds(
@@ -113,6 +130,10 @@ export async function executeFloNodes(
 
   for (const node of ordered) {
     log.push(`  ${'  '.repeat(ctx.depth)}↳ ${node.type} (${node.id})`);
+    const nodeStarted = Date.now();
+    const logIndexAtStart = log.length;
+    let hubBeforeRaw: Record<string, unknown> | undefined;
+    let nodeHttpTrace: NodeHttpTrace | undefined;
     try {
       const incoming = edges.filter(e => e.target === node.id);
       let rawCStream: unknown;
@@ -134,6 +155,10 @@ export async function executeFloNodes(
       }
 
       const cStream = safeCs(rawCStream);
+      let hubBeforeRaw: Record<string, unknown> | undefined;
+      if (ctx.onNodeComplete) {
+        hubBeforeRaw = cloneForHubRecord(cStream);
+      }
       const nd: Record<string, any> = { ...node.data, hubId, tenantId, id: node.id };
       let result: unknown;
 
@@ -178,7 +203,7 @@ export async function executeFloNodes(
         // ── Plug (routes by nodeType, then authProtocol fallback) ─────────────
         case NODE_TYPES.PLUG: {
           const effectiveNodeType = nd.nodeType as string | undefined;
-
+          console.log(`[executeFloNodes] effectiveNodeType: ${effectiveNodeType}`);
           if (effectiveNodeType === NODE_TYPES.EMAIL || nd.authProtocol === 'smtp_basic') {
             const { cStream: next, logLine } = await executeEmailNode(cStream, nd, store);
             result = next;
@@ -200,9 +225,10 @@ export async function executeFloNodes(
             result = next;
             log.push(`${'  '.repeat(ctx.depth)}  ${logLine}`);
           } else {
-            const { cStream: next, logLine } = await executePlugNode(cStream, nd, store);
-            result = next;
-            log.push(`${'  '.repeat(ctx.depth)}  ${logLine}`);
+            const plugOut = await executePlugNode(cStream, nd, store);
+            result = plugOut.cStream;
+            nodeHttpTrace = plugOut.httpTrace;
+            log.push(`${'  '.repeat(ctx.depth)}  ${plugOut.logLine}`);
           }
           break;
         }
@@ -308,6 +334,7 @@ export async function executeFloNodes(
           store.local  = floResult.localStore;
           store.global = floResult.globalStore;
           result = floResult.cStream;
+          nodeHttpTrace = floResult.httpTrace;
           log.push(`${'  '.repeat(ctx.depth)}  ${floResult.logLine}`);
           break;
         }
@@ -320,9 +347,43 @@ export async function executeFloNodes(
       outputs[node.id] = result;
       lastCStream = result;
 
+      if (ctx.onNodeComplete) {
+        const nodeLogLines = log
+          .slice(logIndexAtStart)
+          .filter(l => !l.includes('↳'));
+        const lastLine = nodeLogLines.length
+          ? nodeLogLines[nodeLogLines.length - 1].trim()
+          : undefined;
+        const payload: NodeExecutionHubPayload = {
+          nodeId:     node.id,
+          nodeType:   node.type,
+          nodeLabel:  nodeLabel(node.data as Record<string, unknown>, node.id),
+          status:     'ok',
+          before:     hubBeforeRaw,
+          after:      cloneForHubRecord(result),
+          ...(lastLine ? { logLine: lastLine } : {}),
+          ...(nodeHttpTrace ? { httpTrace: nodeHttpTrace } : {}),
+          durationMs: Date.now() - nodeStarted,
+        };
+        await Promise.resolve(ctx.onNodeComplete(payload));
+      }
+
     } catch (err: any) {
       log.push(`${'  '.repeat(ctx.depth)}  Error in ${node.id}: ${err.message}`);
       outputs[node.id] = null;
+      if (ctx.onNodeComplete) {
+        const payload: NodeExecutionHubPayload = {
+          nodeId:     node.id,
+          nodeType:   node.type,
+          nodeLabel:  nodeLabel(node.data as Record<string, unknown>, node.id),
+          status:     'error',
+          before:     hubBeforeRaw,
+          error:      err.message,
+          ...(err.httpTrace ? { httpTrace: err.httpTrace as NodeHttpTrace } : {}),
+          durationMs: Date.now() - nodeStarted,
+        };
+        await Promise.resolve(ctx.onNodeComplete(payload));
+      }
     }
   }
 

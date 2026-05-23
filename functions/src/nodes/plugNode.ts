@@ -16,7 +16,9 @@ import { COLLECTIONS, HUB_COLLECTIONS, SUB_COLLECTIONS } from '@floplug/shared';
 import {
   wrapMessage, getMessage, resolveUrl, type ValueBinding,
 } from './cStreamMeta.js';
-import type { FloConnectionDoc } from '@floplug/shared';
+import type { FloConnectionDoc, NodeHttpTrace } from '@floplug/shared';
+import { redactSecretHeaders } from '@floplug/shared';
+import { isConnectionBackedPlugUrlVar } from '@floplug/shared';
 
 // ── Credential resolution priority ───────────────────────────────────────────
 // 1. nd.connectionId  — developer chose a specific connection on the canvas
@@ -24,14 +26,35 @@ import type { FloConnectionDoc } from '@floplug/shared';
 // 3. plug.credentials  — legacy inline credentials (pre-FloConnection plugs)
 // 4. Error
 
+function applyConnectionUrlBindings(
+  mergedVariables: Record<string, ValueBinding>,
+  conn: FloConnectionDoc,
+): void {
+  if (conn.hostname) {
+    mergedVariables.hostname = { source: 'static', value: conn.hostname };
+  }
+  if (conn.tenantKey) {
+    mergedVariables.tenant    = { source: 'static', value: conn.tenantKey };
+    mergedVariables.tenantKey = { source: 'static', value: conn.tenantKey };
+  }
+}
+
 async function resolvePlugCredentials(
   plug:     PlugConfig,
   hubId:    string,
   tenantId: string,
   /** connectionId from node.data — developer's canvas choice (overrides plug default) */
   nodeConnectionId?: string,
-): Promise<PlugCredentialValues> {
-  const effectiveConnectionId = nodeConnectionId || plug.connectionId;
+): Promise<{ credentials: PlugCredentialValues; connection?: FloConnectionDoc }> {
+  const effectiveConnectionId = nodeConnectionId || plug.defaultConnectionId || plug.connectionId;
+  const plugAllowed = plug.allowedConnectionIds ?? [];
+
+  if (plugAllowed.length > 0 && effectiveConnectionId && !plugAllowed.includes(effectiveConnectionId)) {
+    throw new Error(
+      `Connection "${effectiveConnectionId}" is not allowed for plug "${plug.name}". ` +
+      `Choose one of the connections configured by your hub admin.`,
+    );
+  }
 
   if (effectiveConnectionId) {
     console.log(`[plugNode] Loading credentials from FloConnection: ${effectiveConnectionId} (source: ${nodeConnectionId ? 'node/canvas' : 'plug default'})`);
@@ -61,18 +84,18 @@ async function resolvePlugCredentials(
       );
     }
     console.log(`[plugNode] Credentials loaded from FloConnection "${connData.name}" (${effectiveConnectionId})`);
-    return creds;
+    return { credentials: creds, connection: connData };
   }
 
   // Legacy: inline credentials on the plug doc
   if (plug.credentials && Object.keys(plug.credentials).length > 0) {
     console.log(`[plugNode] Using inline credentials from plug "${plug.name}" (legacy — migrate to FloConnection)`);
-    return plug.credentials;
+    return { credentials: plug.credentials };
   }
 
   throw new Error(
-    `Plug "${plug.name}" has no credentials. ` +
-    `Configure a FloConnection in the Connections tab or have a Hub Admin add inline credentials.`
+    `Plug "${plug.name}" has no connection. ` +
+    `Select a connection on the plug node or configure a FloConnection in Hub Admin.`
   );
 }
 
@@ -82,7 +105,10 @@ export const executePlugNode = async (
   cStream: unknown,
   nd:      Record<string, any>,
   store:   { global: Record<string, any>; local: Record<string, any> },
-): Promise<{ cStream: unknown; logLine: string }> => {
+): Promise<{ cStream: unknown; logLine: string; httpTrace?: NodeHttpTrace }> => {
+
+  const previewBody = (body: string, max = 800): string =>
+    body.length > max ? `${body.slice(0, max)}\n… [${body.length} chars total]` : body;
 
   const { hubId, tenantId, plugId, urlVariables, method } = nd;
   const outputTarget     = (nd.outputTarget  as string) || 'cStream';
@@ -121,16 +147,24 @@ export const executePlugNode = async (
   for (const [key, binding] of Object.entries(
     (urlVariables ?? {}) as Record<string, PlugVariableBinding>
   )) {
-    if (binding?.value) mergedVariables[key] = binding as ValueBinding;
+    if (binding?.value && !isConnectionBackedPlugUrlVar(key)) {
+      mergedVariables[key] = binding as ValueBinding;
+    }
   }
 
-  // ── 4. Resolve URL ────────────────────────────────────────────────────────
+  // ── 4. Resolve credentials + connection-backed URL segments ─────────────
+  const { credentials, connection } = await resolvePlugCredentials(
+    plug, hubId, tenantId, nodeConnectionId,
+  );
+  if (connection) {
+    applyConnectionUrlBindings(mergedVariables, connection);
+  }
+
+  // ── 5. Resolve URL ────────────────────────────────────────────────────────
   const cs  = cStream as Record<string, unknown>;
   const url = resolveUrl(plug.urlPattern, mergedVariables, { cStream: cs, store });
   console.log(`[plugNode] Resolved URL: ${url}`);
 
-  // ── 5. Resolve credentials (canvas choice > plug default > inline) ────────
-  const credentials = await resolvePlugCredentials(plug, hubId, tenantId, nodeConnectionId);
   const auth = await applyAuth(authProtocol, credentials);
 
   // ── 6. Build request body ─────────────────────────────────────────────────
@@ -159,8 +193,23 @@ export const executePlugNode = async (
   const statusLine   = `${response.status} ${response.statusText}`;
   console.log(`[plugNode] Response: ${statusLine} (${responseText.length} chars)`);
 
+  const httpTrace: NodeHttpTrace = {
+    method:               method ?? 'POST',
+    url,
+    requestHeaders:       redactSecretHeaders({ ...auth.headers }),
+    requestBody:          finalBody,
+    requestBodyPreview:   previewBody(finalBody),
+    status:               response.status,
+    statusText:           response.statusText,
+    responseBody:         responseText,
+    responseBodyPreview:  previewBody(responseText),
+    responseContentType:  response.headers.get('content-type') ?? undefined,
+  };
+
   if (!response.ok) {
-    throw new Error(`Plug request failed [${statusLine}]:\n${responseText}`);
+    const err = new Error(`Plug request failed [${statusLine}]:\n${responseText}`) as Error & { httpTrace?: NodeHttpTrace };
+    err.httpTrace = httpTrace;
+    throw err;
   }
 
   // ── 8. Parse response ─────────────────────────────────────────────────────
@@ -197,7 +246,7 @@ export const executePlugNode = async (
     const nextCs = typeof cs === 'object' && cs !== null
       ? { ...cs, _meta: { ...(cs._meta as object ?? {}), source: nd.id ?? 'plugNode' } }
       : cs;
-    return { cStream: nextCs, logLine };
+    return { cStream: nextCs, logLine, httpTrace };
   }
 
   if (outputTarget === 'global' && outputVarName) {
@@ -205,11 +254,12 @@ export const executePlugNode = async (
     const nextCs = typeof cs === 'object' && cs !== null
       ? { ...cs, _meta: { ...(cs._meta as object ?? {}), source: nd.id ?? 'plugNode' } }
       : cs;
-    return { cStream: nextCs, logLine };
+    return { cStream: nextCs, logLine, httpTrace };
   }
 
   return {
     cStream: wrapMessage(parsedMessage, meta),
     logLine,
+    httpTrace,
   };
 };

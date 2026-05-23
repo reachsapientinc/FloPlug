@@ -23,7 +23,7 @@
  *  - All mutations go through Cloud Functions
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { getFunctions, httpsCallable }              from 'firebase/functions';
 import type {
   AuthProtocol, AuthProtocolField,
@@ -620,13 +620,14 @@ interface PlugFormModalProps {
   plug?:      PlugSummary | null;
   connectors: ConnectorDoc[];
   protocols:  AuthProtocol[];
+  connections: FloConnectionSafe[];
   onClose:    () => void;
   onSaved:    (plug: PlugSummary) => void;
 }
 
 const PlugFormModal: React.FC<PlugFormModalProps> = ({
   open, hubId, tenantId, userId, plug,
-  connectors, protocols, onClose, onSaved,
+  connectors, protocols, connections, onClose, onSaved,
 }) => {
   const isEdit = !!plug;
 
@@ -637,6 +638,8 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
   const [urlPattern,    setUrlPattern]    = useState('');
   const [variableHints, setVariableHints] = useState<PlugVariableHint[]>([]);
   const [credentials,   setCredentials]   = useState<PlugCredentialValues>({});
+  const [allowedConnectionIds, setAllowedConnectionIds] = useState<string[]>([]);
+  const [defaultConnectionId,  setDefaultConnectionId]  = useState('');
   const [saving,        setSaving]        = useState(false);
   const [error,         setError]         = useState('');
 
@@ -648,9 +651,42 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
     setName(plug?.name                  ?? '');
     setUrlPattern(plug?.urlPattern       ?? '');
     setVariableHints(plug?.variableHints ?? []);
+    const allowed = plug?.allowedConnectionIds?.length
+      ? plug.allowedConnectionIds
+      : (plug?.connectionId ? [plug.connectionId] : []);
+    setAllowedConnectionIds(allowed ?? []);
+    setDefaultConnectionId(plug?.defaultConnectionId ?? plug?.connectionId ?? allowed[0] ?? '');
     setCredentials({});  // always blank — credentials never returned from backend
     setError(''); setSaving(false);
   }, [open, plug?.id]);
+
+  const connectionsForPlug = useMemo(
+    () => connections.filter(c =>
+      c.isActive !== false
+      && c.authProtocol === authProtocol
+      && (!connectorId || c.connectorId === connectorId),
+    ),
+    [connections, authProtocol, connectorId],
+  );
+
+  const toggleAllowedConnection = (connectionId: string) => {
+    setAllowedConnectionIds(prev => {
+      const next = prev.includes(connectionId)
+        ? prev.filter(id => id !== connectionId)
+        : [...prev, connectionId];
+      if (!next.includes(defaultConnectionId)) {
+        setDefaultConnectionId(next[0] ?? '');
+      }
+      return next;
+    });
+  };
+
+  const setDefaultConnection = (connectionId: string) => {
+    setDefaultConnectionId(connectionId);
+    if (!allowedConnectionIds.includes(connectionId)) {
+      setAllowedConnectionIds(prev => [...prev, connectionId]);
+    }
+  };
 
   const connector       = connectors.find(c => c.id === connectorId) ?? null;
   const supportedProtos = protocols.filter(p => connector?.supportedAuthTypes?.includes(p.name) && p.isActive);
@@ -674,6 +710,8 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
     setAuthProtocol(first?.name ?? '');
     setNodeType(suggestNodeType(c?.label ?? '', first?.name ?? ''));
     setCredentials({});
+    setAllowedConnectionIds([]);
+    setDefaultConnectionId('');
   };
 
   const patchCred = (key: string, value: string) =>
@@ -684,6 +722,13 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
     if (!authProtocol) return 'Select an authentication protocol';
     if (!name.trim())  return 'Plug name is required';
     if (authProtocol !== 'smtp_basic' && !urlPattern.trim()) return 'URL Pattern is required';
+    if (authProtocol && authProtocol !== 'smtp_basic') {
+      if (allowedConnectionIds.length === 0) return 'Select at least one allowed connection.';
+      if (!defaultConnectionId) return 'Mark one connection as default (★).';
+      if (!allowedConnectionIds.includes(defaultConnectionId)) {
+        return 'Default connection must be one of the allowed connections.';
+      }
+    }
     if (selectedProto && !isEdit) {
       for (const f of selectedProto.fields) {
         if (f.required && !credentials[f.name]?.trim()) return `${f.label} is required`;
@@ -721,11 +766,13 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
         urlPattern:     urlPattern.trim(),
         variableHints,
         credentials,
+        allowedConnectionIds,
+        defaultConnectionId,
         isActive:       true,
       });
 
       onSaved({
-        id:             data.plugId ?? plug?.id ?? '',
+        id:             data.plugId ?? data.id ?? plug?.id ?? '',
         hubId,
         tenantId,
         connectorId,
@@ -735,6 +782,9 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
         name:           name.trim(),
         urlPattern:     urlPattern.trim(),
         variableHints,
+        allowedConnectionIds,
+        defaultConnectionId,
+        connectionId:   defaultConnectionId,
         isActive:       true,
         createdBy:      plug?.createdBy ?? userId,
         updatedBy:      userId,
@@ -857,6 +907,61 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
                   <div style={{ fontSize: 9, color: '#3a3a50', marginTop: 3 }}>
                     Use {'{{variableName}}'} for values the developer fills at design time.
                   </div>
+                </div>
+              )}
+
+              {authProtocol && authProtocol !== 'smtp_basic' && (
+                <div style={css.fg}>
+                  <label style={css.fl}>
+                    Allowed connections *
+                    <span style={{ marginLeft: 6, fontSize: 9, color: '#45455a', fontWeight: 400 }}>
+                      (developers pick one · ★ = default)
+                    </span>
+                  </label>
+                  {connectionsForPlug.length === 0 ? (
+                    <div style={{ fontSize: 11, color: '#f59e0b', padding: '8px 10px', borderRadius: 6, background: 'rgba(245,158,11,0.08)' }}>
+                      No active connections for <strong>{authProtocol}</strong>. Create connections in Hub Admin → Connections first.
+                    </div>
+                  ) : (
+                    <div style={{
+                      display: 'flex', flexDirection: 'column', gap: 8,
+                      padding: '10px 12px', borderRadius: 8,
+                      border: '0.5px solid rgba(255,255,255,0.08)',
+                      background: 'rgba(255,255,255,0.02)',
+                    }}>
+                      {connectionsForPlug.map(conn => (
+                        <label
+                          key={conn.id}
+                          style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, cursor: 'pointer' }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={allowedConnectionIds.includes(conn.id)}
+                            onChange={() => toggleAllowedConnection(conn.id)}
+                          />
+                          <span style={{ flex: 1, color: '#c0c0cc' }}>
+                            {conn.name}
+                            {conn.environmentLabel && (
+                              <span style={{ color: '#6b6b80', marginLeft: 6 }}>({conn.environmentLabel})</span>
+                            )}
+                          </span>
+                          <input
+                            type="radio"
+                            name="plug-default-connection"
+                            checked={defaultConnectionId === conn.id}
+                            disabled={!allowedConnectionIds.includes(conn.id)}
+                            onChange={() => setDefaultConnection(conn.id)}
+                          />
+                          <span style={{
+                            fontSize: 10,
+                            color: defaultConnectionId === conn.id ? '#4f8ef7' : '#45455a',
+                          }}>
+                            ★ default
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -985,7 +1090,7 @@ const PlugManager: React.FC<Props> = ({
   const [flos,             setFlos]            = useState<FloMeta[]>([]);
   const [connectors,       setConnectors]      = useState<ConnectorDoc[]>([]);
   const [protocols,        setProtocols]       = useState<AuthProtocol[]>([]);
-  const [_floConnections,  setFloConnections]  = useState<FloConnectionSafe[]>([]);
+  const [floConnections,   setFloConnections]  = useState<FloConnectionSafe[]>([]);
   const [_actionNodes,     setActionNodes]     = useState<HubActionNodeDoc[]>([]);
   const [loading,          setLoading]         = useState(true);
   const [loadError,        setLoadError]       = useState('');
@@ -1193,6 +1298,7 @@ const PlugManager: React.FC<Props> = ({
       <PlugFormModal
         open={plugModal} hubId={hubId} tenantId={tenantId} userId={userId}
         plug={editPlug} connectors={connectors} protocols={protocols}
+        connections={floConnections}
         onClose={() => { setPlugModal(false); setEditPlug(null); }}
         onSaved={handlePlugSaved}
       />

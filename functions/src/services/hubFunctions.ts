@@ -161,27 +161,83 @@ export const getHubActionNodes = onCall(async (request) => {
 
 export const savePlug = onCall(async (request) => {
   requirePermission(request, PERMISSIONS.MANAGE_PLUGS);
-  const { hubId, tenantId, ...plugData } = request.data as any;
+  const { hubId, tenantId, ...plugData } = request.data as Record<string, unknown> & {
+    hubId: string; tenantId: string; plugId?: string; id?: string;
+    allowedConnectionIds?: string[];
+    defaultConnectionId?: string;
+    authProtocol?: string;
+  };
   requireSameHub(request, hubId, tenantId);
 
   const col = tenantCol(hubId, tenantId).collection(HUB_COLLECTIONS.PLUGS);
+  const authProtocol = String(plugData.authProtocol ?? '');
 
-  if (plugData.id) {
-    const { id, ...fields } = plugData;
-    const updatePayload: Record<string, any> = {};
+  const allowedConnectionIds = Array.isArray(plugData.allowedConnectionIds)
+    ? [...new Set((plugData.allowedConnectionIds as string[]).filter(Boolean))]
+    : [];
+  const defaultConnectionId = String(plugData.defaultConnectionId ?? '');
+
+  if (authProtocol && authProtocol !== 'smtp_basic') {
+    if (allowedConnectionIds.length === 0) {
+      throw new HttpsError('invalid-argument', 'Select at least one allowed connection for this plug.');
+    }
+    if (!defaultConnectionId) {
+      throw new HttpsError('invalid-argument', 'Mark a default connection (★).');
+    }
+    if (!allowedConnectionIds.includes(defaultConnectionId)) {
+      throw new HttpsError('invalid-argument', 'defaultConnectionId must be one of allowedConnectionIds.');
+    }
+
+    const connSnap = await tenantCol(hubId, tenantId)
+      .collection(HUB_COLLECTIONS.FLO_CONNECTIONS)
+      .get();
+    const connById = new Map(connSnap.docs.map(d => [d.id, d.data() as Record<string, unknown>]));
+
+    for (const cid of allowedConnectionIds) {
+      const c = connById.get(cid);
+      if (!c) {
+        throw new HttpsError('invalid-argument', `Connection "${cid}" not found.`);
+      }
+      if (c.isActive === false) {
+        throw new HttpsError('invalid-argument', `Connection "${cid}" is inactive.`);
+      }
+      if (authProtocol && String(c.authProtocol ?? '') !== authProtocol) {
+        throw new HttpsError(
+          'invalid-argument',
+          `Connection "${cid}" uses ${c.authProtocol}, plug requires ${authProtocol}.`,
+        );
+      }
+    }
+  }
+
+  // Frontend sends plugId; legacy callers may send id
+  const existingId = (plugData.plugId as string | undefined)
+    || (plugData.id as string | undefined);
+
+  const connectionFields = {
+    allowedConnectionIds,
+    defaultConnectionId: defaultConnectionId || undefined,
+    connectionId:        defaultConnectionId || undefined,
+  };
+
+  if (existingId) {
+    const { plugId: _p, id: _i, hubId: _h, tenantId: _t, ...fields } = plugData as Record<string, unknown>;
+    const updatePayload: Record<string, unknown> = { ...connectionFields };
     for (const [k, v] of Object.entries(fields)) {
       if (v !== '' && v !== undefined) updatePayload[k] = v;
     }
-    await col.doc(id).set(updatePayload, { merge: true });
-    return { id };
-  } else {
-    const ref = await col.add({
-      ...plugData,
-      isActive:  true,
-      createdAt: FieldValue.serverTimestamp(),
-    });
-    return { id: ref.id };
+    await col.doc(existingId).set(updatePayload, { merge: true });
+    return { id: existingId, plugId: existingId };
   }
+
+  const { plugId: _p, id: _i, hubId: _h, tenantId: _t, ...createFields } = plugData as Record<string, unknown>;
+  const ref = await col.add({
+    ...createFields,
+    ...connectionFields,
+    isActive:  true,
+    createdAt: FieldValue.serverTimestamp(),
+  });
+  return { id: ref.id, plugId: ref.id };
 });
 
 export const deactivatePlug = onCall(async (request) => {

@@ -1,5 +1,6 @@
-import React, { lazy, Suspense, useEffect, useRef } from 'react';
+import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import type { TenantConfig } from '../types/types.ts';
+import type { FloMeta } from '@floplug/shared';
 import { useTenantAuth } from '../hooks/useTenantAuth';
 import TenantLogin from './TenantLogin';
 
@@ -91,6 +92,53 @@ const Spinner: React.FC<{ label?: string }> = ({ label = 'Loading…' }) => (
   </div>
 );
 
+const PortalDropdown: React.FC<{
+  open: boolean;
+  onClose: () => void;
+  children: React.ReactNode;
+  width?: number;
+}> = ({ open, onClose, children, width = 280 }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, [open, onClose]);
+  if (!open) return null;
+  return (
+    <div ref={ref} style={{
+      position: 'absolute', top: 'calc(100% + 6px)', left: 0, width,
+      background: '#181b24', border: '0.5px solid rgba(255,255,255,0.12)',
+      borderRadius: 10, boxShadow: '0 12px 32px rgba(0,0,0,0.4)', zIndex: 9999, padding: '8px 0',
+    }}>
+      {children}
+    </div>
+  );
+};
+
+const menuInputStyle: React.CSSProperties = {
+  flex: 1, padding: '6px 8px', borderRadius: 6,
+  border: '0.5px solid rgba(255,255,255,0.15)', background: '#0f1117',
+  color: '#fff', fontSize: 11, fontFamily: 'inherit', outline: 'none',
+};
+
+const menuBtnSm: React.CSSProperties = {
+  padding: '6px 10px', borderRadius: 6, border: 'none',
+  background: '#4f8ef7', color: '#fff', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit',
+};
+
+const menuItemBtn: React.CSSProperties = {
+  flex: 1, textAlign: 'left', padding: '6px 8px', border: 'none',
+  background: 'transparent', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit',
+};
+
+const menuIconBtn: React.CSSProperties = {
+  background: 'none', border: 'none', color: '#6b6b80', cursor: 'pointer', fontSize: 12, padding: '2px 4px',
+};
+
 // ─────────────────────────────────────────────────────────
 // Authenticated portal shell
 // ─────────────────────────────────────────────────────────
@@ -103,10 +151,10 @@ const AuthenticatedShell: React.FC<{
 }> = ({ tenant, user, permissions, isHubAdmin, logout }) => {
   const displayName = tenant.branding?.displayTitle || tenant.tenantName;
   const envLabel    = tenant.env.toUpperCase();
-  const initials    = (user.displayName ?? user.email).slice(0, 2).toUpperCase();
 
-  // Cross-slug guard: watch URL changes (e.g. user manually edits address bar)
-  // If slug or env changes while logged in, force logout.
+  const [activeFlo, setActiveFlo]       = useState<FloMeta | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
   const slugRef = useRef(tenant.slug);
   const envRef  = useRef(tenant.env);
 
@@ -146,29 +194,21 @@ const AuthenticatedShell: React.FC<{
 
         <div style={styles.divbar} />
 
-        {/* Nav */}
         <nav style={{ display: 'flex', gap: 2 }}>
-          {['Workspaces', 'Connectors', 'Settings'].map(item => (
-            <button key={item} style={styles.navBtn}>{item}</button>
-          ))}
-        </nav>
-
-        {/* User + logout */}
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={styles.userPill}>
-            <div style={{ ...styles.userAvatar, background: 'var(--accent-primary)' }}>
-              {initials}
-            </div>
-            <span style={styles.userName}>{user.email}</span>
+          <div style={{ position: 'relative' }}>
+            <button type="button" style={{ ...styles.navBtn, ...(settingsOpen ? styles.navBtnActive : {}) }}
+              onClick={() => setSettingsOpen(o => !o)}>
+              Settings
+            </button>
+            <PortalDropdown open={settingsOpen} onClose={() => setSettingsOpen(false)}>
+              <div style={{ padding: '10px 14px', fontSize: 12, color: '#9090a0', lineHeight: 1.5 }}>
+                <div style={{ fontWeight: 600, color: '#e0e0e8', marginBottom: 6 }}>Workspace & flo settings</div>
+                <p style={{ margin: '0 0 8px' }}>Use the designer toolbar to manage workspaces and flos. Sharing controls will appear here.</p>
+                <p style={{ margin: '10px 0 0', fontSize: 10, color: '#6b6b80' }}>Coming soon</p>
+              </div>
+            </PortalDropdown>
           </div>
-          <button onClick={logout} style={styles.logoutBtn} title="Sign out">
-            <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" viewBox="0 0 24 24">
-              <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/>
-              <polyline points="16 17 21 12 16 7"/>
-              <line x1="21" y1="12" x2="9" y2="12"/>
-            </svg>
-          </button>
-        </div>
+        </nav>
       </div>
 
       {/* Main area — lazy-loaded Designer, scoped to this user's hub+tenant */}
@@ -184,6 +224,7 @@ const AuthenticatedShell: React.FC<{
             isAdmin={isHubAdmin}
             permissions={permissions}
             onSignOut={logout}
+onActiveFloChange={setActiveFlo}
           />
         </Suspense>
       </div>
@@ -191,6 +232,10 @@ const AuthenticatedShell: React.FC<{
       {/* Footer */}
       <div style={styles.footer}>
         <span>{window.location.hostname}/{tenant.slug}</span>
+        <span style={{ fontFamily: 'monospace', color: activeFlo?.shortCode ? '#9090a0' : '#3a3a50' }}>
+          {activeFlo?.shortCode ? `Flo: ${activeFlo.shortCode}` : 'No flo selected'}
+          {activeFlo?.name ? ` · ${activeFlo.name}` : ''}
+        </span>
         <span>Powered by FloPlug</span>
       </div>
     </div>
@@ -390,6 +435,10 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     transition: 'color 0.12s, border-color 0.12s',
+  },
+  navBtnActive: {
+    color: '#e0e0e8',
+    background: 'rgba(255,255,255,0.06)',
   },
   footer: {
     height: 34,

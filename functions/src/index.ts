@@ -32,6 +32,18 @@ export { resolveActionSchema } from './utils/resolveActionSchema.js';
 export { executeFloAction } from './executeFloAction.js';
 export { resolveFloActionMappingTargetCallable as resolveFloActionMappingTarget } from './resolveFloActionMappingTarget.js';
 export { invokeFlo } from './services/floWebhook.js';
+export {
+  validateFlo,
+  publishFlo,
+  getFloAlerts,
+  revalidateHubFlosScheduled,
+} from './services/floValidationService.js';
+export {
+  listFloExecutionRuns,
+  getExecutionHubRun,
+  getExecutionHubStorageUrls,
+  getFloValidationSnapshot,
+} from './services/floExecutionHubApi.js';
 import { db } from './utils/firebase.js';
 import { executeFloNodes} from './engine/executeFloNodes.js';
 import { executeEmailNode } from './nodes/emailNode.js';
@@ -51,7 +63,7 @@ export {
   updateAdminRole,
 //  updateHubUserRole,
 } from './services/provisionUsers.js';
-import {HUB_ROLES,COLLECTIONS,HUB_COLLECTIONS,PERMISSIONS} from '@floplug/shared';
+import {HUB_ROLES,COLLECTIONS,HUB_COLLECTIONS,PERMISSIONS, getPublishedGraph, extractRunErrorFromLog} from '@floplug/shared';
 
 export {
   getHubPlugs,
@@ -335,6 +347,7 @@ export const testPlugNode = onCall<{
     id:            'test-plug-node',
     urlVariables:  nodeConfig.urlVariables,
     emailBindings: nodeConfig.emailBindings,
+    connectionId:  nodeConfig.connectionId,
     outputTarget:  nodeConfig.outputTarget ?? 'cStream',
     outputVarName: nodeConfig.outputVarName ?? '',
     method:        nodeConfig.method,
@@ -379,6 +392,9 @@ export const executeFlo = onCall(async (request) => {
     edges,
     inputJson = {},
     wsId = '',
+    mode,
+    persistNodes,
+    source,
   } = request.data as {
     hubId:     string;
     tenantId:  string;
@@ -387,6 +403,9 @@ export const executeFlo = onCall(async (request) => {
     nodes:     FloNode[];
     edges:     FloEdge[];
     inputJson: Record<string, unknown>;
+    mode?:     'test' | 'production';
+    persistNodes?: boolean;
+    source?:   string;
   };
   //const { hubId, tenantId, floId, nodes, edges, inputJson = {} } = request.data;
   //const wsId = request.data.wsId ?? '';
@@ -395,32 +414,98 @@ export const executeFlo = onCall(async (request) => {
 
   const runRef = db.collection(`${COLLECTIONS.HUBS}/${hubId}/${HUB_COLLECTIONS.TENANTS}/${tenantId}/${HUB_COLLECTIONS.EXEC_LOG}`).doc();
   const runId  = runRef.id;
-  const ctx: RunContext = { hubId, tenantId, wsId, runId, store, log, depth: 0 };
+  const isTestRun = mode === 'test';
+  const shouldPersistNodes = persistNodes === true || !isTestRun;
+  const runSource = source ?? (isTestRun ? 'designer' : 'production');
+
+  let runNodes: FloNode[] = nodes;
+  let runEdges: FloEdge[] = edges;
+  let floVersion = 0;
+  let executedGraph: 'draft' | 'published' = isTestRun ? 'draft' : 'published';
+
+  if (wsId) {
+    const floSnap = await db.doc(
+      `${COLLECTIONS.HUBS}/${hubId}/${HUB_COLLECTIONS.TENANTS}/${tenantId}/${HUB_COLLECTIONS.WORKSPACES}/${wsId}/${HUB_COLLECTIONS.FLOS}/${floId}`,
+    ).get();
+    if (floSnap.exists) {
+      const floData = floSnap.data() as Record<string, unknown>;
+      const pubVer = Number(floData.publishedVersion ?? 0);
+
+      if (!isTestRun) {
+        const { getFloRunnableBlockReason } = await import('./services/floValidationService.js');
+        const block = getFloRunnableBlockReason(floData, floId);
+        if (block) throw new HttpsError('failed-precondition', block);
+
+        const published = getPublishedGraph(floData);
+        if (!published?.nodes?.length) {
+          throw new HttpsError(
+            'failed-precondition',
+            `Flo ${floId} has no published graph. Publish from the designer first.`,
+          );
+        }
+        runNodes = published.nodes as FloNode[];
+        runEdges = published.edges as FloEdge[];
+        floVersion = pubVer > 0 ? pubVer : 1;
+        executedGraph = 'published';
+      } else {
+        floVersion = pubVer;
+        executedGraph = 'draft';
+      }
+    }
+  }
+
+  const { persistNodeExecutionRecord } = await import('./services/floExecutionHubService.js');
+  const onNodeComplete = async (payload: import('@floplug/shared').NodeExecutionHubPayload) => {
+    await persistNodeExecutionRecord({
+      hubId, tenantId, runId, floId,
+      nodeId:     payload.nodeId,
+      nodeType:   payload.nodeType,
+      nodeLabel:  payload.nodeLabel,
+      status:     payload.status,
+      before:     payload.before,
+      after:      payload.after,
+      logLine:    payload.logLine,
+      httpTrace:  payload.httpTrace,
+      error:      payload.error,
+      durationMs: payload.durationMs,
+    });
+  };
+
+  const ctx: RunContext = {
+    hubId, tenantId, wsId, runId, floId, store, log, depth: 0,
+    onNodeComplete: shouldPersistNodes ? onNodeComplete : undefined,
+  };
 
   log.push(`╔══ RUN: ${runId} ══╗`);
-  log.push(`Flow: ${floId} · ${nodes.length} nodes`);
+  log.push(`Flow: ${floId} · ${runNodes.length} nodes`);
   log.push(`Input: ${JSON.stringify(inputJson)}`);
 
   await runRef.set({
     runId, floId, inputJson, log: [], output: null,
-    nodeCount: nodes.length, status: 'running',
+    nodeCount: runNodes.length, status: 'running',
+    source: runSource,
+    floVersion,
+    executedGraph,
+    invokedByUid: request.auth?.uid ?? null,
     startedAt: FieldValue.serverTimestamp(),
     timestamp: FieldValue.serverTimestamp(),
   });
 
   let floOutput: unknown = null;
   try {
-    floOutput = await executeFloNodes(nodes, edges, inputJson, ctx); // ← just this line
+    floOutput = await executeFloNodes(runNodes, runEdges, inputJson, ctx);
   } catch (err: any) {
     log.push(`Fatal error: ${err.message}`);
   }
 
-  const hasError = log.some(l => l.startsWith('Error') || l.includes('Fatal'));
+  const hasError = log.some(l => l.includes('Error in') || l.includes('Fatal error'));
+  const errorMessage = hasError ? extractRunErrorFromLog(log) : undefined;
   log.push(`╚══ END RUN: ${runId} ══╝`);
 
   await runRef.update({
     log, output: floOutput,
     status:      hasError ? 'error' : 'success',
+    ...(errorMessage ? { errorMessage } : {}),
     completedAt: FieldValue.serverTimestamp(),
     updatedAt:   FieldValue.serverTimestamp(),
   });

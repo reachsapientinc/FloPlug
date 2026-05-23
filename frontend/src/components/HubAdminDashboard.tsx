@@ -33,9 +33,12 @@ import {
 import PlugManager from './PlugManager';
 import { FloConnectionManager } from './FloConnectionManager';
 import { FloActionManager } from './FloActionManager';
+import { FloAlertsSection } from './FloAlertsSection';
 import { useHubEntitledCatalog } from './../hooks/useHubEntitledCatalog';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
+type TabId = 'plugs' | 'users' | 'scheduler' | 'keys' | 'alerts' | 'connections' | 'actions';
+
 export interface HubAdminDashboardProps {
   hubId:       string;
   tenantId:    string;
@@ -44,10 +47,9 @@ export interface HubAdminDashboardProps {
   isHubAdmin:  boolean;
   hubName?:    string;
   hubLogoUrl?: string;
+  initialTab?: TabId;
   onBack:      () => void;
 }
-
-type TabId = 'plugs' | 'users' | 'scheduler' | 'keys' | 'executions' | 'connections' | 'actions';
 
 interface Tab {
   id:         TabId;
@@ -64,7 +66,7 @@ const TABS: Tab[] = [
   { id: 'actions',     label: 'Actions',          icon: '⚡', adminOnly: true,  permission: PERMISSIONS.MANAGE_PLUGS  },
   { id: 'scheduler',   label: 'Scheduler',        icon: '⏰', adminOnly: false, permission: PERMISSIONS.INVOKE_FLOS   },
   { id: 'keys',        label: 'Key Vault',        icon: '🔑', adminOnly: true,  permission: PERMISSIONS.MANAGE_SETTINGS },
-  { id: 'executions',  label: 'Execution Viewer', icon: '📊', adminOnly: false, permission: PERMISSIONS.VIEW_LOGS     },
+  { id: 'alerts',      label: 'Alerts',           icon: '🔔', adminOnly: false, permission: null },
 ];
 
 const sectionCard: React.CSSProperties = {
@@ -209,33 +211,14 @@ const KeysSection: React.FC = () => (
   />
 );
 
-// ── Executions placeholder ────────────────────────────────────────────────────
-const ExecutionsSection: React.FC = () => (
-  <PlaceholderSection
-    icon="📊"
-    title="Execution Viewer"
-    description="Browse all flo executions. Click any execution to open a replay view showing the exact state at each node — inputs, outputs, errors, and timing."
-    badge="COMING SOON"
-    bullets={[
-      'List all executions with status (success, error, running), flo name, trigger, and duration',
-      'Filter by flo, date range, status, and triggered-by user',
-      'Click an execution → open the flo diagram with per-node result overlays',
-      'Each node shows: input received, output produced, time taken, error if any',
-      'Download execution payload as JSON or XML',
-      'Execution data stored as files in cloud storage — not in Firestore — for cost efficiency',
-      'Store Node: explicitly save cStream/local/global values to a file during execution',
-    ]}
-  />
-);
-
-
+// ── Executions moved to standalone FloExecutionHubApp ─────────────────────────
 
 // ── Main dashboard ────────────────────────────────────────────────────────────
 const HubAdminDashboard: React.FC<HubAdminDashboardProps> = ({
   hubId, tenantId, userId, permissions, isHubAdmin,
-  hubName = 'FloPlug', hubLogoUrl, onBack,
+  hubName = 'FloPlug', hubLogoUrl, initialTab, onBack,
 }) => {
-  const [activeTab, setActiveTab] = useState<TabId>('plugs');
+  const [activeTab, setActiveTab] = useState<TabId>(initialTab ?? 'plugs');
   const [_plugs, setPlugs] = useState<PlugSummary[]>([]);
   const [_users, setUsers] = useState<TenantUser[]>([]);
   const [_flos, setFlos] = useState<FloMeta[]>([]);
@@ -277,7 +260,7 @@ const HubAdminDashboard: React.FC<HubAdminDashboardProps> = ({
   });
 
   // Ensure activeTab is always visible
-  const effectiveTab = visibleTabs.find(t => t.id === activeTab)?.id ?? visibleTabs[0]?.id ?? 'executions';
+  const effectiveTab = visibleTabs.find(t => t.id === activeTab)?.id ?? visibleTabs[0]?.id ?? 'alerts';
 
   const existingActionNodes: ExistingActionNodeRef[] = useMemo(
     () => actionNodes.map(n => ({
@@ -459,7 +442,7 @@ const HubAdminDashboard: React.FC<HubAdminDashboardProps> = ({
               {effectiveTab === 'keys'       && 'Manage SSH keys, PGP keys, and named credentials used by plugs.'}
               {effectiveTab === 'connections' && 'Manage authenticated connections to external systems. Credentials are stored encrypted server-side.'}
               {effectiveTab === 'actions'     && 'Browse entitled FloKit actions and register hub action nodes for the designer.'}
-              {effectiveTab === 'executions' && 'Browse flo execution history and replay individual runs with node-level details.'}
+              {effectiveTab === 'alerts'      && 'Invalid or blocked flos — fix validation errors before webhook or scheduler can run.'}
             </div>
           </div>
 
@@ -470,7 +453,9 @@ const HubAdminDashboard: React.FC<HubAdminDashboardProps> = ({
           {effectiveTab === 'users'      && <UsersManagementSection hubId={hubId} tenantId={tenantId} userId={userId} />}
           {effectiveTab === 'scheduler'  && <SchedulerSection />}
           {effectiveTab === 'keys'       && <KeysSection />}
-          {effectiveTab === 'executions' && <ExecutionsSection />}
+          {effectiveTab === 'alerts'      && (
+            <FloAlertsSection hubId={hubId} tenantId={tenantId} />
+          )}
           {effectiveTab === 'connections' && (
             <div style={sectionCard}>
               {loading ? (
