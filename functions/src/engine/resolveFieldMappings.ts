@@ -19,6 +19,8 @@ export interface ResolveFieldMappingsInput {
   localStore:    Record<string, unknown>;
   globalStore:   Record<string, unknown>;
   mappingRules?: MappingRule[];
+  /** When true, only explicit mappingRules are applied (no server-side auto-guess). */
+  explicitRulesOnly?: boolean;
 }
 
 export interface ResolveFieldMappingsResult {
@@ -72,12 +74,40 @@ function levenshtein(a: string, b: string): number {
 
 // ── Scoring ─────────────────────────────────────────────────────────────────────
 
-function scoreMatch(targetNorm: string, candidateNorm: string): number {
+function parentSegment(path: string): string {
+  const parts = path.split('.');
+  return parts.length >= 2 ? parts[parts.length - 2] : parts[0] ?? '';
+}
+
+function scoreMatch(
+  targetNorm: string,
+  candidateNorm: string,
+  targetPath?: string,
+  candidatePath?: string,
+): number {
   if (targetNorm === candidateNorm) return 100;
-  if (targetNorm.includes(candidateNorm) || candidateNorm.includes(targetNorm)) return 80;
+
+  const targetLeaf = (targetPath?.split('.').pop() ?? '').toLowerCase();
+  const candLeaf   = (candidatePath?.split('.').pop() ?? '').toLowerCase();
+
+  // Avoid mapping every *_Reference.ID to the first *Item_ID in the sample.
+  if (targetLeaf === 'id' || candLeaf === 'id') {
+    if (targetPath && candidatePath && normalise(targetPath) === normalise(candidatePath)) {
+      return 100;
+    }
+    const tp = normalise(parentSegment(targetPath ?? ''));
+    const cp = normalise(parentSegment(candidatePath ?? ''));
+    if (tp && cp && (tp === cp || levenshtein(tp, cp) <= 1)) return 90;
+    return 0;
+  }
+
+  const shorter = Math.min(targetNorm.length, candidateNorm.length);
+  if (shorter >= 4 && (targetNorm.includes(candidateNorm) || candidateNorm.includes(targetNorm))) {
+    return 80;
+  }
   if (levenshtein(targetNorm, candidateNorm) <= 2) return 60;
 
-  const targetTokens  = meaningfulTokens(targetNorm);
+  const targetTokens    = meaningfulTokens(targetNorm);
   const candidateTokens = meaningfulTokens(candidateNorm);
   const shared = targetTokens.filter(t => candidateTokens.includes(t));
   if (shared.length >= 2) return 40;
@@ -184,7 +214,7 @@ function bestGuessForField(
     for (const path of flattenPaths(store)) {
       const leaf     = path.split('.').pop() ?? path;
       const candNorm = normalise(leaf);
-      const score    = scoreMatch(targetNorm, candNorm);
+      const score    = scoreMatch(targetNorm, candNorm, field.path, path);
       if (score < 60) continue;
 
       const candidate: Candidate = {
@@ -216,6 +246,7 @@ export function resolveFieldMappings(input: ResolveFieldMappingsInput): ResolveF
     localStore,
     globalStore,
     mappingRules = [],
+    explicitRulesOnly = false,
   } = input;
 
   const resolved: Record<string, unknown> = {};
@@ -228,11 +259,13 @@ export function resolveFieldMappings(input: ResolveFieldMappingsInput): ResolveF
     if (value !== undefined) resolved[rule.targetField] = value;
   }
 
-  // 2. Best-guess for remaining fields
-  for (const field of inputSchema) {
-    if (ruleTargets.has(field.path) || field.path in resolved) continue;
-    const value = bestGuessForField(field, cStream, localStore, globalStore);
-    if (value !== undefined) resolved[field.path] = value;
+  // 2. Best-guess for remaining fields (skipped when user supplied explicit rules)
+  if (!explicitRulesOnly) {
+    for (const field of inputSchema) {
+      if (ruleTargets.has(field.path) || field.path in resolved) continue;
+      const value = bestGuessForField(field, cStream, localStore, globalStore);
+      if (value !== undefined) resolved[field.path] = value;
+    }
   }
 
   const unmappedRequired: string[] = [];

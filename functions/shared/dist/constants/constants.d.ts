@@ -25,8 +25,14 @@ export declare const SUB_COLLECTIONS: {
     readonly ACTIONS: "Actions";
     /** Kit-scoped operations — FloPlugConnectors/{id}/FloKits/{kitId}/FloKitActions */
     readonly FLOKITACTIONS: "FloKitActions";
-    /** Product templates: FloPlugConnectors/{id}/FloKits/{kitId}/ActionNodes */
-    readonly ACTIONNODES: "ActionNodes";
+    /**
+     * DEPRECATED:
+     * Product templates path under a FloKit.
+     * Kept only for backward compatibility with older code.
+     * Prefer tenant-scoped HUB_COLLECTIONS.FLOACTIONNODES.
+     */
+    /** Preferred action-node registry label used by newer flows */
+    readonly FLOACTIONNODES: "FloActionNodes";
 };
 export declare const HUB_COLLECTIONS: {
     readonly TENANTS: "Tenants";

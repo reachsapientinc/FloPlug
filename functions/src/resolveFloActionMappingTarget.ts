@@ -24,10 +24,11 @@ function assertDesigner(request: { auth?: { token?: Record<string, unknown> } })
 export const resolveFloActionMappingTargetCallable = onCall(async (request) => {
   assertDesigner(request);
 
-  const { connectorId, floKitId, actionId } = request.data as {
-    connectorId?: string;
-    floKitId?:    string;
-    actionId?:    string;
+  const { connectorId, floKitId, actionId, forceRefresh } = request.data as {
+    connectorId?:   string;
+    floKitId?:      string;
+    actionId?:      string;
+    forceRefresh?:  boolean;
   };
 
   if (!connectorId || !floKitId || !actionId) {
@@ -35,7 +36,9 @@ export const resolveFloActionMappingTargetCallable = onCall(async (request) => {
   }
 
   try {
-    return await resolveFloActionMappingTarget(connectorId, floKitId, actionId);
+    return await resolveFloActionMappingTarget(connectorId, floKitId, actionId, {
+      forceRefresh: forceRefresh === true,
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new HttpsError('failed-precondition', msg);

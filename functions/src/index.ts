@@ -23,6 +23,8 @@ import {toHubRole, ROLE_PERMISSIONS} from  '@floplug/shared';
 // Storage
 export { storageUpload, storageGetUrl, storageDelete, storageList } from "./helpers/storageHandlers.js";
 export { uploadSchema } from "./helpers/uploadSchema.js";
+export { syncSchemaRegistry } from "./helpers/syncSchemaRegistry.js";
+export { downloadSchemaFlatten } from "./helpers/downloadSchemaFlatten.js";
 export { listSchemaOperations } from "./helpers/listSchemaOperations.js";
 
 // Any other existing functions you already have

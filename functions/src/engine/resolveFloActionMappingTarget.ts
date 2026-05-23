@@ -8,14 +8,12 @@ import type { ActionDoc, FloKitDoc, ParsedField } from '@floplug/shared';
 import {
   COLLECTIONS, SUB_COLLECTIONS,
   resolveKitDataModelSchemaId,
+  buildWorkdayIdCompositePath,
 } from '@floplug/shared';
 import { CURRENT_SCHEMA_BUCKET } from '../constants.js';
-import {
-  listXsdRootElementNames,
-  parseSchemaFields,
-} from './actionSchemaParser.js';
-import { XMLParser } from 'fast-xml-parser';
 import { loadActionDocWithSchema } from './resolveActionSchema.js';
+import { parsedFieldsFromSchemaFlatten } from './loadSchemaFlattenIndex.js';
+import { XMLParser } from 'fast-xml-parser';
 
 const db = getFirestore();
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -30,6 +28,10 @@ export interface MappingTargetFieldNode {
   repeating: boolean;
   xsdType:   string;
   children?: MappingTargetFieldNode[];
+  /** Workday ID branch — value at `path`, type options in children */
+  fieldKind?:   'normal' | 'idBranch' | 'idTypeOption' | 'idTypeMissing';
+  idValuePath?: string;
+  idTypeValue?: string;
 }
 
 export interface ResolveFloActionMappingTargetResult {
@@ -47,15 +49,118 @@ export interface ResolveFloActionMappingTargetResult {
 }
 
 function countRequired(fields: ParsedField[]): number {
-  return fields.filter(f => f.required).length;
+  return fields.filter(f => {
+    if (/\.@type\.[^.]+$/.test(f.path)) return false;
+    return f.required;
+  }).length;
+}
+
+/** One mappable leaf per (ID + wd:type) — not a shared ID row for all types. */
+export function expandIdTypeOptionFields(fields: ParsedField[]): ParsedField[] {
+  const extra: ParsedField[] = [];
+  for (const f of fields) {
+    if (!f.path.endsWith('.@type') || !f.enumValues?.length) continue;
+    const idPath = f.path.replace(/\.@type$/i, '');
+    for (const ev of f.enumValues) {
+      const compositePath = buildWorkdayIdCompositePath(idPath, ev);
+      extra.push({
+        path:     compositePath,
+        label:    ev.replace(/_/g, ' '),
+        xsdType:  'enumeration',
+        required: false,
+        repeating: false,
+        helpText: `wd:type="${ev}" — map value for this type only`,
+      });
+    }
+  }
+  return extra.length > 0 ? [...fields, ...extra] : fields;
+}
+
+function attachIdTypeBranches(
+  nodes: MappingTargetFieldNode[],
+  idTypeEnums: Map<string, string[]>,
+  idPathsMissingEnums: Set<string>,
+): MappingTargetFieldNode[] {
+  return nodes.map(n => {
+    const enums = idTypeEnums.get(n.path)
+      ?? idTypeEnums.get(`${n.path}.ID`);
+    const nested = n.children ? attachIdTypeBranches(n.children, idTypeEnums, idPathsMissingEnums) : undefined;
+    const missing = idPathsMissingEnums.has(n.path)
+      || idPathsMissingEnums.has(`${n.path}.ID`);
+
+    if (!enums?.length && !missing) {
+      return { ...n, children: nested };
+    }
+
+    const idPath = n.path.endsWith('.ID') ? n.path : `${n.path}.ID`;
+    const enumNodes: MappingTargetFieldNode[] = enums?.length
+      ? enums.map(ev => {
+        const compositePath = buildWorkdayIdCompositePath(idPath, ev);
+        return {
+          path:        compositePath,
+          label:       ev.replace(/_/g, ' '),
+          required:    false,
+          repeating:   false,
+          xsdType:     'enumeration',
+          fieldKind:   'idTypeOption' as const,
+          idValuePath: compositePath,
+          idTypeValue: ev,
+        };
+      })
+      : [{
+        path:        `${n.path}.__type_unresolved__`,
+        label:       'Set wd:type in panel below (click here)',
+        required:    false,
+        repeating:   false,
+        xsdType:     'hint',
+        fieldKind:   'idTypeMissing' as const,
+        idValuePath: n.path,
+      }];
+
+    return {
+      ...n,
+      fieldKind: 'idBranch',
+      children:  enumNodes,
+    };
+  });
 }
 
 /** Build a shallow tree from flat dot-paths for the mapper UI. */
 export function buildFieldTree(fields: ParsedField[]): MappingTargetFieldNode[] {
+  const skipAtType = new Set<string>();
+  const idTypeEnums = new Map<string, string[]>();
+  const idPathsMissingEnums = new Set<string>();
+
+  for (const f of fields) {
+    if (!f.path.endsWith('.@type')) continue;
+    const idPath = f.path.replace(/\.@type$/, '');
+    skipAtType.add(f.path);
+    if ((f.enumValues?.length ?? 0) > 0) {
+      idTypeEnums.set(idPath, f.enumValues!);
+    } else {
+      idPathsMissingEnums.add(idPath);
+    }
+  }
+
+  const idPathsWithComposites = new Set<string>();
+  for (const f of fields) {
+    if (f.path.endsWith('.@type') && f.enumValues?.length) {
+      idPathsWithComposites.add(f.path.replace(/\.@type$/i, ''));
+    }
+  }
+
+  const treeFields = fields.filter(f => {
+    if (skipAtType.has(f.path)) return false;
+    if (f.path.endsWith('.ID') && idPathsWithComposites.has(f.path)) return false;
+    if (/\.@type\.[^.]+$/.test(f.path)) return false;
+    return true;
+  });
   const root: MappingTargetFieldNode[] = [];
   const index = new Map<string, MappingTargetFieldNode>();
 
-  for (const f of fields) {
+  for (const f of treeFields) {
+    if (/\.@type\.[^.]+$/.test(f.path)) continue;
+
     const parts = f.path.split('.');
     let parentList = root;
     let prefix = '';
@@ -96,7 +201,7 @@ export function buildFieldTree(fields: ParsedField[]): MappingTargetFieldNode[] 
     }
   }
 
-  return root;
+  return attachIdTypeBranches(root, idTypeEnums, idPathsMissingEnums);
 }
 
 async function loadKit(connectorId: string, floKitId: string): Promise<FloKitDoc | null> {
@@ -125,70 +230,107 @@ async function loadKitAction(connectorId: string, floKitId: string, actionId: st
 const xmlParser = new XMLParser({
   ignoreAttributes:    false,
   attributeNamePrefix: '@_',
-  isArray: (name) => ['xsd:element', 'element', 'xsd:complexType', 'complexType'].includes(name),
+  isArray: (name) => [
+    'xsd:element', 'element',
+    'xsd:complexType', 'complexType',
+    'xsd:group', 'group',
+    'xsd:import', 'import',
+    'xsd:include', 'include',
+  ].includes(name),
 });
 
-async function parseFieldsFromSchemaDoc(
+function resolveWsdlInputRootElement(wsdlRaw: string, operationName: string): string | null {
+  const parsed = xmlParser.parse(wsdlRaw);
+  const definitions = parsed['wsdl:definitions'] ?? parsed['definitions'] ?? {};
+  const portTypes = [].concat(definitions['wsdl:portType'] ?? definitions['portType'] ?? []);
+  const messages = [].concat(definitions['wsdl:message'] ?? definitions['message'] ?? []);
+
+  for (const pt of portTypes) {
+    const operations = [].concat((pt as any)['wsdl:operation'] ?? (pt as any)['operation'] ?? []);
+    const op = operations.find((o: any) => (o?.['@_name'] as string | undefined) === operationName);
+    if (!op) continue;
+
+    const inputRefUnknown: unknown =
+      (op as any)['wsdl:input']?.['@_message']
+      ?? (op as any)['input']?.['@_message'];
+    const inputMsgName = typeof inputRefUnknown === 'string'
+      ? inputRefUnknown.split(':').pop()
+      : '';
+    if (!inputMsgName) return null;
+
+    const inputMsg = messages.find((m: any) => m?.['@_name'] === inputMsgName);
+    if (!inputMsg) return null;
+
+    const partElUnknown: unknown =
+      (inputMsg as any)?.['wsdl:part']?.['@_element']
+      ?? (inputMsg as any)?.['part']?.['@_element'];
+    if (!partElUnknown || typeof partElUnknown !== 'string') return null;
+
+    return partElUnknown.split(':').pop() ?? null;
+  }
+
+  return null;
+}
+
+async function resolveWsdlInputRootFromSchemaRef(
   connectorId: string,
-  schemaId:    string,
-  schemaType:  string,
-  actionId:    string,
+  wsdlSchemaRef: string,
   operationName: string,
-): Promise<ParsedField[]> {
+): Promise<string | null> {
   const schemaSnap = await db
-    .doc(`${COLLECTIONS.CONNECTORS}/${connectorId}/${SUB_COLLECTIONS.SCHEMAS}/${schemaId}`)
+    .doc(`${COLLECTIONS.CONNECTORS}/${connectorId}/${SUB_COLLECTIONS.SCHEMAS}/${wsdlSchemaRef}`)
     .get();
-  if (!schemaSnap.exists) {
-    throw new Error(`Schema document not found: ${schemaId}`);
-  }
+  if (!schemaSnap.exists) return null;
   const schemaDoc = schemaSnap.data()!;
-  const [fileContents] = await storageBucket.file(schemaDoc.storagePath as string).download();
-  const rawSchema      = fileContents.toString('utf-8');
-  const effectiveType  = (schemaDoc.schemaType as string) ?? schemaType;
+  const schemaType = (schemaDoc.schemaType as string) ?? 'wsdl';
+  if (schemaType !== 'wsdl') return null;
 
-  if (effectiveType === 'xsd') {
-    const parsed = xmlParser.parse(rawSchema);
-    const xsdSchema = parsed['xsd:schema'] ?? parsed['schema'] ?? {};
-    const roots = listXsdRootElementNames(xsdSchema);
-    console.log(
-      `[resolveFloActionMappingTarget] XSD ${schemaId}: ${roots.length} root elements, ` +
-      `actionId=${actionId} operationName=${operationName}`,
-    );
-    return parseSchemaFields(rawSchema, 'xsd', operationName, actionId);
+  const wsdlPath = schemaDoc.storagePath as string;
+  if (!wsdlPath) return null;
+
+  try {
+    const [buf] = await storageBucket.file(wsdlPath).download();
+    const raw = buf.toString('utf-8');
+    return resolveWsdlInputRootElement(raw, operationName);
+  } catch (err) {
+    console.warn(`[resolveFloActionMappingTarget] failed reading WSDL ${wsdlPath}: ${err}`);
+    return null;
   }
-
-  return parseSchemaFields(rawSchema, effectiveType, operationName, actionId);
 }
 
 export async function resolveFloActionMappingTarget(
   connectorId: string,
   floKitId:    string,
   actionId:    string,
+  options?: { forceRefresh?: boolean },
 ): Promise<ResolveFloActionMappingTargetResult> {
+  const forceRefresh = options?.forceRefresh === true;
   const cacheRef = db.doc(
     `${COLLECTIONS.CONNECTORS}/${connectorId}/${SUB_COLLECTIONS.FLOKITS}/${floKitId}/${SUB_COLLECTIONS.FLOKITACTIONS}/${actionId}/Cache/mappingTarget`,
   );
 
   try {
-    const cached = await cacheRef.get();
-    if (cached.exists) {
-      const data  = cached.data()!;
-      const ageMs = Date.now() - (data.cachedAt?.toMillis?.() ?? 0);
-      if (ageMs < CACHE_TTL_MS && Array.isArray(data.fields) && data.fields.length > 0) {
-        const fields = data.fields as ParsedField[];
-        return {
-          fields,
-          tree:              buildFieldTree(fields),
-          actionId,
-          actionLabel:       (data.actionLabel as string) ?? actionId,
-          floKitId,
-          connectorId,
-          schemaSource:      (data.schemaSource as MappingTargetSchemaSource) ?? 'dataModel',
-          dataModelSchemaId: (data.dataModelSchemaId as string) ?? null,
-          operationName:     (data.operationName as string) ?? actionId,
-          requiredCount:     countRequired(fields),
-          fromCache:         true,
-        };
+    if (!forceRefresh) {
+      const cached = await cacheRef.get();
+      if (cached.exists) {
+        const data  = cached.data()!;
+        const ageMs = Date.now() - (data.cachedAt?.toMillis?.() ?? 0);
+        if (ageMs < CACHE_TTL_MS && Array.isArray(data.fields) && data.fields.length > 0) {
+          const fields = expandIdTypeOptionFields(data.fields as ParsedField[]);
+          return {
+            fields,
+            tree:              buildFieldTree(fields),
+            actionId,
+            actionLabel:       (data.actionLabel as string) ?? actionId,
+            floKitId,
+            connectorId,
+            schemaSource:      (data.schemaSource as MappingTargetSchemaSource) ?? 'dataModel',
+            dataModelSchemaId: (data.dataModelSchemaId as string) ?? null,
+            operationName:     (data.operationName as string) ?? actionId,
+            requiredCount:     countRequired(fields),
+            fromCache:         true,
+          };
+        }
       }
     }
   } catch {
@@ -203,6 +345,30 @@ export async function resolveFloActionMappingTarget(
     kitAction?.operationName
     ?? connectorAction?.operationName
     ?? actionId;
+
+  let requestRootHint: string | null =
+    (kitAction as any)?.requestBinding?.requestRootElement
+    ?? (connectorAction as any)?.requestBinding?.requestRootElement
+    ?? null;
+
+  if (requestRootHint) {
+    console.log(
+      `[resolveFloActionMappingTarget] using persisted request root: ${requestRootHint}`,
+    );
+  }
+
+  if (!requestRootHint && connectorAction?.schemaRef && operationName) {
+    requestRootHint = await resolveWsdlInputRootFromSchemaRef(
+      connectorId,
+      connectorAction.schemaRef,
+      operationName,
+    );
+    if (requestRootHint) {
+      console.log(
+        `[resolveFloActionMappingTarget] WSDL input root for ${operationName}: ${requestRootHint}`,
+      );
+    }
+  }
   const actionLabel =
     kitAction?.label
     ?? connectorAction?.label
@@ -216,32 +382,41 @@ export async function resolveFloActionMappingTarget(
 
   if (dataModelId) {
     try {
-      fields = await parseFieldsFromSchemaDoc(
-        connectorId, dataModelId, 'xsd', actionId, operationName,
+      const { fields: flattenFields } = await parsedFieldsFromSchemaFlatten(
+        connectorId,
+        dataModelId,
+        operationName,
+        requestRootHint,
+        actionId,
       );
+      fields            = flattenFields;
       schemaSource      = 'dataModel';
       dataModelSchemaId = dataModelId;
+      console.log(
+        `[resolveFloActionMappingTarget] loaded flatten index from data model ${dataModelId}: ` +
+        `${fields.length} fields`,
+      );
     } catch (err) {
-      console.warn(`[resolveFloActionMappingTarget] data model parse failed: ${err}`);
+      console.warn(`[resolveFloActionMappingTarget] data model flatten load failed: ${err}`);
     }
   }
 
   if (fields.length === 0 && connectorAction?.schemaRef) {
     try {
-      const svcType = connectorAction.schemaSource === 'wsdl' ? 'wsdl' : 'xsd';
-      fields = await parseFieldsFromSchemaDoc(
+      const { fields: flattenFields } = await parsedFieldsFromSchemaFlatten(
         connectorId,
         connectorAction.schemaRef,
-        svcType,
-        actionId,
         operationName,
+        requestRootHint,
+        actionId,
       );
-      if (fields.length > 0) {
-        schemaSource = 'services';
-        console.log(`[resolveFloActionMappingTarget] fallback to services schema ${connectorAction.schemaRef}`);
-      }
+      fields       = flattenFields;
+      schemaSource = 'services';
+      console.log(
+        `[resolveFloActionMappingTarget] loaded flatten from services schema ${connectorAction.schemaRef}`,
+      );
     } catch (err) {
-      console.warn(`[resolveFloActionMappingTarget] services schema fallback failed: ${err}`);
+      console.warn(`[resolveFloActionMappingTarget] services flatten load failed: ${err}`);
     }
   }
 
@@ -264,13 +439,15 @@ export async function resolveFloActionMappingTarget(
   if (fields.length === 0) {
     throw new Error(
       `No mapping fields found for action "${actionId}" in kit "${floKitId}". ` +
-      'Ensure the kit has a data model schema or the action has a services schema.',
+      'Ensure the kit pins a data model schema with a compiled flatten index (re-upload in Schema Manager), ' +
+      'or the action has manual inputSchema.',
     );
   }
 
+  const fieldsForMapper = expandIdTypeOptionFields(fields);
   const result: ResolveFloActionMappingTargetResult = {
-    fields,
-    tree: buildFieldTree(fields),
+    fields: fieldsForMapper,
+    tree: buildFieldTree(fieldsForMapper),
     actionId,
     actionLabel,
     floKitId,
@@ -278,7 +455,7 @@ export async function resolveFloActionMappingTarget(
     schemaSource,
     dataModelSchemaId,
     operationName,
-    requiredCount: countRequired(fields),
+    requiredCount: countRequired(fieldsForMapper),
     fromCache:     false,
   };
 

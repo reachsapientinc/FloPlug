@@ -17,7 +17,7 @@ import HubProvisioner    from '../modules/HubManagement';
 import TierManager       from '../modules/TierManagement';
 import AuthManager       from '../modules/AuthManagement';
 import ConnectorManager  from '../modules/ConnectorManagement';
-import ActionManager     from '../modules/ActionManagement';
+import SchemaManager     from '../modules/SchemaManagement';
 import UserManagement    from '../modules/UserManagement';
 import FloKitManager from '../modules/FloKitManagement';
 import '../App.css';
@@ -252,7 +252,7 @@ const AdminDashboard: React.FC<{ env?: FloPlugEnv }> = ({ env }) => {
             {activeModule === 'tiers'      && <TierManager />}
             {activeModule === 'auth'       && <AuthManager />}
             {activeModule === 'connectors' && <ConnectorManager />}
-            {activeModule === 'actions'    && <ActionManager />}
+            {activeModule === 'actions'    && <SchemaManager />}
             {activeModule === 'floKits'    && <FloKitManager />}
             {activeModule === 'users'      && <UserManagement />}
           </div>

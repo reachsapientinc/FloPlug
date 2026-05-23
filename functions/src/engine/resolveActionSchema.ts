@@ -23,11 +23,25 @@ export interface LoadActionSchemaParams {
 export async function loadActionDocWithSchema(
   params: LoadActionSchemaParams,
 ): Promise<ActionDoc> {
-  const { connectorId, actionId } = params;
+  const { connectorId, actionId, floKitId } = params;
 
-  const actionRef = db.doc(`${COLLECTIONS.CONNECTORS}/${connectorId}/${SUB_COLLECTIONS.ACTIONS}/${actionId}`);
-  const actionSnap = await actionRef.get();
-  if (!actionSnap.exists) {
+  const kitActionRef = floKitId
+    ? db.doc(
+      `${COLLECTIONS.CONNECTORS}/${connectorId}/${SUB_COLLECTIONS.FLOKITS}/${floKitId}/${SUB_COLLECTIONS.FLOKITACTIONS}/${actionId}`,
+    )
+    : null;
+  const connectorActionRef = db.doc(
+    `${COLLECTIONS.CONNECTORS}/${connectorId}/${SUB_COLLECTIONS.ACTIONS}/${actionId}`,
+  );
+
+  const [kitActionSnap, connectorActionSnap] = await Promise.all([
+    kitActionRef ? kitActionRef.get() : Promise.resolve(null),
+    connectorActionRef.get(),
+  ]);
+
+  const actionSnap = kitActionSnap?.exists ? kitActionSnap : connectorActionSnap;
+  const actionRef = kitActionSnap?.exists ? kitActionRef : connectorActionRef;
+  if (!actionSnap?.exists || !actionRef) {
     throw new Error(`Action not found: ${connectorId}/${actionId}`);
   }
 
@@ -38,7 +52,7 @@ export async function loadActionDocWithSchema(
   }
 
   const cacheRef = db.doc(
-    `${COLLECTIONS.CONNECTORS}/${connectorId}/${SUB_COLLECTIONS.ACTIONS}/${actionId}/Cache/parsedSchema`,
+    `${actionRef.path}/Cache/parsedSchema`,
   );
 
   try {

@@ -27,8 +27,15 @@ export const SUB_COLLECTIONS = {
     ACTIONS: 'Actions',
     /** Kit-scoped operations — FloPlugConnectors/{id}/FloKits/{kitId}/FloKitActions */
     FLOKITACTIONS: 'FloKitActions',
-    /** Product templates: FloPlugConnectors/{id}/FloKits/{kitId}/ActionNodes */
-    ACTIONNODES: 'ActionNodes',
+    /**
+     * DEPRECATED:
+     * Product templates path under a FloKit.
+     * Kept only for backward compatibility with older code.
+     * Prefer tenant-scoped HUB_COLLECTIONS.FLOACTIONNODES.
+     */
+    // ACTIONNODES: 'ActionNodes',
+    /** Preferred action-node registry label used by newer flows */
+    FLOACTIONNODES: 'FloActionNodes',
 };
 // ── Sub-collection names ──────────────────────────────────────────────────────
 export const HUB_COLLECTIONS = {

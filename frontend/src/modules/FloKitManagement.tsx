@@ -13,7 +13,7 @@ import {
   serverTimestamp, query, orderBy, writeBatch,
 } from 'firebase/firestore';
 import type {
-  ConnectorDoc, FloKitDoc, ConnectorSchema, ActionDoc, FloKitActionNodeDoc,
+  ConnectorDoc, FloKitDoc, ConnectorSchema, ActionDoc,
   SchemaOperationRef,
 } from '@floplug/shared';
 import {
@@ -322,6 +322,13 @@ const FloKitManagement: React.FC = () => {
 
   const clearOperations = () => setSelectedOperations([]);
 
+  /** Firestore rejects `undefined` anywhere in a document — omit those keys. */
+  function omitUndefined<T extends Record<string, unknown>>(obj: T): Record<string, unknown> {
+    return Object.fromEntries(
+      Object.entries(obj).filter(([, v]) => v !== undefined),
+    );
+  }
+
   const upsertActionsForOperations = async (
     ops: SchemaOperationRef[],
     selectedNames: string[],
@@ -345,8 +352,25 @@ const FloKitManagement: React.FC = () => {
     for (const name of selectedNames) {
       const op = ops.find(o => o.name === name);
       if (!op) continue;
+      const opAny = op as SchemaOperationRef & {
+        inputMessageName?: string;
+        requestRootElement?: string;
+        requestTypeName?: string;
+      };
       const id = operationDocId(name);
-      const action: ActionDoc = {
+      const requestBinding = omitUndefined({
+        inputMessageName:     opAny.inputMessageName,
+        requestRootElement:   opAny.requestRootElement,
+        requestTypeName:      opAny.requestTypeName,
+        resolvedAt:           new Date(),
+        servicesSchemaId:     form.servicesSchemaId || undefined,
+        servicesSchemaVersion:
+          selectedServicesSchema?.version ?? form.servicesSchemaVersion ?? undefined,
+      });
+      const isWsdl = schemaSource === 'wsdl';
+      const action: ActionDoc & {
+        requestBinding?: Record<string, unknown>;
+      } = {
         id,
         connectorId: selectedConn,
         label:       op.label,
@@ -359,6 +383,13 @@ const FloKitManagement: React.FC = () => {
         schemaRef:   form.servicesSchemaId,
         operationName: name,
         floKitId:    form.id,
+        ...(isWsdl ? {
+          contentType: 'text/xml',
+          soapAction:  `urn:com.workday/bsvc/${name}`,
+        } : schemaSource === 'openapi' || schemaSource === 'graphql' ? {
+          contentType: 'application/json',
+        } : {}),
+        ...(Object.keys(requestBinding).length > 0 ? { requestBinding } : {}),
       };
       batch.set(doc(actionsCol, id), { ...action, updatedAt: serverTimestamp() }, { merge: true });
       saved.push(action);
@@ -368,51 +399,11 @@ const FloKitManagement: React.FC = () => {
     return saved;
   };
 
-  const syncActionNodeTemplates = async (
-    connId: string,
-    kitId: string,
-    kit: FloKitDoc,
-    selectedActions: ActionDoc[],
-  ) => {
-    const nodesCol = collection(
-      db, COLLECTIONS.FLOPLUGCONNECTORS, connId,
-      SUB_COLLECTIONS.FLOKITS, kitId, SUB_COLLECTIONS.ACTIONNODES,
-    );
-    const existingSnap = await getDocs(nodesCol);
-    const keepIds = new Set(kit.actionIds);
-    const batch = writeBatch(db);
-
-    for (const d of existingSnap.docs) {
-      if (!keepIds.has(d.id)) batch.delete(d.ref);
-    }
-
-    const now = serverTimestamp();
-    for (const action of selectedActions) {
-      const servicesId = resolveKitServicesSchemaId(kit);
-      const node: FloKitActionNodeDoc = {
-        id:            action.id,
-        floKitId:      kitId,
-        connectorId:   connId,
-        actionId:      action.id,
-        actionLabel:   action.label,
-        servicesSchemaId:        servicesId,
-        servicesSchemaVersion:   kit.servicesSchemaVersion ?? kit.wsdlSchemaVersion ?? kit.schemaVersion ?? '',
-        dataModelSchemaId:       kit.dataModelSchemaId,
-        dataModelSchemaVersion:  kit.dataModelSchemaVersion ?? '',
-        wsdlSchemaId:      servicesId,
-        wsdlSchemaVersion: kit.servicesSchemaVersion ?? kit.wsdlSchemaVersion ?? kit.schemaVersion ?? '',
-        schemaId:          servicesId,
-        schemaVersion:     kit.servicesSchemaVersion ?? kit.wsdlSchemaVersion ?? kit.schemaVersion ?? '',
-        kitVersion:    kit.kitVersion,
-        category:      action.category,
-        isActive:      true,
-        updatedAt:     now as unknown,
-      };
-      batch.set(doc(nodesCol, action.id), node, { merge: true });
-    }
-
-    await batch.commit();
-  };
+  // NOTE:
+  // We intentionally do NOT sync kit-scoped `ActionNodes` from this screen.
+  // Source of truth for saved operations is:
+  //   FloPlugConnectors/{connectorId}/FloKits/{kitId}/FloKitActions/{actionId}
+  // Hub-visible node registry uses tenant-scoped `FloActionNodes`.
 
   const persistKit = async (payload: FloKitDoc, creating: boolean) => {
     if (!selectedConn) throw new Error('Select a connector first');
@@ -490,9 +481,9 @@ const FloKitManagement: React.FC = () => {
 
     setSaving(true);
     try {
-      const savedActions = await upsertActionsForOperations(schemaOps, selectedOperations);
+      await upsertActionsForOperations(schemaOps, selectedOperations);
       await persistKit(payload, false);
-      await syncActionNodeTemplates(selectedConn, form.id, payload, savedActions);
+      // ActionNodes sync disabled by design; keep save focused on FloKit + FloKitActions.
       flash(`Schema and ${selectedOperations.length} operation(s) saved for '${form.name}' ✓`);
     } catch (e: unknown) { flash(e instanceof Error ? e.message : String(e), true); }
     finally { setSaving(false); }

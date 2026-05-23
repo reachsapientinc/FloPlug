@@ -111,6 +111,13 @@ export interface ConnectorSchema {
         endpoint?: string;
     }>;
     operationsParsedAt?: unknown;
+    /** Pre-compiled mapper index (JSON in Cloud Storage) — built at upload */
+    flattenStoragePath?: string;
+    flattenCompiledAt?: unknown;
+    /** Product registry key (FloPlugRegistry/GlobalConfig/Registry/sch__...) */
+    registryKey?: string;
+    /** Set when duplicate schema doc was superseded by canonical registry entry */
+    supersededBy?: string;
 }
 export interface ParsedField {
     path: string;
@@ -157,6 +164,15 @@ export interface ActionDoc {
     updatedAt?: Date;
     createdBy?: string;
     floKitId?: string;
+    /** Optional precomputed WSDL request binding for faster mapping-target resolution. */
+    requestBinding?: {
+        inputMessageName?: string;
+        requestRootElement?: string;
+        requestTypeName?: string;
+        resolvedAt?: unknown;
+        servicesSchemaId?: string;
+        servicesSchemaVersion?: string;
+    };
 }
 export type PermissionCategory = 'plugs' | 'users' | 'flos' | 'logs' | 'settings';
 export interface PermissionDoc {

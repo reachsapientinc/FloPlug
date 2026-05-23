@@ -1,5 +1,5 @@
 /**
- * ActionManagement.tsx
+ * SchemaManagement.tsx
  *
  * Product Admin screen — three sub-tabs per connector:
  *   Schemas   — upload WSDL / XSD / OpenAPI files to Cloud Storage, index in Firestore
@@ -9,7 +9,7 @@
  * Firestore paths:
  *   FloPlugConnectors/{id}                   → ConnectorDoc  (read-only here)
  *   FloPlugConnectors/{id}/Schemas/{id}      → ConnectorSchema
- *   FloPlugConnectors/{id}/Actions/{id}      → ActionDoc
+ *   FloPlugConnectors/{id}/FloKits/{kitId}/FloKitActions/{id} → kit-scoped ActionDoc
  *
  * Cloud Storage:
  *   gs://floplug-schemas/{connectorId}/{version}/{filename}
@@ -22,7 +22,7 @@ import { db } from '../firebaseConfig';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import {
   collection, doc, getDocs, setDoc,
-  serverTimestamp, query, orderBy,
+  serverTimestamp,
 } from 'firebase/firestore';
 
 // Dedicated bucket for schema files (WSDL/XSD/OpenAPI).
@@ -31,6 +31,12 @@ import {
 // Bucket must be created in Firebase console: gs://floplug-schemas
 import type {ConnectorDoc,ActionDoc,ConnectorSchema,ParsedField, SchemaOperationRef } from "@floplug/shared";
 import { fetchSchemaOperations } from '../lib/schemaOperations';
+import { loadSchemasForConnector } from '../lib/schemaRegistry';
+import {
+  floKitActionDocRef,
+  loadFloKitActionsForConnector,
+  type KitScopedAction,
+} from '../lib/floKitActions';
 import { loadConnectors } from '../types/AuthConnectorTypes';
 import {COLLECTIONS,HUB_COLLECTIONS,
       SUB_COLLECTIONS,ROLES,
@@ -62,14 +68,15 @@ const emptyAction = (connectorId: string): Omit<ActionDoc, 'id'> => ({
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// ActionManagement
+// SchemaManagement
 // ═════════════════════════════════════════════════════════════════════════════
-const ActionManagement: React.FC = () => {
+const SchemaManagement: React.FC = () => {
   const [connectors,   setConnectors]   = useState<ConnectorDoc[]>([]);
   const [selectedConn, setSelectedConn] = useState<string | null>(null);
   const [subTab,       setSubTab]       = useState<SubTab>('schemas');
   const [schemas,      setSchemas]      = useState<ConnectorSchema[]>([]);
-  const [actions,      setActions]      = useState<ActionDoc[]>([]);
+  const [actions,      setActions]      = useState<KitScopedAction[]>([]);
+  const [actionsLoading, setActionsLoading] = useState(false);
   const [loading,      setLoading]      = useState(true);
   const [error,        setError]        = useState('');
   const [successMsg,   setSuccessMsg]   = useState('');
@@ -87,18 +94,30 @@ const ActionManagement: React.FC = () => {
     }).catch(e => { flash(e.message, true); setLoading(false); });
   }, []);
 
-  // ── Load schemas + actions when connector changes ───────────────────────────
+  // ── Schemas only on connector click (do not block on FloKitActions / registry) ──
   const loadConnectorData = useCallback(async (connId: string) => {
     setLoading(true);
+    setActions([]);
     try {
-      const [schemaSnap, actionSnap] = await Promise.all([
-        getDocs(query(collection(db, COLLECTIONS.FLOPLUGCONNECTORS, connId, SUB_COLLECTIONS.SCHEMAS), orderBy('label'))),
-        getDocs(query(collection(db, COLLECTIONS.FLOPLUGCONNECTORS, connId, SUB_COLLECTIONS.FLOKITACTIONS), orderBy('label'))),
-      ]);
-      setSchemas(schemaSnap.docs.map(d => ({ id: d.id, ...d.data() } as ConnectorSchema)));
-      setActions(actionSnap.docs.map(d => ({ id: d.id, ...d.data() } as ActionDoc)));
-    } catch (e: any) { flash(e.message, true); }
-    finally { setLoading(false); }
+      const schemasList = await loadSchemasForConnector(connId);
+      setSchemas(schemasList);
+    } catch (e: unknown) {
+      flash(e instanceof Error ? e.message : String(e), true);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const loadKitActions = useCallback(async (connId: string) => {
+    setActionsLoading(true);
+    try {
+      const list = await loadFloKitActionsForConnector(connId);
+      setActions(list);
+    } catch (e: unknown) {
+      flash(e instanceof Error ? e.message : String(e), true);
+    } finally {
+      setActionsLoading(false);
+    }
   }, []);
 
   const handleSelectConnector = (id: string) => {
@@ -106,6 +125,13 @@ const ActionManagement: React.FC = () => {
     setSubTab('schemas');
     loadConnectorData(id);
   };
+
+  useEffect(() => {
+    if (!selectedConn) return;
+    if (subTab === 'actions' || subTab === 'preview') {
+      loadKitActions(selectedConn);
+    }
+  }, [selectedConn, subTab, loadKitActions]);
 
   const conn = connectors.find(c => c.id === selectedConn) ?? null;
 
@@ -192,23 +218,51 @@ const ActionManagement: React.FC = () => {
               <SchemaTab
                 connectorId={selectedConn}
                 schemas={schemas}
-                onSaved={s => { setSchemas(prev => { const i = prev.findIndex(x => x.id === s.id); return i >= 0 ? prev.map(x => x.id === s.id ? s : x) : [...prev, s]; }); flash('Schema saved ✓'); }}
+                onSaved={s => {
+                  setSchemas(prev => {
+                    const key = s.registryKey ?? s.storagePath;
+                    const filtered = prev.filter(
+                      x => (x.registryKey ?? x.storagePath) !== key || x.id === s.id,
+                    );
+                    const i = filtered.findIndex(x => x.id === s.id);
+                    if (i >= 0) return filtered.map(x => x.id === s.id ? s : x);
+                    return [...filtered, s];
+                  });
+                  flash('Schema saved ✓');
+                }}
+                onRegistrySynced={() => selectedConn && loadConnectorData(selectedConn)}
                 onError={flash}
               />
             ) : subTab === 'actions' ? (
-              <ActionTab
-                connectorId={selectedConn}
-                schemas={schemas}
-                actions={actions}
-                onSaved={a => { setActions(prev => { const i = prev.findIndex(x => x.id === a.id); return i >= 0 ? prev.map(x => x.id === a.id ? a : x) : [...prev, a]; }); flash('Action saved ✓'); }}
-                onError={flash}
-              />
+              actionsLoading ? (
+                <div style={st.empty}>Loading kit actions…</div>
+              ) : (
+                <ActionTab
+                  connectorId={selectedConn}
+                  schemas={schemas}
+                  actions={actions}
+                  onReloadActions={() => loadKitActions(selectedConn)}
+                  onSaved={a => {
+                    setActions(prev => {
+                      const i = prev.findIndex(x => x.id === a.id && x.floKitId === a.floKitId);
+                      if (i >= 0) return prev.map(x => (x.id === a.id && x.floKitId === a.floKitId ? a : x));
+                      return [...prev, a];
+                    });
+                    flash('Action saved ✓');
+                  }}
+                  onError={flash}
+                />
+              )
             ) : (
-              <PreviewTab
-                connectorId={selectedConn}
-                actions={actions}
-                onError={flash}
-              />
+              actionsLoading ? (
+                <div style={st.empty}>Loading kit actions…</div>
+              ) : (
+                <PreviewTab
+                  connectorId={selectedConn}
+                  actions={actions}
+                  onError={flash}
+                />
+              )
             )}
           </div>
         ) : (
@@ -229,15 +283,18 @@ interface SchemaTabProps {
   schemas:     ConnectorSchema[];
   onSaved:     (s: ConnectorSchema) => void;
   onError:     (msg: string, isErr?: boolean) => void;
+  onRegistrySynced?: () => void;
 }
 
-const SchemaTab: React.FC<SchemaTabProps> = ({ connectorId, schemas, onSaved, onError }) => {
+const SchemaTab: React.FC<SchemaTabProps> = ({ connectorId, schemas, onSaved, onError, onRegistrySynced }) => {
   const [showForm,    setShowForm]    = useState(false);
   const [file,        setFile]        = useState<File | null>(null);
   const [label,       setLabel]       = useState('');
   const [version,     setVersion]     = useState('');
   const [schemaType,  setSchemaType]  = useState<'wsdl' | 'xsd' | 'openapi'>('wsdl');
   const [uploading,   setUploading]   = useState(false);
+  const [syncing,     setSyncing]     = useState(false);
+  const [downloading, setDownloading] = useState<string | null>(null);
   const [parseResult, setParseResult] = useState<string | null>(null);
 
   
@@ -266,29 +323,87 @@ const SchemaTab: React.FC<SchemaTabProps> = ({ connectorId, schemas, onSaved, on
     }) as any;
 
     const opCount = result.operationCount ?? result.operations?.length ?? 0;
+    const flattenCount = result.flattenOperationCount ?? 0;
     onSaved({ 
       id: result.schemaId, connectorId, label: label.trim(),
       version: version.trim(), schemaType, storagePath: result.storagePath,
+      registryKey: result.registryKey ?? undefined,
       isActive: true, uploadedAt: new Date(), uploadedBy: ROLES.FLOPLUG_ROLES.ADMIN,
       operations: result.operations,
+      flattenStoragePath: result.flattenStoragePath ?? undefined,
     });
 
-    setParseResult(opCount > 0 ? `${opCount} operations parsed from file` : null);
+    let parseMsg = result.updated ? 'Schema updated (same registry entry)' : 'Schema registered';
+    if (opCount > 0) parseMsg += ` · ${opCount} operations`;
+    if (flattenCount > 0) {
+      parseMsg += parseMsg ? ` · ${flattenCount} ops in mapping index` : `${flattenCount} ops in mapping index`;
+    }
+    if (result.flattenWarning) {
+      parseMsg += parseMsg ? ` · flatten warning: ${result.flattenWarning}` : `flatten warning: ${result.flattenWarning}`;
+    }
+    setParseResult(parseMsg || null);
     onError("Schema uploaded ✓");   // ← was flash()
     setShowForm(false); setFile(null); setLabel(""); setVersion("");
   } catch (e: any) { onError(e.message, true); }
   finally { setUploading(false); }
 };
 
+  const handleDownloadFlatten = async (schemaId: string) => {
+    setDownloading(schemaId);
+    try {
+      const fn = httpsCallable<
+        { connectorId: string; schemaId: string },
+        { downloadUrl: string; flattenPath: string }
+      >(getFunctions(), 'downloadSchemaFlatten');
+      const { data } = await fn({ connectorId, schemaId });
+      window.open(data.downloadUrl, '_blank', 'noopener,noreferrer');
+      onError(`Download started: ${data.flattenPath}`);
+    } catch (e: unknown) {
+      onError(e instanceof Error ? e.message : String(e), true);
+    } finally {
+      setDownloading(null);
+    }
+  };
+
+  const handleSyncRegistry = async () => {
+    setSyncing(true);
+    setParseResult(null);
+    try {
+      const fn = httpsCallable<{ connectorId: string }, {
+        registryEntriesWritten: number;
+        duplicatesDeactivated: number;
+        canonicalSchemas: number;
+        skipped: number;
+        details: string[];
+      }>(getFunctions(), 'syncSchemaRegistry');
+      const { data } = await fn({ connectorId });
+      setParseResult(
+        `Registry synced: ${data.registryEntriesWritten} entries, ` +
+        `${data.duplicatesDeactivated} duplicates deactivated`,
+      );
+      onRegistrySynced?.();
+      onError('Registry sync complete ✓');
+    } catch (e: unknown) {
+      onError(e instanceof Error ? e.message : String(e), true);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
         <div style={{ fontSize: 11, color: '#6b6b80' }}>
-          {schemas.length} schema file{schemas.length !== 1 ? 's' : ''} registered
+          {schemas.length} schema file{schemas.length !== 1 ? 's' : ''} (deduped by registry path)
         </div>
-        <button onClick={() => setShowForm(v => !v)} style={st.primaryBtn}>
-          {showForm ? 'Cancel' : '+ Upload Schema'}
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button type="button" onClick={handleSyncRegistry} disabled={syncing} style={st.cancelBtn}>
+            {syncing ? 'Syncing…' : 'Sync registry (existing schemas)'}
+          </button>
+          <button onClick={() => setShowForm(v => !v)} style={st.primaryBtn}>
+            {showForm ? 'Cancel' : '+ Upload Schema'}
+          </button>
+        </div>
       </div>
 
       {/* Upload form */}
@@ -371,10 +486,35 @@ const SchemaTab: React.FC<SchemaTabProps> = ({ connectorId, schemas, onSaved, on
                 <span style={{ fontSize: 9, color: '#45455a' }}>v{s.version}</span>
               </div>
               <div style={{ fontSize: 9, color: '#3a3a50', fontFamily: 'monospace' }}>{s.storagePath}</div>
+              {s.registryKey && (
+                <div style={{ fontSize: 9, color: '#45455a', fontFamily: 'monospace', marginTop: 2 }}>
+                  registry: {s.registryKey}
+                </div>
+              )}
+              <div style={{ fontSize: 9, color: '#45455a', fontFamily: 'monospace', marginTop: 2 }}>
+                id: {s.id}{s.flattenStoragePath ? ' · flatten ✓' : ' · flatten —'}
+              </div>
+              {s.flattenStoragePath && (
+                <div style={{ fontSize: 9, color: '#3a3a50', fontFamily: 'monospace', marginTop: 2 }}>
+                  flatten: {s.flattenStoragePath}
+                </div>
+              )}
             </div>
-            <span style={{ ...st.chip, ...(s.isActive ? st.chipGreen : st.chipRed) }}>
-              {s.isActive ? 'Active' : 'Off'}
-            </span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
+              <span style={{ ...st.chip, ...(s.isActive ? st.chipGreen : st.chipRed) }}>
+                {s.isActive ? 'Active' : 'Off'}
+              </span>
+              {(s.schemaType === 'wsdl' || s.schemaType === 'xsd') && (
+                <button
+                  type="button"
+                  style={{ ...st.cancelBtn, fontSize: 10, padding: '4px 8px' }}
+                  disabled={downloading === s.id}
+                  onClick={() => handleDownloadFlatten(s.id)}
+                >
+                  {downloading === s.id ? '…' : '↓ flatten.json'}
+                </button>
+              )}
+            </div>
           </div>
         </div>
       ))}
@@ -388,12 +528,15 @@ const SchemaTab: React.FC<SchemaTabProps> = ({ connectorId, schemas, onSaved, on
 interface ActionTabProps {
   connectorId: string;
   schemas:     ConnectorSchema[];
-  actions:     ActionDoc[];
-  onSaved:     (a: ActionDoc) => void;
+  actions:     KitScopedAction[];
+  onReloadActions?: () => void;
+  onSaved:     (a: KitScopedAction) => void;
   onError:     (msg: string, isErr?: boolean) => void;
 }
 
-const ActionTab: React.FC<ActionTabProps> = ({ connectorId, schemas, actions, onSaved, onError }) => {
+const ActionTab: React.FC<ActionTabProps> = ({
+  connectorId, schemas, actions, onReloadActions, onSaved, onError,
+}) => {
   const [selectedAction, setSelectedAction] = useState<ActionDoc | null>(null);
   const [isNew,          setIsNew]          = useState(false);
   const [form,           setForm]           = useState<Omit<ActionDoc, 'id'>>(emptyAction(connectorId));
@@ -402,15 +545,16 @@ const ActionTab: React.FC<ActionTabProps> = ({ connectorId, schemas, actions, on
   const [schemaOps, setSchemaOps] = useState<SchemaOperationRef[]>([]);
   const [loadingOps, setLoadingOps] = useState(false);
 
-// Load FloKits for this connector
-useEffect(() => {
-  getDocs(query(
-    collection(db, COLLECTIONS.FLOPLUGCONNECTORS, connectorId, SUB_COLLECTIONS.FLOKITS),
-    orderBy('name')
-  )).then(snap => {
-    setFloKits(snap.docs.map(d => ({ id: d.id, name: (d.data().name as string) ?? d.id })));
-  }).catch(console.error);
-}, [connectorId]);
+  useEffect(() => {
+    getDocs(collection(db, COLLECTIONS.FLOPLUGCONNECTORS, connectorId, SUB_COLLECTIONS.FLOKITS))
+      .then(snap => {
+        const kits = snap.docs
+          .map(d => ({ id: d.id, name: (d.data().name as string) ?? d.id }))
+          .sort((a, b) => a.name.localeCompare(b.name));
+        setFloKits(kits);
+      })
+      .catch(err => console.error('[ActionTab] load FloKits:', err));
+  }, [connectorId]);
 
   const patch = (p: Partial<ActionDoc>) => setForm(f => ({ ...f, ...p }));
 
@@ -436,7 +580,8 @@ useEffect(() => {
   }, [connectorId, form.schemaRef, form.schemaSource, schemas]);
 
   const handleNew = () => {
-    setForm(emptyAction(connectorId));
+    const defaultKitId = floKits[0]?.id ?? '';
+    setForm({ ...emptyAction(connectorId), floKitId: defaultKitId });
     setSelectedAction(null);
     setIsNew(true);
   };
@@ -450,32 +595,69 @@ useEffect(() => {
   const handleSave = async () => {
     if (!form.label.trim()) { onError('Label is required', true); return; }
     if (!form.endpoint.trim()) { onError('Endpoint is required', true); return; }
+    const floKitId = (form.floKitId ?? selectedAction?.floKitId ?? '').trim();
+    if (!floKitId) {
+      onError('Select a FloKit — actions are saved under FloKits/{kitId}/FloKitActions.', true);
+      return;
+    }
     setSaving(true);
     try {
       const ref = selectedAction
-        ? doc(db, COLLECTIONS.FLOPLUGCONNECTORS, connectorId, SUB_COLLECTIONS.FLOKITACTIONS, selectedAction.id)
-        : doc(collection(db, COLLECTIONS.FLOPLUGCONNECTORS, connectorId, SUB_COLLECTIONS.FLOKITACTIONS));
-      const saved: ActionDoc = { ...form, id: ref.id, connectorId, updatedAt: new Date() };
+        ? floKitActionDocRef(connectorId, floKitId, selectedAction.id)
+        : floKitActionDocRef(connectorId, floKitId);
+      const kitName = floKits.find(k => k.id === floKitId)?.name ?? floKitId;
+      const saved: KitScopedAction = {
+        ...form,
+        id: ref.id,
+        connectorId,
+        floKitId,
+        floKitName: kitName,
+        updatedAt: new Date(),
+      };
       await setDoc(ref, { ...saved, updatedAt: serverTimestamp() }, { merge: true });
       onSaved(saved);
       setSelectedAction(saved);
       setIsNew(false);
-    } catch (e: any) { onError(e.message, true); }
-    finally { setSaving(false); }
+    } catch (e: unknown) {
+      onError(e instanceof Error ? e.message : String(e), true);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
     <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
       {/* Action list */}
       <div style={{ flex: '0 0 200px', display: 'flex', flexDirection: 'column', gap: 5 }}>
-        <button onClick={handleNew} style={{ ...st.primaryBtn, marginBottom: 8 }}>+ New Action</button>
-        {actions.length === 0 ? (
-          <div style={st.empty}>No actions yet.</div>
+        <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+          <button onClick={handleNew} style={{ ...st.primaryBtn, flex: 1 }} disabled={floKits.length === 0}>
+            + New Action
+          </button>
+          {onReloadActions && (
+            <button type="button" onClick={onReloadActions} style={st.cancelBtn}>Reload</button>
+          )}
+        </div>
+        {floKits.length === 0 ? (
+          <div style={st.empty}>Create a FloKit in FloKit Management first.</div>
+        ) : actions.length === 0 ? (
+          <div style={st.empty}>No kit actions yet.</div>
         ) : actions.map(a => (
-          <div key={a.id} onClick={() => handleSelect(a)}
-            style={{ ...st.listItem, ...(selectedAction?.id === a.id && !isNew ? st.listItemActive : {}) }}>
-            <div style={{ fontSize: 12, fontWeight: 500, color: a.isActive ? '#f0f0f4' : '#45455a', marginBottom: 2 }}>{a.label}</div>
-            <div style={{ fontSize: 9, color: '#45455a' }}>{a.category} · {a.method}</div>
+          <div
+            key={`${a.floKitId ?? ''}-${a.id}`}
+            onClick={() => handleSelect(a)}
+            style={{
+              ...st.listItem,
+              ...(selectedAction?.id === a.id && selectedAction?.floKitId === a.floKitId && !isNew
+                ? st.listItemActive
+                : {}),
+            }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 500, color: a.isActive ? '#f0f0f4' : '#45455a', marginBottom: 2 }}>
+              {a.label}
+            </div>
+            <div style={{ fontSize: 9, color: '#45455a' }}>
+              {a.floKitName ?? a.floKitId} · {a.category} · {a.method}
+            </div>
           </div>
         ))}
       </div>
@@ -517,15 +699,19 @@ useEffect(() => {
                     <label style={st.fl}>FloKit</label>
                     <select style={{ ...st.input, marginTop: 4 }}
                       value={form.floKitId ?? ''}
-                      onChange={e => patch({ floKitId: e.target.value })}>
-                      <option value="">— No FloKit (standalone action) —</option>
+                      onChange={e => patch({ floKitId: e.target.value })}
+                      disabled={!isNew && !!selectedAction}>
+                      <option value="">— Select FloKit —</option>
                       {floKits.map(k => (
                         <option key={k.id} value={k.id}>{k.name}</option>
                       ))}
                     </select>
+                    <div style={{ fontSize: 10, color: '#45455a', marginTop: 4, fontFamily: 'monospace' }}>
+                      Saved to FloPlugConnectors/{connectorId}/FloKits/{'{floKitId}'}/FloKitActions
+                    </div>
                     {floKits.length === 0 && (
-                      <div style={{ fontSize: 10, color: '#45455a', marginTop: 4 }}>
-                        No FloKits defined for this connector yet — create one in FloKit Management.
+                      <div style={{ fontSize: 10, color: '#f59e0b', marginTop: 4 }}>
+                        No FloKits for this connector — create one in FloKit Management.
                       </div>
                     )}
                   </div>
@@ -670,25 +856,41 @@ useEffect(() => {
 // ═════════════════════════════════════════════════════════════════════════════
 interface PreviewTabProps {
   connectorId: string;
-  actions:     ActionDoc[];
+  actions:     KitScopedAction[];
   onError:     (msg: string, isErr?: boolean) => void;
 }
 
+function kitActionKey(a: KitScopedAction): string {
+  return `${a.floKitId ?? ''}:${a.id}`;
+}
+
 const PreviewTab: React.FC<PreviewTabProps> = ({ connectorId, actions, onError }) => {
-  const [selectedId, setSelectedId] = useState('');
+  const [selectedKey, setSelectedKey] = useState('');
   const [fields,     setFields]     = useState<ParsedField[]>([]);
   const [loading,    setLoading]    = useState(false);
   const [fromCache,  setFromCache]  = useState(false);
   const [filter,     setFilter]     = useState('');
 
   const handlePreview = async () => {
-    if (!selectedId) return;
+    if (!selectedKey) return;
+    const action = actions.find(a => kitActionKey(a) === selectedKey);
+    if (!action?.floKitId) {
+      onError('Action has no FloKit — cannot preview.', true);
+      return;
+    }
     setLoading(true); setFields([]);
     try {
-      const fn = httpsCallable(getFunctions(), 'resolveActionSchema');
-      const { data } = await fn({ connectorId, actionId: selectedId }) as any;
-      setFields(data.fields ?? []);
-      setFromCache(data.fromCache ?? false);
+      const fn = httpsCallable<
+        { connectorId: string; actionId: string; floKitId: string },
+        { fields: ParsedField[]; fromCache: boolean }
+      >(getFunctions(), 'resolveActionSchema');
+      const result = await fn({
+        connectorId,
+        actionId:  action.id,
+        floKitId:  action.floKitId,
+      });
+      setFields(result.data.fields ?? []);
+      setFromCache(result.data.fromCache ?? false);
     } catch (e: any) { onError(e.message, true); }
     finally { setLoading(false); }
   };
@@ -706,14 +908,16 @@ const PreviewTab: React.FC<PreviewTabProps> = ({ connectorId, actions, onError }
         <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
           <div style={st.fg}>
             <label style={st.fl}>Action</label>
-            <select style={st.input} value={selectedId} onChange={e => { setSelectedId(e.target.value); setFields([]); }}>
+            <select style={st.input} value={selectedKey} onChange={e => { setSelectedKey(e.target.value); setFields([]); }}>
               <option value="">— Select an action —</option>
               {actions.map(a => (
-                <option key={a.id} value={a.id}>{a.category} → {a.label}</option>
+                <option key={kitActionKey(a)} value={kitActionKey(a)}>
+                  {a.floKitName ?? a.floKitId} → {a.category} → {a.label}
+                </option>
               ))}
             </select>
           </div>
-          <button onClick={handlePreview} disabled={!selectedId || loading} style={{ ...st.primaryBtn, whiteSpace: 'nowrap' }}>
+          <button onClick={handlePreview} disabled={!selectedKey || loading} style={{ ...st.primaryBtn, whiteSpace: 'nowrap' }}>
             {loading ? 'Parsing…' : '🔍 Parse Schema'}
           </button>
         </div>
@@ -758,7 +962,7 @@ const PreviewTab: React.FC<PreviewTabProps> = ({ connectorId, actions, onError }
         </div>
       )}
 
-      {fields.length === 0 && !loading && selectedId && (
+      {fields.length === 0 && !loading && selectedKey && (
         <div style={st.emptyPanel}>
           <div style={{ fontSize: 11, color: '#6b6b80' }}>Click "Parse Schema" to load fields from the WSDL/XSD.</div>
         </div>
@@ -798,4 +1002,4 @@ const st: Record<string, React.CSSProperties> = {
   successBanner:{ padding: '10px 14px', borderRadius: 7, marginBottom: 14, background: 'rgba(34,197,94,0.08)', border: '0.5px solid rgba(34,197,94,0.25)', color: '#22c55e', fontSize: 12 },
 };
 
-export default ActionManagement;
+export default SchemaManagement;

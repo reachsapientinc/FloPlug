@@ -48,6 +48,7 @@ function listWsdlOperations(wsdlContent: string): SchemaOperationRef[] {
   const parsed      = xmlParser.parse(wsdlContent);
   const definitions = parsed['wsdl:definitions'] ?? parsed['definitions'] ?? {};
   const portTypes   = [].concat(definitions['wsdl:portType'] ?? definitions['portType'] ?? []);
+  const messages    = [].concat(definitions['wsdl:message'] ?? definitions['message'] ?? []);
   const ops: SchemaOperationRef[] = [];
 
   for (const pt of portTypes) {
@@ -55,16 +56,46 @@ function listWsdlOperations(wsdlContent: string): SchemaOperationRef[] {
     for (const op of operations) {
       const name = (op as any)['@_name'];
       if (!name) continue;
+      const inputRefUnknown: unknown =
+        (op as any)['wsdl:input']?.['@_message'] ?? (op as any)['input']?.['@_message'];
+      const inputMessageName = typeof inputRefUnknown === 'string'
+        ? inputRefUnknown.split(':').pop()
+        : undefined;
+      const msg = inputMessageName
+        ? messages.find((m: any) => (m as any)['@_name'] === inputMessageName)
+        : undefined;
+      const messageParts = [].concat(
+        msg?.['wsdl:part'] ?? msg?.['part'] ?? [],
+      ) as Array<Record<string, unknown>>;
+      const firstPart = messageParts.find((p) =>
+        typeof p?.['@_element'] === 'string' || typeof p?.['@_type'] === 'string',
+      );
+      const requestRootElementRaw: unknown = firstPart?.['@_element'];
+      const requestRootElement = typeof requestRootElementRaw === 'string'
+        ? requestRootElementRaw.split(':').pop()
+        : undefined;
+      const requestTypeNameRaw: unknown = firstPart?.['@_type'];
+      const requestTypeName = typeof requestTypeNameRaw === 'string'
+        ? requestTypeNameRaw.split(':').pop()
+        : undefined;
       ops.push({
         name,
         label: name,
         method: 'POST',
         endpoint: '/',
+        inputMessageName,
+        requestRootElement,
+        requestTypeName,
       });
     }
   }
 
   return dedupeByName(ops);
+}
+
+function isXsdOperationElement(name: string): boolean {
+  if (name.endsWith('_Request')) return true;
+  return /^(Put|Get|Submit|Change|Cancel|Add|Edit|Delete|Create|Update)_/i.test(name);
 }
 
 function listXsdOperations(xsdContent: string): SchemaOperationRef[] {
@@ -76,7 +107,14 @@ function listXsdOperations(xsdContent: string): SchemaOperationRef[] {
     elements
       .map((el: any) => el['@_name'] as string | undefined)
       .filter((name): name is string => !!name)
-      .map(name => ({ name, label: name, method: 'POST', endpoint: '/' })),
+      .filter(isXsdOperationElement)
+      .map(name => ({
+        name,
+        label: name,
+        method: 'POST' as const,
+        endpoint: '/',
+        requestRootElement: name.endsWith('_Request') ? name : undefined,
+      })),
   );
 }
 

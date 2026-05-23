@@ -227,6 +227,20 @@ export async function executeFloActionCore(
     floKitId:    input.floKitId,
   });
 
+  if (!actionDoc.contentType) {
+    if (actionDoc.schemaSource === 'wsdl') {
+      actionDoc = { ...actionDoc, contentType: 'text/xml' };
+    } else if (actionDoc.schemaSource === 'openapi' || actionDoc.schemaSource === 'graphql') {
+      actionDoc = { ...actionDoc, contentType: 'application/json' };
+    }
+  }
+  if (!actionDoc.soapAction && actionDoc.schemaSource === 'wsdl' && actionDoc.operationName) {
+    actionDoc = {
+      ...actionDoc,
+      soapAction: `urn:com.workday/bsvc/${actionDoc.operationName}`,
+    };
+  }
+
   if (input.floKitId) {
     try {
       const target = await resolveFloActionMappingTarget(
@@ -265,6 +279,7 @@ export async function executeFloActionCore(
     localStore:   stores.localStore,
     globalStore:  stores.globalStore,
     mappingRules: input.mappingRules,
+    explicitRulesOnly: (input.mappingRules?.length ?? 0) > 0,
   });
 
   const requestBodyInner = buildRequestBody(actionDoc, resolved);

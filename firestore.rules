@@ -45,6 +45,18 @@ service cloud.firestore {
         allow write: if isProductAdmin();
       }
 
+    // ── FloPlugRegistry (product-level: hub slug locks, schema index, …) ───────
+
+    match /FloPlugRegistry/{globalConfigId} {
+      allow read:  if isSignedIn();
+      allow write: if isProductAdmin();
+
+      match /Registry/{regDocId} {
+        allow read:  if isSignedIn();
+        allow write: if isProductAdmin();
+      }
+    }
+
     // ── FloPlugConnectors ─────────────────────────────────────────────────────
 
     match /FloPlugConnectors/{connectorId} {
@@ -56,14 +68,26 @@ service cloud.firestore {
         allow write: if isProductAdmin();
       }
 
+      match /Actions/{actionId} {
+        allow read:  if isSignedIn();
+        allow write: if isProductAdmin();
+      }
+
       match /FloKits/{floKitId} {
         allow read:  if isSignedIn();
         allow write: if isProductAdmin();
 
         match /FloKitActions/{actionId} {
-        allow read:  if isSignedIn();
-        allow write: if isProductAdmin();
-     	 }
+          allow read:  if isSignedIn();
+          allow write: if isProductAdmin();
+        }
+
+        // Product templates: FloPlugConnectors/{id}/FloKits/{kitId}/ActionNodes
+        // (distinct from connector-level /ActionNodes used elsewhere)
+        match /ActionNodes/{actionNodeId} {
+          allow read:  if isSignedIn();
+          allow write: if isProductAdmin();
+        }
       }
       
       match /ActionNodes/{actionId} {

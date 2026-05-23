@@ -16,3 +16,6 @@ export * from './types/floKit.js';
 export * from './types/floConnection.js';
 export * from './types/actionNode.js';
 export * from './types/schemaOperations.js';
+export * from './types/schemaFlatten.js';
+export * from './types/schemaRegistry.js';
+export * from './workdayIdMapping.js';

@@ -4,7 +4,7 @@ import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 import { getPermissionsForRole } from '../helpers/settingsHelper.js';
 import '../constants.js';
-import { COLLECTIONS, HUB_COLLECTIONS, HUB_ROLES, PERMISSIONS, ROLES } from '@floplug/shared';
+import { COLLECTIONS, HUB_COLLECTIONS, HUB_ROLES, PERMISSIONS, ROLES, SUB_COLLECTIONS } from '@floplug/shared';
 
 if (!getApps().length) initializeApp();
 
@@ -376,6 +376,36 @@ export const saveHubActionNode = onCall(async (request) => {
   const isCreate  = !existing.exists;
   const now       = FieldValue.serverTimestamp();
 
+  // Pull request binding metadata from kit-scoped FloKitActions so hub-level
+  // FloActionNodes can expose message/root/type details without extra lookups.
+  const actionBindingEntries = await Promise.all(
+    actionIds.map(async (actionId) => {
+      const snap = await db
+        .collection(COLLECTIONS.FLOPLUGCONNECTORS).doc(connectorId)
+        .collection(SUB_COLLECTIONS.FLOKITS).doc(floKitId)
+        .collection(SUB_COLLECTIONS.FLOKITACTIONS).doc(actionId)
+        .get();
+      const data = snap.data() as { requestBinding?: Record<string, unknown> } | undefined;
+      return [actionId, data?.requestBinding] as const;
+    }),
+  );
+  const requestBindingByActionId = Object.fromEntries(
+    actionBindingEntries.filter(([, binding]) => !!binding),
+  );
+  const primaryBinding = requestBindingByActionId[actionIds[0]] as Record<string, unknown> | undefined;
+  const primaryInputMessageName =
+    typeof primaryBinding?.inputMessageName === 'string' ? primaryBinding.inputMessageName : undefined;
+  const primaryRequestRootElement =
+    typeof primaryBinding?.requestRootElement === 'string' ? primaryBinding.requestRootElement : undefined;
+  const primaryRequestTypeName =
+    typeof primaryBinding?.requestTypeName === 'string' ? primaryBinding.requestTypeName : undefined;
+  const requestBinding = {
+    ...(primaryBinding ?? {}),
+    ...(primaryInputMessageName ? { inputMessageName: primaryInputMessageName } : {}),
+    ...(primaryRequestRootElement ? { requestRootElement: primaryRequestRootElement } : {}),
+    ...(primaryRequestTypeName ? { requestTypeName: primaryRequestTypeName } : {}),
+  };
+
   const doc: Record<string, any> = {
     id:                   instanceId,
     hubId,
@@ -398,6 +428,11 @@ export const saveHubActionNode = onCall(async (request) => {
     isActive:             true,
     updatedBy:            callerUid,
     updatedAt:            now,
+    ...(Object.keys(requestBinding).length > 0 ? { requestBinding } : {}),
+    ...(Object.keys(requestBindingByActionId).length > 0 ? { requestBindingByActionId } : {}),
+    ...(primaryInputMessageName ? { inputMessageName: primaryInputMessageName } : {}),
+    ...(primaryRequestRootElement ? { requestRootElement: primaryRequestRootElement } : {}),
+    ...(primaryRequestTypeName ? { requestTypeName: primaryRequestTypeName } : {}),
   };
 
   // Only set createdAt on first write — merge: true alone would overwrite it
