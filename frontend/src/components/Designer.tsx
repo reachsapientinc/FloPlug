@@ -40,6 +40,7 @@ import { useCanvasHistory } from '../hooks/useCanvasHistory';
 import type { CanvasSnapshot } from '../utils/canvasSnapshot';
 import { snapshotCanvas } from '../utils/canvasSnapshot';
 import '@xyflow/react/dist/style.css';
+import '../styles/designer-canvas.css';
 
 import { db }                          from '../firebaseConfig';
 import { getAuth }                     from 'firebase/auth';
@@ -51,15 +52,31 @@ import {
 
 import { WorkdayNode }                                                 from './nodes/WorkdayNode';
 import { SalesforceNode, SapNode, OracleNode, MapperNode, FilterNode } from './nodes/ConnectorNodes';
+import { SwitchNode } from './nodes/SwitchNode';
+import { createSwitchBranch, defaultConditionRows } from '@floplug/shared';
 import { VariableStoreNode, FIFNode, FunctionNode }                    from './nodes/AdvancedNodes';
 import TemplateNode                                                    from './nodes/TemplateNode';
 import { LoopNode }                                                    from './nodes/LoopNode';
+import { SubFloNode, SubFloReturnNode, InvokeSubFloNode }              from './nodes/SubFloNodes';
 import { StartNode, EndNode }                                          from './nodes/StartEndNodes';
 import { NodeInspector, NodePalette }                                  from './NodePaletteAndInspector';
+import {
+  InspectorPanelProvider,
+  DESIGNER_CANVAS_MIN_WIDTH,
+} from '../inspector/InspectorPanelContext';
+import { InspectorPanelToolbar } from '../inspector/InspectorExpandShell';
+import { InspectorRightColumn } from '../inspector/InspectorPanelShell';
+import {
+  restoreCanvasViewport,
+  fitCanvasToFlow,
+  clampCanvasViewport,
+} from '../utils/canvasViewportRestore';
 import type { DesignerInspectorContext }                               from '../inspector/types';
 import { nodesForNodeTest, edgesForNodeTest }                          from '../inspector/testSubgraph';
 import { testConnectorNode }                                           from '../inspector/connectorTest';
 import { testPlugNode }                                                from '../inspector/plugTest';
+import { testFloActionNode }                                           from '../inspector/floActionTest';
+import { parseNodeTestInput, DEFAULT_NODE_TEST_INPUT }                 from '../inspector/nodeTestPayload';
 import { RunModal, type RunResult }                                    from './RunModal';
 import PlugManager                                                     from './PlugManager.tsx';
 import type { PlugConfig,
@@ -80,18 +97,38 @@ import {
   getDraftGraph,
   getPublishedGraph,
   computeGraphHash,
+  hasInProgressDraft,
+  isPlatformFailureMessage,
+  compartmentsCompatible,
+  nodeCompartmentId,
 } from '@floplug/shared';
 import PlugNodeComponent from './nodes/PlugNode';
 import FloActionNodeComponent from './nodes/FloActionNode';
 import DeletableEdge from './edges/DeletableEdge';
 import { EdgeRewireContext, type EdgeRewireApi } from './edges/edgeRewireContext';
 import ProfileDrawer, { type DashboardSection } from './ProfileDrawer';
+import { enterProductDocs } from '../docs';
 import HubAdminDashboard                        from './HubAdminDashboard';
 import FloExecutionHubApp                       from '../modules/floExecutionHub/FloExecutionHubApp';
 import { ValidationAlertsPanel }                from './ValidationAlertsPanel';
 import { DesignerWorkspaceFloBar }              from './DesignerWorkspaceFloBar';
+import {
+  NodeCanvasContextMenu,
+  DesignerHelpPopup,
+  getNodeQuickHelp,
+  type NodeContextMenuState,
+  type NodeQuickHelpState,
+} from './designer/DesignerPopups';
 import type { FloValidationReport }             from '@floplug/shared';
 import { useDeveloperWorkspaces, setDefaultFloForWorkspace, moveFloToWorkspace } from '../hooks/useDeveloperWorkspaces';
+import {
+  readTenantUiState,
+  writeTenantUiState,
+  readCanvasViewport,
+  writeCanvasViewport,
+  type TenantViewId,
+  type AdminTabId,
+} from '../utils/tenantUiState';
 
 // ── Node registry ────────────────────────────────────────────────────────────
 // Keys come from the shared NODE_TYPES constant so Designer stays in sync with
@@ -106,10 +143,14 @@ const NODE_TYPES: Record<string, React.ComponentType<any>> = {
   [NODE_TYPE_KEYS.ORACLE]:     OracleNode,
   [NODE_TYPE_KEYS.MAPPER]:     MapperNode,
   [NODE_TYPE_KEYS.FILTER]:     FilterNode,
+  [NODE_TYPE_KEYS.SWITCH]:     SwitchNode,
   [NODE_TYPE_KEYS.VAR_STORE]:  VariableStoreNode,
   [NODE_TYPE_KEYS.FIF]:        FIFNode,
   [NODE_TYPE_KEYS.FUNCTION]:   FunctionNode,
   [NODE_TYPE_KEYS.LOOP]:       LoopNode,
+  [NODE_TYPE_KEYS.SUB_FLO]:    SubFloNode,
+  [NODE_TYPE_KEYS.SUB_FLO_RETURN]: SubFloReturnNode,
+  [NODE_TYPE_KEYS.INVOKE_SUB_FLO]: InvokeSubFloNode,
   [NODE_TYPE_KEYS.TEMPLATE]:   TemplateNode,
   [NODE_TYPE_KEYS.PLUG]:       PlugNodeComponent,
   floActionNode:               FloActionNodeComponent,
@@ -184,6 +225,61 @@ const flowDocRef = (hubId: string, tenantId: string, wsId: string, fId: string) 
 function canvasFingerprint(nodes: Node[], edges: Edge[]): string {
   return JSON.stringify(snapshotCanvas(nodes, edges));
 }
+
+const floStatusBadge: React.CSSProperties = {
+  fontSize: 9, fontWeight: 700, borderRadius: 4, padding: '2px 6px', letterSpacing: '0.02em',
+};
+
+function FloDraftStatusBar({
+  flo, hasDraftChanges, saving, autoSaving,
+}: {
+  flo: FloMeta;
+  hasDraftChanges: boolean;
+  saving: boolean;
+  autoSaving: boolean;
+}) {
+  const versionLabel = flo.publishedVersion && flo.publishedVersion > 0
+    ? `v${flo.publishedVersion}`
+    : null;
+  const draftLabel = saving
+    ? 'Saving…'
+    : autoSaving
+      ? 'Auto-saving…'
+      : hasDraftChanges
+        ? 'Draft'
+        : null;
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+      <span
+        style={{ fontSize: 11, color: '#a0a0b8', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+        title={flo.name}
+      >
+        {flo.shortCode || flo.name}
+      </span>
+      {versionLabel && (
+        <span style={{ ...floStatusBadge, color: '#86efac', background: 'rgba(34,197,94,0.12)', border: '0.5px solid rgba(34,197,94,0.35)' }}>
+          {versionLabel} published
+        </span>
+      )}
+      {draftLabel && (
+        <span style={{
+          ...floStatusBadge,
+          color: saving || autoSaving ? '#93c5fd' : '#fbbf24',
+          background: saving || autoSaving ? 'rgba(59,130,246,0.12)' : 'rgba(251,191,36,0.12)',
+          border: saving || autoSaving ? '0.5px solid rgba(59,130,246,0.35)' : '0.5px solid rgba(251,191,36,0.35)',
+        }}>
+          {draftLabel}
+        </span>
+      )}
+      {!draftLabel && !versionLabel && (
+        <span style={{ ...floStatusBadge, color: '#9ca3af', background: 'rgba(255,255,255,0.06)', border: '0.5px solid rgba(255,255,255,0.12)' }}>
+          Draft only
+        </span>
+      )}
+    </div>
+  );
+}
 const makeDefaultNodes = (): Node[] => [
   { id: 'start-node', type: 'startNode', position: { x: 80,  y: 180 }, data: { label: 'Start' } },
   { id: 'end-node',   type: 'endNode',   position: { x: 560, y: 180 }, data: { label: 'End', output: null } },
@@ -192,8 +288,9 @@ const makeDefaultNodes = (): Node[] => [
 // ── Node sanitiser ────────────────────────────────────────────────────────────
 const STRIP_KEYS = new Set([
   'functions', 'onLogEntry', 'onUpdate', 'onDelete', '__rf', 'measured', 'availablePlugs', 'availableFlos',
-  // floActionNode UI-only fields — kept in memory for inspector, never persisted
-  'actionIds', 'allowedConnectionIds', 'templateActionId', 'defaultConnectionId', 'floActionName','connectorId', 'flaLabel',
+  // floActionNode UI-only fields — kept in memory for inspector, never persisted.
+  // connectorId is hub-managed; runtime resolves it from FloActionNodes via floKitId.
+  'actionIds', 'allowedConnectionIds', 'templateActionId', 'defaultConnectionId', 'floActionName', 'connectorId', 'flaLabel',
   'connectionName',
 ]);
 
@@ -256,15 +353,21 @@ function isValidFlowConnection(
 
   const others = ignoreEdgeId ? edges.filter(e => e.id !== ignoreEdgeId) : edges;
 
+  // One outgoing edge per outbound port (node + sourceHandle). FloSwitch routes are separate ports.
   const hasOutgoing = others.some(
     e => e.source === source && e.sourceHandle === (sourceHandle ?? null),
   );
   if (hasOutgoing) return false;
 
-  const targetNode = nodes.find(n => n.id === target);
-  if (targetNode?.type === 'endNode') {
-    const hasIncoming = others.some(e => e.target === target);
-    if (hasIncoming) return false;
+  const srcNode = nodes.find(n => n.id === source);
+  const tgtNode = nodes.find(n => n.id === target);
+  if (!srcNode || !tgtNode) return false;
+
+  if (!compartmentsCompatible(
+    { id: srcNode.id, type: srcNode.type ?? '', data: srcNode.data as Record<string, unknown> },
+    { id: tgtNode.id, type: tgtNode.type ?? '', data: tgtNode.data as Record<string, unknown> },
+  )) {
+    return false;
   }
 
   return true;
@@ -366,17 +469,32 @@ const DesignerInner: React.FC<DesignerProps> = ({
     setDefaultWorkspace,
   } = useDeveloperWorkspaces(hubId, tenantId, userId, workspaceIds);
 
-  const [view,           setView]                        = useState<string>('designer');
+  const [view, setViewRaw] = useState<TenantViewId>(() =>
+    readTenantUiState(hubId, tenantId).view ?? 'designer',
+  );
+  const setView = useCallback((next: TenantViewId) => {
+    setViewRaw(next);
+    writeTenantUiState(hubId, tenantId, { view: next });
+  }, [hubId, tenantId]);
   const [userInfo,       setUserInfo]                    = useState({ displayName: '', email: '' });
 
   const [nodes,          setNodes,        onNodesChange] = useNodesState<Node>(makeDefaultNodes());
   const [edges,          setEdges,        onEdgesChange] = useEdgesState<Edge>([]);
   const [rfInstance,     setRfInstance]                  = useState<ReactFlowInstance | null>(null);
   const pendingViewport = useRef<{ x: number; y: number; zoom: number } | null>(null);
+  const pendingFitView = useRef(false);
+  const uiRestoredRef = useRef(false);
   const [selectedNode,   setSelectedNode]                = useState<Node | null>(null);
+  const [nodeContextMenu, setNodeContextMenu]            = useState<NodeContextMenuState | null>(null);
+  const [nodeQuickHelp,   setNodeQuickHelp]              = useState<NodeQuickHelpState | null>(null);
+  const [inspectorExpanded, setInspectorExpanded]        = useState(false);
+  const [paletteWidth, setPaletteWidth]                  = useState(128);
   const [activeFlo,     setActiveFlo]                  = useState<FloMeta | null>(null);
   const [flos,          setFlos]                       = useState<FloMeta[]>([]);
   const [saving,         setSaving]                      = useState(false);
+  const [autoSaving,     setAutoSaving]                  = useState(false);
+  const [draftSavedFingerprint, setDraftSavedFingerprint] = useState<string | null>(null);
+  const [draftLoadAlert, setDraftLoadAlert] = useState<{ floName: string; publishedVersion?: number } | null>(null);
   const [statusMsg,      setStatusMsg]                   = useState('');
   const [newFlowModalOpen, setNewFlowModalOpen]          = useState(false);
   const [runModalOpen,     setRunModalOpen]              = useState(false);
@@ -407,9 +525,44 @@ const DesignerInner: React.FC<DesignerProps> = ({
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
   useEffect(() => { edgesRef.current = edges; }, [edges]);
 
+  /** Apply pending pan/zoom after nodes are on canvas (fixes refresh / flow switch). */
+  useEffect(() => {
+    if (!rfInstance || nodes.length === 0) return;
+    if (pendingViewport.current) {
+      const vp = pendingViewport.current;
+      pendingViewport.current = null;
+      restoreCanvasViewport(rfInstance, clampCanvasViewport(vp), nodes, wrapperRef.current);
+      pendingFitView.current = false;
+      return;
+    }
+    if (pendingFitView.current) {
+      pendingFitView.current = false;
+      fitCanvasToFlow(rfInstance);
+    }
+  }, [rfInstance, nodes, activeFlo?.id]);
+
   useEffect(() => {
     onActiveFloChange?.(activeFlo);
   }, [activeFlo, onActiveFloChange]);
+
+  /** Restore last workspace after refresh (session UI state). */
+  useEffect(() => {
+    if (wsLoading || uiRestoredRef.current || allWorkspaces.length === 0) return;
+    uiRestoredRef.current = true;
+    const ui = readTenantUiState(hubId, tenantId);
+    if (ui.activeWorkspaceId) {
+      const ws = allWorkspaces.find(w => w.id === ui.activeWorkspaceId);
+      if (ws && ws.id !== activeWs?.id) switchWorkspace(ws);
+    }
+  }, [wsLoading, allWorkspaces, activeWs, hubId, tenantId, switchWorkspace]);
+
+  const onViewportMoveEnd = useCallback((
+    _event: unknown,
+    viewport: { x: number; y: number; zoom: number },
+  ) => {
+    if (!activeFlo || !activeWs) return;
+    writeCanvasViewport(hubId, tenantId, activeWs.id, activeFlo.id, clampCanvasViewport(viewport));
+  }, [hubId, tenantId, activeFlo, activeWs]);
 
   const validationResources = useMemo(() => {
     const plugIds = new Set(plugs.map(p => p.id));
@@ -430,8 +583,43 @@ const DesignerInner: React.FC<DesignerProps> = ({
         defaultConnectionId:  p.defaultConnectionId ?? p.connectionId,
       };
     }
-    return { plugIds, activePlugIds, connectionIds, activeConnectionIds, plugConnectionPolicy };
+    const connectionsById: Record<string, {
+      urlTokenValues?: Record<string, string>;
+      hostname?: string;
+      tenantKey?: string;
+      baseUrl?: string;
+    }> = {};
+    for (const c of connections) {
+      connectionsById[c.id] = {
+        urlTokenValues: c.urlTokenValues,
+        hostname:       c.hostname,
+        tenantKey:      c.tenantKey,
+        baseUrl:        c.baseUrl,
+      };
+    }
+    return { plugIds, activePlugIds, connectionIds, activeConnectionIds, plugConnectionPolicy, connectionsById };
   }, [plugs, connections]);
+
+  const nodesForValidation = useMemo(() => {
+    return nodes.map(n => {
+      if (n.type !== 'floActionNode') return n;
+      const floKitId = n.data?.floKitId as string | undefined;
+      if (!floKitId) return n;
+      const liveDoc = floActionNodeMap.current.get(floKitId);
+      if (!liveDoc) return n;
+      return {
+        ...n,
+        data: {
+          ...n.data,
+          kitUrlContext: liveDoc.kitUrlContext ?? n.data?.kitUrlContext,
+          urlTokensSnapshot: liveDoc.urlTokensSnapshot ?? n.data?.urlTokensSnapshot,
+          floActionUrlValuesByConnection:
+            liveDoc.floActionUrlValuesByConnection ?? n.data?.floActionUrlValuesByConnection,
+          floActionNodeUrlTokens: liveDoc.floActionNodeUrlTokens ?? n.data?.floActionNodeUrlTokens,
+        },
+      };
+    });
+  }, [nodes, floActions]);
 
   const validationReport = useMemo((): FloValidationReport => {
     if (!activeFlo) {
@@ -449,12 +637,12 @@ const DesignerInner: React.FC<DesignerProps> = ({
     return validateFloGraph({
       floId:   activeFlo.id,
       floName: activeFlo.name,
-      nodes:   sanitizeNodes(nodesRef.current) as { id: string; type: string; data: Record<string, unknown> }[],
+      nodes:   sanitizeNodes(nodesForValidation) as { id: string; type: string; data: Record<string, unknown> }[],
       edges:   sanitizeEdges(edgesRef.current) as { source: string; target: string }[],
       resources: validationResources,
       checkResources: resourcesLoaded,
     });
-  }, [nodes, edges, activeFlo, validationResources, resourcesLoaded]);
+  }, [nodesForValidation, edges, activeFlo, validationResources, resourcesLoaded]);
 
   const displayNodes = useMemo(() => {
     const errorIds = new Set(validationReport.errors.map(e => e.nodeId));
@@ -473,6 +661,14 @@ const DesignerInner: React.FC<DesignerProps> = ({
     return fp !== publishedBaselineRef.current;
   }, [nodes, edges, activeFlo?.id, activeFlo?.publishState]);
 
+  /** Canvas differs from last draft write to Firestore (Save / auto-save baseline). */
+  const hasDraftChanges = useMemo(() => {
+    if (!activeFlo) return false;
+    const fp = canvasFingerprint(nodes, edges);
+    if (draftSavedFingerprint === null) return true;
+    return fp !== draftSavedFingerprint;
+  }, [nodes, edges, activeFlo, draftSavedFingerprint]);
+
   const canPublish = Boolean(activeFlo)
     && hasUnpublishedChanges
     && validationReport.errors.length === 0;
@@ -488,11 +684,13 @@ const DesignerInner: React.FC<DesignerProps> = ({
     const ws = allWorkspaces.find(w => w.id === wsId);
     if (!ws) return;
     switchWorkspace(ws);
+    writeTenantUiState(hubId, tenantId, { activeWorkspaceId: ws.id, activeFloId: undefined });
     setActiveFlo(null);
     setFlos([]);
+    setDraftLoadAlert(null);
     setRunResult(null);
     setSelectedNode(null);
-  }, [allWorkspaces, switchWorkspace]);
+  }, [allWorkspaces, switchWorkspace, hubId, tenantId]);
 
   const handleSetDefaultFlo = useCallback(async (floId: string) => {
     if (!activeWs) return;
@@ -508,7 +706,13 @@ const DesignerInner: React.FC<DesignerProps> = ({
     setFlos(prev => prev.filter(f => f.id !== floId));
     pendingFloIdRef.current = floId;
     const targetWs = allWorkspaces.find(w => w.id === targetWsId);
-    if (targetWs) switchWorkspace(targetWs);
+    if (targetWs) {
+      switchWorkspace(targetWs);
+      writeTenantUiState(hubId, tenantId, {
+        activeWorkspaceId: targetWs.id,
+        activeFloId: floId,
+      });
+    }
     setStatusMsg('Flo moved ✓');
     setTimeout(() => setStatusMsg(''), 2000);
   }, [activeFlo, activeWs, allWorkspaces, hubId, tenantId, switchWorkspace]);
@@ -602,6 +806,9 @@ const DesignerInner: React.FC<DesignerProps> = ({
           connectionId: (n.data.connectionId as string) || defaultConn,
           urlPattern:     livePlug.urlPattern,
           variableHints:  livePlug.variableHints ?? [],
+          plugUrlValuesByConnection: livePlug.plugUrlValuesByConnection ?? {},
+          plugNodeUrlTokens: livePlug.plugNodeUrlTokens ?? [],
+          urlTokensSnapshot: livePlug.urlTokensSnapshot ?? [],
         },
       };
     }));
@@ -644,6 +851,10 @@ const DesignerInner: React.FC<DesignerProps> = ({
               templateActionId:     liveDoc.templateActionId     ?? liveDoc.actionIds?.[0] ?? '',
               connectorId:          liveDoc.connectorId,
               flaLabel:             liveDoc.displayName,
+              urlTokensSnapshot:    liveDoc.urlTokensSnapshot ?? [],
+              kitUrlContext:        liveDoc.kitUrlContext ?? {},
+              floActionUrlValuesByConnection: liveDoc.floActionUrlValuesByConnection ?? {},
+              floActionNodeUrlTokens: liveDoc.floActionNodeUrlTokens ?? [],
               connectionId: (n.data.connectionId as string) || liveDoc.defaultConnectionId || liveDoc.allowedConnectionIds?.[0] || '',
               actionId:     (n.data.actionId     as string) || liveDoc.templateActionId    || liveDoc.actionIds?.[0]            || '',
             },
@@ -664,6 +875,10 @@ const DesignerInner: React.FC<DesignerProps> = ({
               templateActionId:     liveDoc.templateActionId     ?? liveDoc.actionIds?.[0] ?? '',
               connectorId:          liveDoc.connectorId,
               flaLabel:             liveDoc.displayName,
+              urlTokensSnapshot:    liveDoc.urlTokensSnapshot ?? [],
+              kitUrlContext:        liveDoc.kitUrlContext ?? {},
+              floActionUrlValuesByConnection: liveDoc.floActionUrlValuesByConnection ?? {},
+              floActionNodeUrlTokens: liveDoc.floActionNodeUrlTokens ?? [],
               connectionId: (prev.data.connectionId as string) || liveDoc.defaultConnectionId || '',
               actionId:     (prev.data.actionId     as string) || liveDoc.templateActionId    || liveDoc.actionIds?.[0] || '',
             },
@@ -690,11 +905,14 @@ const DesignerInner: React.FC<DesignerProps> = ({
         const pendingId = pendingFloIdRef.current;
         pendingFloIdRef.current = null;
 
+        const ui = readTenantUiState(hubId, tenantId);
         const target = pendingId
           ? list.find(f => f.id === pendingId)
           : floId
             ? list.find(f => f.id === floId)
-            : list.find(f => f.defaultToLoad) ?? list[0];
+            : ui.activeFloId && ui.activeWorkspaceId === activeWs.id
+              ? list.find(f => f.id === ui.activeFloId)
+              : list.find(f => f.defaultToLoad) ?? list[0];
 
         if (target) openFlow(target);
         else { setNodes(makeDefaultNodes()); setEdges([]); setActiveFlo(null); }
@@ -735,6 +953,16 @@ const DesignerInner: React.FC<DesignerProps> = ({
       if (await testPlugNode(functions, hubId, tenantId, node, updateNodeData)) {
         return;
       }
+      if (await testFloActionNode(functions, hubId, tenantId, node, updateNodeData)) {
+        return;
+      }
+
+      const rawTestInput = String((node.data as Record<string, unknown>).testInputJson ?? DEFAULT_NODE_TEST_INPUT);
+      const parsedInput = parseNodeTestInput(rawTestInput);
+      if (parsedInput.ok === false) {
+        updateNodeData(nodeId, { _loading: false, _result: parsedInput.error, _isError: true });
+        return;
+      }
 
       if (!activeFlo) {
         updateNodeData(nodeId, {
@@ -752,7 +980,7 @@ const DesignerInner: React.FC<DesignerProps> = ({
       const fn = httpsCallable<
         { hubId: string; tenantId: string; wsId: string; floId: string;
           nodes: Node[]; edges: Edge[]; inputJson: Record<string, unknown>;
-          mode?: 'test' | 'production'; },
+          mode?: 'test' | 'production'; source?: string; },
         { log: string[]; status: string; output: Record<string, unknown> | null }
       >(functions, 'executeFlo');
 
@@ -762,7 +990,9 @@ const DesignerInner: React.FC<DesignerProps> = ({
         floId:  activeFlo.id,
         nodes:  sanitizeNodes(subgraphNodes) as unknown as Node[],
         edges:  sanitizeEdges(subgraphEdges) as unknown as Edge[],
-        inputJson: lastRunInputRef.current,
+        inputJson: parsedInput.value,
+        mode:      'test',
+        source:    'nodeTest',
       });
 
       const log = res.data.log ?? [];
@@ -795,8 +1025,9 @@ const DesignerInner: React.FC<DesignerProps> = ({
     lastRunInput:  lastRunInputRef.current,
     onTestNode:    testNode,
     testingNodeId,
-    floActions, 
-  }), [functions, hubId, tenantId, floList, activeFlo?.id, nodes, edges, testNode, testingNodeId,floActions]);
+    floActions,
+    getHubActionDoc: (floKitId: string) => floActionNodeMap.current.get(floKitId),
+  }), [functions, hubId, tenantId, floList, activeFlo?.id, nodes, edges, testNode, testingNodeId, floActions]);
 
   const deleteNode = useCallback((nodeId: string) => {
     const node = nodesRef.current.find(n => n.id === nodeId);
@@ -805,12 +1036,27 @@ const DesignerInner: React.FC<DesignerProps> = ({
     setNodes(prev => prev.filter(n => n.id !== nodeId));
     setEdges(prev => prev.filter(e => e.source !== nodeId && e.target !== nodeId));
     setSelectedNode(prev => prev?.id === nodeId ? null : prev);
+    setNodeContextMenu(null);
+    setNodeQuickHelp(prev => (prev?.nodeId === nodeId ? null : prev));
   }, [setNodes, setEdges, recordCanvasHistory]);
+
+  const removeNodeWiring = useCallback((nodeId: string, direction: 'inbound' | 'outbound') => {
+    recordCanvasHistory();
+    setEdges(prev => prev.filter(e =>
+      direction === 'inbound' ? e.target !== nodeId : e.source !== nodeId,
+    ));
+    setNodeContextMenu(null);
+  }, [setEdges, recordCanvasHistory]);
 
   const hydrateCanvasNodes = useCallback((savedNodes: Node[]): Node[] => (
     savedNodes.map(n => {
+      const legacyData = { ...n.data } as Record<string, unknown>;
+      if (n.type === 'subFloNode' && !legacyData.displayName && legacyData.canvasName) {
+        legacyData.displayName = legacyData.canvasName;
+      }
+
       const baseData = {
-        ...n.data,
+        ...legacyData,
         hubId,
         tenantId,
         onUpdate:       updateNodeData,
@@ -843,6 +1089,9 @@ const DesignerInner: React.FC<DesignerProps> = ({
               plugName:             livePlug.name,
               urlPattern:           livePlug.urlPattern,
               variableHints:        livePlug.variableHints ?? [],
+              plugUrlValuesByConnection: livePlug.plugUrlValuesByConnection ?? {},
+              plugNodeUrlTokens:    livePlug.plugNodeUrlTokens ?? [],
+              urlTokensSnapshot:    livePlug.urlTokensSnapshot ?? [],
               authProtocol:         livePlug.authProtocol,
               connectorId:          livePlug.connectorId,
               connectorLabel:     livePlug.connectorLabel,
@@ -870,6 +1119,10 @@ const DesignerInner: React.FC<DesignerProps> = ({
               connectorId:          liveDoc.connectorId,
               flaLabel:             liveDoc.displayName,
               floKitId:             liveDoc.floKitId,
+              urlTokensSnapshot:    liveDoc.urlTokensSnapshot ?? [],
+              kitUrlContext:        liveDoc.kitUrlContext ?? {},
+              floActionUrlValuesByConnection: liveDoc.floActionUrlValuesByConnection ?? {},
+              floActionNodeUrlTokens: liveDoc.floActionNodeUrlTokens ?? [],
               connectionId: (n.data?.connectionId as string) || liveDoc.defaultConnectionId || liveDoc.allowedConnectionIds?.[0] || '',
               actionId:     (n.data?.actionId     as string) || liveDoc.templateActionId    || liveDoc.actionIds?.[0]            || '',
             },
@@ -914,7 +1167,7 @@ const DesignerInner: React.FC<DesignerProps> = ({
   }, [canvasHistory, applyCanvasSnapshot]);
 
   const handleNodesChange = useCallback((changes: NodeChange[]) => {
-    const recordable = changes.some(c => c.type === 'remove' || c.type === 'add');
+    const recordable = changes.some(c => c.type === 'remove' || c.type === 'add' || c.type === 'dimensions');
     if (recordable && !canvasHistory.isApplying()) {
       recordCanvasHistory();
     }
@@ -948,7 +1201,7 @@ const DesignerInner: React.FC<DesignerProps> = ({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [performUndo, performRedo]);
 
-  // ── Open a saved flow ───────────────────────────────────────────────────────
+  // ── Open a saved flow — always loads the draft graph (never published) ───────
   const openFlow = async (flow: FloMeta) => {
     try {
       const snap = await getDoc(flowDocRef(hubId, tenantId, flow.workspaceId, flow.id));
@@ -957,6 +1210,9 @@ const DesignerInner: React.FC<DesignerProps> = ({
       const data = snap.data() as Record<string, unknown>;
       const draft = getDraftGraph(data);
       const published = getPublishedGraph(data);
+      const inProgressDraft = hasInProgressDraft(data);
+      const floName = (data.name as string) ?? flow.name;
+      const publishedVersion = (data.publishedVersion as number | undefined) ?? flow.publishedVersion;
       const savedNodes: Node[] = (draft.nodes as Node[]) ?? [];
 
       const hasStart = savedNodes.some(n => n.type === 'startNode');
@@ -976,16 +1232,48 @@ const DesignerInner: React.FC<DesignerProps> = ({
       publishedBaselineRef.current = published
         ? canvasFingerprint(published.nodes as Node[], published.edges as Edge[])
         : null;
+      setDraftSavedFingerprint(canvasFingerprint(hydrated, loadedEdges));
       canvasHistory.resetHistory();
-      setActiveFlo(flow);
+      setActiveFlo({
+        ...flow,
+        name:          floName,
+        shortCode:     (data.shortCode as string) ?? flow.shortCode,
+        integrationId: (data.integrationId as string) ?? flow.integrationId,
+        publishState:  (data.publishState as FloMeta['publishState']) ?? flow.publishState,
+        publishedVersion,
+        hasUnpublishedChanges: inProgressDraft
+          || ((data.hasUnpublishedChanges as boolean | undefined) ?? flow.hasUnpublishedChanges),
+        validationStatus: (data.validationStatus as FloMeta['validationStatus']) ?? flow.validationStatus,
+      });
+      setDraftLoadAlert(inProgressDraft
+        ? { floName, publishedVersion }
+        : null);
       setSelectedNode(null);
       setRunResult(null);
 
-      if (data.viewport) {
-        if (rfInstance) {
-          setTimeout(() => rfInstance.setViewport(data.viewport as { x: number; y: number; zoom: number }, { duration: 0 }), 50);
+      writeTenantUiState(hubId, tenantId, {
+        activeFloId: flow.id,
+        activeWorkspaceId: flow.workspaceId,
+      });
+
+      const firestoreViewport = draft.viewport ?? (
+        data.viewport as { x: number; y: number; zoom: number } | undefined
+      );
+      const sessionViewport = readCanvasViewport(hubId, tenantId, flow.workspaceId, flow.id);
+      const rawViewport = firestoreViewport ?? sessionViewport ?? null;
+      const viewportToApply = rawViewport ? clampCanvasViewport(rawViewport) : null;
+
+      pendingViewport.current = viewportToApply;
+      pendingFitView.current = !viewportToApply;
+
+      if (rfInstance && hydrated.length > 0) {
+        if (viewportToApply) {
+          pendingViewport.current = null;
+          restoreCanvasViewport(rfInstance, viewportToApply, hydrated, wrapperRef.current);
+          pendingFitView.current = false;
         } else {
-          pendingViewport.current = data.viewport as { x: number; y: number; zoom: number };
+          pendingFitView.current = false;
+          fitCanvasToFlow(rfInstance);
         }
       }
     } catch (err) {
@@ -1034,11 +1322,13 @@ const DesignerInner: React.FC<DesignerProps> = ({
       defaultToLoad: false,
     };
     setFlos(prev => [meta, ...prev]);
-    setNodes(defaults);
+    setNodes(hydrateCanvasNodes(defaults));
     setEdges([]);
     canvasHistory.resetHistory();
     setActiveFlo(meta);
     publishedBaselineRef.current = null;
+    setDraftSavedFingerprint(canvasFingerprint(defaults, []));
+    setDraftLoadAlert(null);
     setSelectedNode(null);
     setRunResult(null);
     setStatusMsg('Flow created ✓');
@@ -1046,14 +1336,21 @@ const DesignerInner: React.FC<DesignerProps> = ({
   };
 
   // ── Save the current flow ───────────────────────────────────────────────────
-  const saveFlo = async () => {
+  const saveFlo = useCallback(async (opts?: { silent?: boolean }) => {
     if (!activeFlo) return;
-    setSaving(true);
-    setStatusMsg('Saving…');
+    const silent = opts?.silent === true;
+    if (silent) setAutoSaving(true);
+    else setSaving(true);
+    if (!silent) setStatusMsg('Saving…');
     try {
       const cleanNodes = sanitizeNodes(nodesRef.current);
       const cleanEdges = sanitizeEdges(edgesRef.current);
-      const viewport   = rfInstance?.getViewport() ?? undefined;
+      const rawVp = rfInstance?.getViewport();
+      const viewport = rawVp ? clampCanvasViewport(rawVp) : undefined;
+
+      if (viewport && activeFlo && activeWs) {
+        writeCanvasViewport(hubId, tenantId, activeWs.id, activeFlo.id, viewport);
+      }
 
       await setDoc(
         flowDocRef(hubId, tenantId, activeFlo.workspaceId, activeFlo.id),
@@ -1091,25 +1388,91 @@ const DesignerInner: React.FC<DesignerProps> = ({
         lastValidatedAt:        validation.validatedAt,
       }, { merge: true });
 
-      if (validation.errors.length) {
-        setStatusMsg(`Saved · ${validation.errors.length} validation error(s) — publish blocked`);
-      } else if (validation.warnings.length) {
-        setStatusMsg(`Saved ✓ · ${validation.warnings.length} warning(s)`);
-      } else {
-        setStatusMsg('Saved ✓');
+      const fp = canvasFingerprint(cleanNodes, cleanEdges);
+      setDraftSavedFingerprint(fp);
+      setActiveFlo(prev => prev ? { ...prev, hasUnpublishedChanges: true } : prev);
+      setFlos(prev => prev.map(f => f.id === activeFlo.id ? { ...f, hasUnpublishedChanges: true } : f));
+
+      if (!silent) {
+        if (validation.errors.length) {
+          setStatusMsg(`Saved · ${validation.errors.length} validation error(s) — publish blocked`);
+        } else if (validation.warnings.length) {
+          setStatusMsg(`Saved ✓ · ${validation.warnings.length} warning(s)`);
+        } else {
+          setStatusMsg('Saved ✓');
+        }
       }
     } catch (err: any) {
       console.error('[Designer] saveFlo error:', err);
-      setStatusMsg(`Save failed: ${err.message}`);
+      if (!silent) setStatusMsg(`Save failed: ${err.message}`);
+    } finally {
+      if (silent) setAutoSaving(false);
+      else setSaving(false);
+      if (!silent) setTimeout(() => setStatusMsg(''), 2500);
+    }
+  }, [activeFlo, activeWs, hubId, tenantId, userId, rfInstance, validationResources, resourcesLoaded]);
+
+  /** Revert canvas to last published graph and persist as draft. */
+  const discardDraft = useCallback(async () => {
+    if (!activeFlo || !activeWs) return;
+    if (!window.confirm('Discard unsaved draft changes and reload the last published version?')) return;
+    setSaving(true);
+    setStatusMsg('Loading published version…');
+    try {
+      const snap = await getDoc(flowDocRef(hubId, tenantId, activeFlo.workspaceId, activeFlo.id));
+      if (!snap.exists()) return;
+      const data = snap.data() as Record<string, unknown>;
+      const published = getPublishedGraph(data);
+      if (!published?.nodes?.length) {
+        setStatusMsg('No published version to load.');
+        setTimeout(() => setStatusMsg(''), 3000);
+        return;
+      }
+      const pubNodes = hydrateCanvasNodes(published.nodes as Node[]);
+      const pubEdges = ((published.edges as Edge[]) ?? []).map(normalizeFlowEdge);
+      setNodes(pubNodes);
+      setEdges(pubEdges);
+      canvasHistory.resetHistory();
+      setDraftSavedFingerprint(canvasFingerprint(pubNodes, pubEdges));
+      setDraftLoadAlert(null);
+      await saveFlo({ silent: true });
+      setStatusMsg(
+        activeFlo.publishedVersion
+          ? `Loaded published v${activeFlo.publishedVersion} ✓`
+          : 'Loaded published version ✓',
+      );
+      setTimeout(() => setStatusMsg(''), 2500);
+    } catch (err: unknown) {
+      setStatusMsg(err instanceof Error ? err.message : 'Failed to discard draft');
+      setTimeout(() => setStatusMsg(''), 4000);
     } finally {
       setSaving(false);
-      setTimeout(() => setStatusMsg(''), 2500);
     }
-  };
+  }, [activeFlo, activeWs, hubId, tenantId, saveFlo]);
+
+  /** Auto-save draft every 30s when there are unsaved canvas edits. */
+  useEffect(() => {
+    if (!activeFlo || !hasDraftChanges || saving || autoSaving) return;
+    const timer = window.setInterval(() => {
+      if (saving || autoSaving) return;
+      void saveFlo({ silent: true });
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, [activeFlo?.id, hasDraftChanges, saving, autoSaving, saveFlo]);
 
   // ── Run the flow ────────────────────────────────────────────────────────────
-  const handleRun = async (inputJson: Record<string, unknown>) => {
+  const handleRun = async (inputJson: Record<string, unknown>, runLabel?: string, dryRun = true) => {
     if (!activeFlo) return;
+
+    if (validationReport.errors.length > 0) {
+      const first = validationReport.errors[0];
+      setStatusMsg(
+        `Full flow run blocked (${validationReport.errors.length} error(s)). ` +
+        `${first.nodeLabel}: ${first.message} — use ▶ Test node in the inspector to try one node.`,
+      );
+      setTimeout(() => setStatusMsg(''), 6000);
+      return;
+    }
 
     const perms = (activeFlo as any).invokePermissions as FloInvokePermissions | undefined;
     if (perms && !isHubAdmin) {
@@ -1129,8 +1492,9 @@ const DesignerInner: React.FC<DesignerProps> = ({
       const fn = httpsCallable<
         { hubId: string; tenantId: string; wsId: string; floId: string;
           nodes: Node[]; edges: Edge[]; inputJson: Record<string, unknown>;
-          mode?: 'test' | 'production'; persistNodes?: boolean; source?: string; },
-        { log: string[]; status: string; output: Record<string, unknown> | null }
+          mode?: 'test' | 'production'; persistNodes?: boolean; source?: string; runLabel?: string;
+          dryRun?: boolean; simulate?: boolean; },
+        { log: string[]; status: string; output: Record<string, unknown> | null; executionId?: string; simulated?: boolean }
       >(functions, 'executeFlo');
 
       const res = await fn({
@@ -1143,12 +1507,18 @@ const DesignerInner: React.FC<DesignerProps> = ({
         mode:      'test',
         persistNodes: true,
         source:    'designer',
+        dryRun:    dryRun || undefined,
+        simulate:  dryRun || undefined,
+        ...(runLabel ? { runLabel } : {}),
       });
 
       const result: RunResult = {
         log:    res.data.log    ?? [],
         output: res.data.output ?? null,
-        status: (res.data.status as 'success' | 'error') ?? 'success',
+        status: (res.data.status as RunResult['status']) ?? 'success',
+        executionId: res.data.executionId,
+        runLabel,
+        simulated: res.data.simulated ?? dryRun,
       };
       setRunResult(result);
 
@@ -1161,7 +1531,13 @@ const DesignerInner: React.FC<DesignerProps> = ({
       }
     } catch (err: any) {
       console.error('[Designer] run error:', err);
-      setRunResult({ log: [`Error: ${err.message}`], output: null, status: 'error' });
+      const msg = String(err?.message ?? err);
+      const platform = isPlatformFailureMessage(msg);
+      setRunResult({
+        log:    [platform ? `Platform error: ${msg}` : `Error: ${msg}`],
+        output: null,
+        status: platform ? 'fatal' : 'error',
+      });
     } finally {
       setRunning(false);
     }
@@ -1206,6 +1582,8 @@ const DesignerInner: React.FC<DesignerProps> = ({
         hasUnpublishedChanges: false,
       } : f));
       publishedBaselineRef.current = canvasFingerprint(nodesRef.current, edgesRef.current);
+      setDraftSavedFingerprint(canvasFingerprint(nodesRef.current, edgesRef.current));
+      setDraftLoadAlert(null);
       setStatusMsg(res.data.publishedVersion
         ? `Published v${res.data.publishedVersion} ✓`
         : 'Published ✓');
@@ -1243,7 +1621,22 @@ const DesignerInner: React.FC<DesignerProps> = ({
       reconnectable: true,
       style:         { stroke: '#4f8ef7', strokeWidth: 1.5 },
     }, eds));
-  }, [setEdges, recordCanvasHistory]);
+
+    const sourceNode = nodesRef.current.find(n => n.id === params.source);
+    const subId = sourceNode
+      ? nodeCompartmentId({ id: sourceNode.id, type: sourceNode.type ?? '', data: sourceNode.data as Record<string, unknown> })
+      : '';
+    if (subId && params.target) {
+      setNodes(prev => prev.map(n => {
+        if (n.id !== params.target) return n;
+        if (n.type === 'startNode' || n.type === 'endNode' || n.type === 'loopNode') return n;
+        if (n.type === 'invokeSubFloNode') return n;
+        const existing = (n.data as Record<string, unknown>).subFloId;
+        if (existing) return n;
+        return { ...n, data: { ...n.data, subFloId: subId } };
+      }));
+    }
+  }, [setEdges, setNodes, recordCanvasHistory]);
 
   const onReconnect = useCallback((oldEdge: Edge, newConnection: Connection) => {
     if (!newConnection.source || !newConnection.target) return;
@@ -1253,7 +1646,7 @@ const DesignerInner: React.FC<DesignerProps> = ({
       nodesRef.current,
       oldEdge.id,
     )) {
-      setStatusMsg('Cannot rewire: target already has a connection or source already has an outgoing wire');
+      setStatusMsg('Cannot rewire: source already has an outgoing wire on this handle');
       setTimeout(() => setStatusMsg(''), 3000);
       return;
     }
@@ -1272,18 +1665,40 @@ const DesignerInner: React.FC<DesignerProps> = ({
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
     const latest = nodesRef.current.find(n => n.id === node.id) ?? node;
     setSelectedNode(latest);
+    setNodeContextMenu(null);
+    setNodeQuickHelp(null);
     setEdges((eds) => eds.map((e) => (e.selected ? { ...e, selected: false } : e)));
   }, [setEdges]);
 
+  const onNodeContextMenu = useCallback((e: React.MouseEvent, node: Node) => {
+    e.preventDefault();
+    const latest = nodesRef.current.find(n => n.id === node.id) ?? node;
+    setSelectedNode(latest);
+    setNodeQuickHelp(null);
+    setNodeContextMenu({ nodeId: node.id, x: e.clientX, y: e.clientY });
+  }, []);
+
   const onEdgeClick = useCallback((_: React.MouseEvent, edge: Edge) => {
     setSelectedNode(null);
+    setNodeContextMenu(null);
+    setNodeQuickHelp(null);
     setEdges((eds) => eds.map((e) => ({ ...e, selected: e.id === edge.id })));
   }, [setEdges]);
 
   const onPaneClick = useCallback(() => {
     setSelectedNode(null);
+    setNodeContextMenu(null);
+    setNodeQuickHelp(null);
     setEdges((eds) => eds.map((e) => (e.selected ? { ...e, selected: false } : e)));
   }, [setEdges]);
+
+  const contextMenuNode = nodeContextMenu
+    ? (nodes.find(n => n.id === nodeContextMenu.nodeId) ?? null)
+    : null;
+
+  const quickHelpNode = nodeQuickHelp
+    ? (nodes.find(n => n.id === nodeQuickHelp.nodeId) ?? null)
+    : null;
   const onDragOver  = useCallback((e: React.DragEvent) => {
     e.preventDefault(); e.dataTransfer.dropEffect = 'move';
   }, []);
@@ -1300,9 +1715,13 @@ const DesignerInner: React.FC<DesignerProps> = ({
     oracleNode:        COMPACT_NODE,
     mapperNode:        COMPACT_NODE,
     filterNode:        COMPACT_NODE,
+    floSwitchNode:     { width: 200, height: 120 },
     variableStoreNode: COMPACT_NODE,
     fifNode:           COMPACT_NODE,
-    loopNode:          COMPACT_NODE,
+    loopNode:          { width: 188, height: 72 },
+    subFloNode:        { width: 188, height: 64 },
+    subFloReturnNode:  COMPACT_NODE,
+    invokeSubFloNode:  COMPACT_NODE,
     functionNode:      COMPACT_NODE,
     templateNode:      COMPACT_NODE,
   };
@@ -1336,7 +1755,7 @@ const DesignerInner: React.FC<DesignerProps> = ({
     const categoryPlaceholders = type === 'plugNode'
       ? {
           _placeholders: getPlugPlaceholders(nodeMeta?.category),
-          testInputJson: JSON.stringify({ message: 'Hello FloPlug', value: 42 }, null, 2),
+          testInputJson: DEFAULT_NODE_TEST_INPUT,
           defaultConnectionId: (nodeMeta.defaultConnectionId as string) ?? (nodeMeta.connectionId as string) ?? '',
           allowedConnectionIds: (nodeMeta.allowedConnectionIds as string[]) ?? [],
           connectionId: (nodeMeta.connectionId as string) ?? (nodeMeta.defaultConnectionId as string) ?? '',
@@ -1357,6 +1776,10 @@ const DesignerInner: React.FC<DesignerProps> = ({
                   allowedConnectionIds: liveDoc.allowedConnectionIds ?? [],
                   defaultConnectionId:  liveDoc.defaultConnectionId  ?? '',
                   templateActionId:     liveDoc.templateActionId     ?? liveDoc.actionIds?.[0] ?? '',
+                  urlTokensSnapshot:    liveDoc.urlTokensSnapshot ?? [],
+                  kitUrlContext:        liveDoc.kitUrlContext ?? {},
+                  floActionUrlValuesByConnection: liveDoc.floActionUrlValuesByConnection ?? {},
+                  floActionNodeUrlTokens: liveDoc.floActionNodeUrlTokens ?? [],
                   // Developer's initial picks
                   actionId:      liveDoc.templateActionId    ?? liveDoc.actionIds?.[0]            ?? '',
                   connectionId:  liveDoc.defaultConnectionId ?? liveDoc.allowedConnectionIds?.[0] ?? '',
@@ -1387,9 +1810,43 @@ const DesignerInner: React.FC<DesignerProps> = ({
             })()
           : {};
 
+    const typeDefaults = type === 'loopNode'
+      ? {
+        continueExpr: 'local.continue == true',
+        executeAtLeastOnce: true,
+        maxIterations: 100,
+        outputTarget: 'cStream',
+      }
+        : type === 'subFloNode'
+          ? { description: '', inputArgs: [], returnArgs: [] }
+          : {};
+
+    const switchDefaults = type === 'floSwitchNode'
+      ? (() => {
+          const br = createSwitchBranch('Route 1');
+          return { branches: [br], activeBranchId: br.id };
+        })()
+      : type === 'filterNode'
+        ? { conditionRows: defaultConditionRows() }
+        : {};
+
+    const newId = `${type}-${Date.now()}`;
+    const selected = nodesRef.current.find(n => n.id === selectedNode?.id) ?? selectedNode;
+    const inheritSubFloId = selected?.type === 'subFloNode'
+      ? selected.id
+      : String((selected?.data as Record<string, unknown> | undefined)?.subFloId ?? '');
+
+    const subFloPatch = type === 'subFloNode'
+      ? { subFloId: newId }
+      : (type === 'subFloReturnNode' || (inheritSubFloId && type !== 'startNode' && type !== 'endNode'
+          && type !== 'invokeSubFloNode' && type !== 'loopNode'))
+        ? { subFloId: inheritSubFloId || undefined }
+        : {};
+
     recordCanvasHistory();
-    setNodes(prev => [...prev, {
-      id:   `${type}-${Date.now()}`,
+    setNodes(prev => {
+      const newNode = {
+      id:   newId,
       type,
       position,
       ...dims,
@@ -1405,10 +1862,22 @@ const DesignerInner: React.FC<DesignerProps> = ({
         ),
         ...nodeMeta,
         ...categoryPlaceholders,
+        ...(type !== 'startNode' && type !== 'endNode'
+          ? {
+            testInputJson: DEFAULT_NODE_TEST_INPUT,
+            dataPersistence: { mode: 'none' as const },
+          }
+          : {}),
         availableFlos: flos.map(f => ({ id: f.id, name: f.name })),
+        ...switchDefaults,
+        ...typeDefaults,
+        ...subFloPatch,
       },
-    }]);
-  }, [rfInstance, hubId, tenantId, updateNodeData, deleteNode, plugs, flos, recordCanvasHistory]);
+    };
+      queueMicrotask(() => setSelectedNode(newNode as Node));
+      return [...prev, newNode as Node];
+    });
+  }, [rfInstance, hubId, tenantId, updateNodeData, deleteNode, plugs, flos, recordCanvasHistory, selectedNode]);
 
   const onNodeDragStart = useCallback(() => {
     if (!canvasHistory.isApplying()) recordCanvasHistory();
@@ -1437,6 +1906,7 @@ const DesignerInner: React.FC<DesignerProps> = ({
 
   // ── Admin Dashboard view ──────────────────────────────────────────────────
   if (view === 'admin' || view === 'scheduler') {
+    const persistedUi = readTenantUiState(hubId, tenantId);
     return (
       <HubAdminDashboard
         hubId={hubId}
@@ -1446,7 +1916,12 @@ const DesignerInner: React.FC<DesignerProps> = ({
         isHubAdmin={isHubAdmin}
         hubName={hubName}
         hubLogoUrl={hubLogoUrl}
-        initialTab={view === 'scheduler' ? 'scheduler' : 'plugs'}
+        initialTab={
+          view === 'scheduler'
+            ? 'scheduler'
+            : (persistedUi.adminTab ?? 'plugs')
+        }
+        onTabChange={(tab: AdminTabId) => writeTenantUiState(hubId, tenantId, { adminTab: tab })}
         onBack={() => setView('designer')}
       />
     );
@@ -1501,6 +1976,11 @@ const DesignerInner: React.FC<DesignerProps> = ({
         result={runResult}
         onRun={handleRun}
         onClose={() => { setRunModalOpen(false); setRunResult(null); }}
+        runBlockedReason={
+          validationReport.errors.length > 0
+            ? `This flow has ${validationReport.errors.length} validation error(s). Fix them or use ▶ Test node on individual nodes.`
+            : undefined
+        }
       />
 
       {/* ── Top bar ─────────────────────────────────────────────────────────── */}
@@ -1610,13 +2090,46 @@ const DesignerInner: React.FC<DesignerProps> = ({
             ↷ Redo
           </button>
           <div style={s.tbSep} />
+          {activeFlo && (
+            <FloDraftStatusBar
+              flo={activeFlo}
+              hasDraftChanges={hasDraftChanges}
+              saving={saving}
+              autoSaving={autoSaving}
+            />
+          )}
+          <div style={s.tbSep} />
           <button
-            onClick={saveFlo}
-            disabled={saving || !activeFlo}
-            style={{ ...s.btnGhost, opacity: saving || !activeFlo ? 0.5 : 1, cursor: !activeFlo ? 'not-allowed' : 'pointer' }}
+            onClick={() => void saveFlo()}
+            disabled={saving || autoSaving || !activeFlo || !hasDraftChanges}
+            title={
+              !activeFlo ? 'Open a flo first'
+                : !hasDraftChanges ? 'No unsaved changes'
+                : 'Save draft to Firestore'
+            }
+            style={{
+              ...s.btnGhost,
+              opacity: saving || autoSaving || !activeFlo || !hasDraftChanges ? 0.45 : 1,
+              cursor: !activeFlo || !hasDraftChanges ? 'not-allowed' : 'pointer',
+            }}
           >
-            {saving ? 'Saving…' : 'Save'}
+            {saving ? 'Saving…' : autoSaving ? 'Auto-saving…' : 'Save'}
           </button>
+          {(activeFlo?.publishedVersion ?? 0) > 0 && hasDraftChanges && (
+            <button
+              type="button"
+              onClick={() => void discardDraft()}
+              disabled={saving || autoSaving}
+              title="Discard draft edits and reload last published version"
+              style={{
+                ...s.btnGhost,
+                opacity: saving || autoSaving ? 0.45 : 1,
+                fontSize: 10,
+              }}
+            >
+              Discard draft
+            </button>
+          )}
           <button
             onClick={() => { setRunResult(null); setRunModalOpen(true); }}
             disabled={!activeFlo}
@@ -1646,6 +2159,21 @@ const DesignerInner: React.FC<DesignerProps> = ({
           )}
           <div style={s.tbSep} />
 
+          <button
+            type="button"
+            onClick={() => enterProductDocs({ category: 'product' })}
+            title="Product help (opens in new tab)"
+            style={{
+              ...s.btnGhost,
+              fontSize: 10,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+            }}
+          >
+            📘 Help
+          </button>
+
           {/* Profile drawer — replaces raw Admin button + HUB ADMIN badge */}
           <ProfileDrawer
             user={{ displayName: userInfo.displayName, email: userInfo.email, role: userRole }}
@@ -1653,21 +2181,72 @@ const DesignerInner: React.FC<DesignerProps> = ({
             permissions={permissions}
             hubName={hubName}
             hubLogoUrl={hubLogoUrl}
-            onNavigate={(section: DashboardSection) => setView(section)}
+            onNavigate={(section: DashboardSection) => {
+              if (section === 'admin') {
+                writeTenantUiState(hubId, tenantId, { adminTab: 'plugs' });
+                setView('admin');
+              } else if (section === 'scheduler') {
+                writeTenantUiState(hubId, tenantId, { adminTab: 'scheduler' });
+                setView('scheduler');
+              } else if (section === 'executions') {
+                setView('executions');
+              } else {
+                setView('designer');
+              }
+            }}
             onSignOut={() => onSignOut?.()}
           />
         </div>
       </div>
 
+      {draftLoadAlert && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+          padding: '8px 14px', flexShrink: 0,
+          background: 'rgba(251,191,36,0.12)', borderBottom: '0.5px solid rgba(251,191,36,0.35)',
+          color: '#fde68a', fontSize: 12,
+        }}>
+          <span>
+            <strong>In-progress draft loaded</strong>
+            {' — '}
+            {draftLoadAlert.floName}
+            {draftLoadAlert.publishedVersion ? ` (published v${draftLoadAlert.publishedVersion} unchanged)` : ''}
+            . Production and webhooks still use the published version until you publish this draft.
+          </span>
+          <button
+            type="button"
+            onClick={() => setDraftLoadAlert(null)}
+            style={{
+              padding: '2px 8px', borderRadius: 4, border: '0.5px solid rgba(251,191,36,0.45)',
+              background: 'transparent', color: '#fde68a', cursor: 'pointer', fontSize: 11, flexShrink: 0,
+            }}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* ── Body ────────────────────────────────────────────────────────────── */}
+      <InspectorPanelProvider
+        expanded={inspectorExpanded}
+        setExpanded={setInspectorExpanded}
+        paletteWidth={paletteWidth}
+        hubId={hubId}
+        tenantId={tenantId}
+      >
       <div style={s.body}>
 
         {/* Node palette */}
-        <NodePalette plugs={plugs.filter(p => p.isActive !== false)} floActions={floActions} />
+        <NodePalette
+          plugs={plugs.filter(p => p.isActive !== false)}
+          floActions={floActions}
+          onPaletteWidthChange={setPaletteWidth}
+        />
 
         <div
           ref={wrapperRef}
-          style={{ flex: 1, position: 'relative', overflow: 'hidden' }}
+          className="fp-designer-canvas"
+          style={{ flex: 1, minWidth: DESIGNER_CANVAS_MIN_WIDTH, position: 'relative', overflow: 'hidden' }}
           onDrop={onDrop}
           onDragOver={onDragOver}
         >
@@ -1684,15 +2263,28 @@ const DesignerInner: React.FC<DesignerProps> = ({
             onConnect={onConnect}
             onNodeDragStart={onNodeDragStart}
             onNodeClick={onNodeClick}
+            onNodeContextMenu={onNodeContextMenu}
             onEdgeClick={onEdgeClick}
             onPaneClick={onPaneClick}
             onInit={(instance) => {
               setRfInstance(instance);
+              if (nodesRef.current.length === 0) return;
               if (pendingViewport.current) {
-                instance.setViewport(pendingViewport.current, { duration: 0 });
+                const vp = pendingViewport.current;
                 pendingViewport.current = null;
+                restoreCanvasViewport(
+                  instance,
+                  clampCanvasViewport(vp),
+                  nodesRef.current,
+                  wrapperRef.current,
+                );
+                pendingFitView.current = false;
+              } else if (pendingFitView.current) {
+                pendingFitView.current = false;
+                fitCanvasToFlow(instance);
               }
             }}
+            onMoveEnd={onViewportMoveEnd}
             defaultViewport={{ x: 0, y: 0, zoom: 1 }}
             nodeOrigin={[0, 0]}
             elevateEdgesOnSelect={false}
@@ -1711,10 +2303,48 @@ const DesignerInner: React.FC<DesignerProps> = ({
               color="rgba(255,255,255,0.025)"
               gap={[220, 80]}
             />
-            <Controls style={{ background: '#181b24', border: '0.5px solid rgba(255,255,255,.1)', borderRadius: 8 }} />
-            <MiniMap style={{ background: '#141720', borderRadius: 8 }} nodeColor="#4f8ef7" maskColor="rgba(15,17,23,.7)" />
+            <Controls position="bottom-left" showInteractive={false} />
+            <MiniMap
+              position="bottom-right"
+              nodeColor="#4f8ef7"
+              maskColor="rgba(15,17,23,.75)"
+              pannable
+              zoomable
+            />
           </ReactFlow>
           </EdgeRewireContext.Provider>
+
+          {nodeContextMenu && contextMenuNode && (
+            <NodeCanvasContextMenu
+              state={nodeContextMenu}
+              node={contextMenuNode}
+              edges={edges}
+              onClose={() => setNodeContextMenu(null)}
+              onRemoveWiring={removeNodeWiring}
+              onDelete={deleteNode}
+              onQuickHelp={setNodeQuickHelp}
+            />
+          )}
+
+          {nodeQuickHelp && quickHelpNode && (
+            <DesignerHelpPopup
+              x={nodeQuickHelp.x}
+              y={nodeQuickHelp.y}
+              content={getNodeQuickHelp(quickHelpNode, plugs, floActions)}
+              onClose={() => setNodeQuickHelp(null)}
+            />
+          )}
+
+          {rfInstance && nodes.length > 0 && (
+            <button
+              type="button"
+              className="fp-canvas-fit-btn"
+              title="Fit entire flow in view"
+              onClick={() => fitCanvasToFlow(rfInstance)}
+            >
+              Fit flow
+            </button>
+          )}
 
           {flos.length === 0 && (
             <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, pointerEvents: 'none' }}>
@@ -1729,10 +2359,14 @@ const DesignerInner: React.FC<DesignerProps> = ({
           )}
         </div>
 
-        {/* Right panel */}
-        <div style={s.rightPanel}>
+        {/* Right panel — resize, collapse strip, widen within body row */}
+        <InspectorRightColumn>
+          <InspectorPanelToolbar />
           <NodeInspector node={selectedNode} onUpdate={updateNodeData} ctx={inspectorCtx} />
-          <div style={s.logPanel}>
+          <div style={{
+            ...s.logPanel,
+            ...(inspectorExpanded ? { height: 150, flexShrink: 0 } : {}),
+          }}>
             <div style={{ fontSize: 10, fontWeight: 600, color: '#3a3a50', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 8 }}>
               Last run
             </div>
@@ -1760,8 +2394,9 @@ const DesignerInner: React.FC<DesignerProps> = ({
               </button>
             )}
           </div>
-        </div>
+        </InspectorRightColumn>
       </div>
+      </InspectorPanelProvider>
     </div>
   );
 };

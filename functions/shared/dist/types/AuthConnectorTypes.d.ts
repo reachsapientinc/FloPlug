@@ -1,4 +1,5 @@
 import type { HubPermission } from '../constants/constants.js';
+import type { ConnectorUrlToken, ConnectorUrlMode } from '../utils/connectorUrlTokens.js';
 export type FieldType = 'text' | 'password' | 'url' | 'textarea' | 'select';
 export interface AuthField {
     name: string;
@@ -89,6 +90,12 @@ export interface ConnectorDoc {
     allowActionNodes?: boolean;
     tierControlled?: boolean;
     availableForTiers?: string[];
+    /** How this connector builds outbound URLs — none (email), generic HTTP, or segmented vendor API */
+    urlMode?: ConnectorUrlMode;
+    /** Ordered URL segments — joined with `/` at runtime (see connectorUrlTokens.ts) */
+    urlTokens?: ConnectorUrlToken[];
+    /** Sample URL captured when product admin confirmed the pattern at save time */
+    urlPatternPreview?: string;
 }
 export type SchemaType = 'wsdl' | 'xsd' | 'openapi' | 'graphql';
 export interface ConnectorSchema {
@@ -125,6 +132,13 @@ export interface ParsedField {
     xsdType: string;
     required: boolean;
     repeating: boolean;
+    /** XSD minOccurs — "0" marks an optional container/element branch */
+    minOccurs?: string | number;
+    /**
+     * Ancestor mapper paths with minOccurs=0 (set at flatten). Used when object rows
+     * are missing from a cached flatten index.
+     */
+    optionalAncestorPaths?: string[];
     enumValues?: string[];
     helpText?: string;
 }

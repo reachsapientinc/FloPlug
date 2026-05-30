@@ -46,3 +46,11 @@ export function computeGraphHash(graph) {
 export function graphsEqual(a, b) {
     return computeGraphHash(a) === computeGraphHash(b);
 }
+/** True when a saved draft graph differs from the last published version. */
+export function hasInProgressDraft(floData) {
+    const published = getPublishedGraph(floData);
+    if (!published?.nodes?.length)
+        return false;
+    const draft = getDraftGraph(floData);
+    return !graphsEqual({ nodes: draft.nodes, edges: draft.edges ?? [] }, { nodes: published.nodes, edges: published.edges ?? [] });
+}

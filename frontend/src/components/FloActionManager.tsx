@@ -4,7 +4,8 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import type { ConnectorDoc, ActionDoc, FloConnectionSafe, AddActionNodeParams } from '@floplug/shared';
-import { resolveFloActionFields } from '@floplug/shared';
+import { resolveFloActionFields, floActionNodeTokensForConnector } from '@floplug/shared';
+import FloActionUrlConfigSection from './FloActionUrlConfigSection';
 
 export interface FloKitMeta {
   id: string;
@@ -12,6 +13,8 @@ export interface FloKitMeta {
   label: string;
   description?: string;
   actionIds: string[];
+  serviceModule?:  string;
+  serviceVersion?: string;
 }
 
 export interface ExistingActionNodeRef {
@@ -24,6 +27,7 @@ export interface ExistingActionNodeRef {
   floActionName?: string;
   flaLabel?: string;
   description?: string;
+  floActionUrlValuesByConnection?: Record<string, Record<string, string>>;
 }
 
 export interface FloActionManagerProps {
@@ -58,6 +62,9 @@ export const FloActionManager: React.FC<FloActionManagerProps> = ({
   const [floActionNameMap, setFloActionNameMap] = useState<Record<string, string>>({});
   const [flaLabelMap, setFlaLabelMap] = useState<Record<string, string>>({});
   const [descriptionMap, setDescriptionMap] = useState<Record<string, string>>({});
+  const [floActionUrlValuesMap, setFloActionUrlValuesMap] = useState<
+    Record<string, Record<string, Record<string, string>>>
+  >({});
   const [processingKitId, setProcessingKitId] = useState<string | null>(null);
   const [saveError, setSaveError] = useState('');
 
@@ -88,6 +95,7 @@ export const FloActionManager: React.FC<FloActionManagerProps> = ({
     const names: Record<string, string> = {};
     const labels: Record<string, string> = {};
     const descs: Record<string, string> = {};
+    const urlVals: Record<string, Record<string, Record<string, string>>> = {};
     for (const n of existingNodes) {
       const resolved = resolveFloActionFields({
         floActionName: n.floActionName,
@@ -101,6 +109,7 @@ export const FloActionManager: React.FC<FloActionManagerProps> = ({
       names[n.kitId] = resolved.floActionName;
       labels[n.kitId] = resolved.flaLabel;
       descs[n.kitId] = resolved.description;
+      urlVals[n.kitId] = n.floActionUrlValuesByConnection ?? {};
     }
     setSelectedActionsMap(prev => ({ ...a, ...prev }));
     setAllowedConnectionsMap(prev => ({ ...al, ...prev }));
@@ -108,6 +117,7 @@ export const FloActionManager: React.FC<FloActionManagerProps> = ({
     setFloActionNameMap(prev => ({ ...names, ...prev }));
     setFlaLabelMap(prev => ({ ...labels, ...prev }));
     setDescriptionMap(prev => ({ ...descs, ...prev }));
+    setFloActionUrlValuesMap(prev => ({ ...urlVals, ...prev }));
   }, [existingNodes]);
 
   const connectionsForConnector = useMemo(
@@ -169,6 +179,16 @@ export const FloActionManager: React.FC<FloActionManagerProps> = ({
     return null;
   };
 
+  const patchFloActionUrlValue = (kitId: string, connectionId: string, tokenKey: string, value: string) => {
+    setFloActionUrlValuesMap(prev => ({
+      ...prev,
+      [kitId]: {
+        ...(prev[kitId] ?? {}),
+        [connectionId]: { ...(prev[kitId]?.[connectionId] ?? {}), [tokenKey]: value },
+      },
+    }));
+  };
+
   const saveKit = async (kitId: string, kitLabel: string) => {
     if (!selectedConnectorId) return;
     const actionIds = selectedActionsMap[kitId] ?? [];
@@ -201,9 +221,19 @@ export const FloActionManager: React.FC<FloActionManagerProps> = ({
         floActionName,
         flaLabel,
         description: description || undefined,
+        floActionUrlValuesByConnection: floActionUrlValuesMap[kitId] ?? {},
+        floActionNodeUrlTokens: floActionNodeTokensForConnector(
+          connectors.find(c => c.id === selectedConnectorId),
+        ).map(t => ({ key: t.key, label: t.label, description: t.description, field: t.field })),
       });
     } catch (e: unknown) {
-      setSaveError(e instanceof Error ? e.message : 'Save failed.');
+      const err = e as { message?: string; code?: string };
+      const detail = err.message && err.message !== 'Bad Request'
+        ? err.message
+        : err.code
+          ? `${err.code.replace('functions/', '')}: save failed`
+          : 'Save failed.';
+      setSaveError(detail);
     } finally {
       setProcessingKitId(null);
     }
@@ -325,6 +355,20 @@ export const FloActionManager: React.FC<FloActionManagerProps> = ({
                 </div>
               )}
             </div>
+
+            <FloActionUrlConfigSection
+              connector={connectors.find(c => c.id === selectedConnectorId) ?? null}
+              connections={connectionsForConnector}
+              allowedIds={allowed}
+              defaultId={defaultConn}
+              kit={{
+                serviceModule:  kit.serviceModule,
+                serviceVersion: kit.serviceVersion,
+                schemaLabel:    kit.label,
+              }}
+              floActionUrlValues={floActionUrlValuesMap[kit.id] ?? {}}
+              onFloActionUrlChange={(connId, key, val) => patchFloActionUrlValue(kit.id, connId, key, val)}
+            />
 
             <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
               <button type="button" onClick={() => saveKit(kit.id, kit.label)} disabled={processingKitId === kit.id || !!labelErr} style={{

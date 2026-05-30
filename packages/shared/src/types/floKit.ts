@@ -22,6 +22,12 @@ export interface FloKitDoc {
   schemaId?:             string;
   /** @deprecated Use servicesSchemaVersion */
   schemaVersion?:        string;
+  /** API version segment for URL token assembly (optional override; else derived from services schema) */
+  serviceVersion?:      string;
+  /** Service module segment for URL token assembly (optional override; else derived from schema label) */
+  serviceModule?:       string;
+  /** URL segment values keyed by urlToken1, urlToken2, … */
+  urlTokenValues?:      Record<string, string>;
   /** FloKitActions doc ids under this kit */
   actionIds:         string[];
   kitVersion:        string;

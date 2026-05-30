@@ -85,6 +85,8 @@ export interface SaveFloConnectionPayload {
   environmentLabel?: string;
   hostname?:        string;
   tenantKey?:       string;
+  baseUrl?:         string;
+  urlTokenValues?:  Record<string, string>;
   credentials:      Record<string, string>;
 }
 
@@ -288,10 +290,11 @@ export function usePlugManagerActions({
       allowedConnectionIds: params.allowedConnectionIds,
       connectionId:         params.defaultConnectionId,
       outputTarget:         params.outputTarget,
-      varName:              params.varName,
+      ...(params.varName != null && params.varName !== '' ? { varName: params.varName } : {}),
       floActionName:        params.floActionName,
       flaLabel:             params.flaLabel,
       description:          params.description,
+      floActionUrlValuesByConnection: params.floActionUrlValuesByConnection,
     });
 
     const nodesRes = await cf<

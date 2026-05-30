@@ -18,6 +18,7 @@ import {
   runManifestStoragePath,
 } from './executionHubStorageService.js';
 import { db } from '../utils/firebase.js';
+import { killRunRecord, reconcileStaleRuns } from '../engine/runLifecycle.js';
 
 function requireAuth(request: { auth?: unknown }): void {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Authentication required.');
@@ -64,6 +65,9 @@ function mapRunDoc(id: string, data: Record<string, unknown>): FloExecutionRunSu
   return {
     runId:        id,
     floId:        String(data.floId ?? ''),
+    runLabel:     typeof data.runLabel === 'string' && data.runLabel.trim()
+      ? data.runLabel.trim()
+      : undefined,
     floVersion:   typeof data.floVersion === 'number' ? data.floVersion : undefined,
     executedGraph: data.executedGraph === 'draft' || data.executedGraph === 'published'
       ? data.executedGraph
@@ -283,6 +287,61 @@ export const getExecutionHubStorageUrls = onCall(async (request) => {
     nodeUrls,
     storageRoot: `execution-hub/${hubId}/${tenantId}/${runId}`,
   };
+});
+
+/** Cancel a run stuck in `running` (cooperative kill between nodes + immediate Firestore update). */
+export const killFloRun = onCall(async (request) => {
+  requireAuth(request);
+  const { hubId, tenantId, runId } = request.data as {
+    hubId: string; tenantId: string; runId: string;
+  };
+  if (!hubId || !tenantId || !runId) {
+    throw new HttpsError('invalid-argument', 'hubId, tenantId, runId required.');
+  }
+  requireSameHub(request, hubId, tenantId);
+
+  try {
+    const result = await killRunRecord({
+      hubId,
+      tenantId,
+      runId,
+      killedByUid: request.auth?.uid ?? null,
+    });
+    return result;
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes('not found')) {
+      throw new HttpsError('not-found', message);
+    }
+    throw new HttpsError('internal', message);
+  }
+});
+
+/**
+ * Reconcile runs stuck in `running` after worker crash (OOM/timeout).
+ * Marks them `fatal` (platform) — flows do not auto-resume on new instances.
+ */
+export const reconcileFloRuns = onCall(async (request) => {
+  requireAuth(request);
+  const { hubId, tenantId, runId, maxAgeMinutes, heartbeatMinutes } = request.data as {
+    hubId: string;
+    tenantId: string;
+    runId?: string;
+    maxAgeMinutes?: number;
+    heartbeatMinutes?: number;
+  };
+  if (!hubId || !tenantId) {
+    throw new HttpsError('invalid-argument', 'hubId, tenantId required.');
+  }
+  requireSameHub(request, hubId, tenantId);
+
+  return reconcileStaleRuns({
+    hubId,
+    tenantId,
+    runId,
+    maxAgeMinutes,
+    heartbeatMinutes,
+  });
 });
 
 /** Latest validation snapshot for one flo (Execution Hub / designer). */

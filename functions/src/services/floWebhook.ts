@@ -4,10 +4,19 @@ import { getAuth }        from 'firebase-admin/auth';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { executeFloNodes } from '../engine/executeFloNodes.js';
 import type { RunContext, NodeExecutionHubPayload } from '@floplug/shared';
+import { buildFloRunMeta } from '@floplug/shared';
 import { HUB_COLLECTIONS } from '@floplug/shared';
 import { getPublishedGraph } from '@floplug/shared';
 import { getFloRunnableBlockReason } from './floValidationService.js';
 import { persistNodeExecutionRecord } from './floExecutionHubService.js';
+import {
+  RunKilledError,
+  finalizeRunRecord,
+  ensureRunFinalizedIfStillRunning,
+  isRunKillRequested,
+  logLineForUncaughtError,
+} from '../engine/runLifecycle.js';
+import { classifyUncaughtError, extractRunErrorFromLog } from '@floplug/shared';
 
 const db = getFirestore();
 
@@ -125,11 +134,27 @@ export const invokeFlo = onRequest(async (req, res) => {
   };
 
   let floOutput: unknown = null;
+  let killed = false;
+  let forcedFatal = false;
   try {
+    const floName = String(flo.doc.name ?? flo.doc.label ?? floId);
+    const floSlug = String(flo.doc.slug ?? floId);
+    const floRunMeta = buildFloRunMeta({
+      runId,
+      floId,
+      floName,
+      slug:      floSlug,
+      tenant:    tenantId,
+      hubId,
+      runType:   'Webhook',
+      userId:    decodedToken.uid,
+      userEmail: (decodedToken as { email?: string }).email ?? '',
+    });
     const ctx: RunContext = {
       hubId, tenantId, wsId: flo.workspaceId,
-      runId, floId, store, log, depth: 0,
+      runId, floId, floRunMeta, store, log, depth: 0,
       onNodeComplete,
+      shouldAbort: () => isRunKillRequested(hubId, tenantId, runId),
     };
     floOutput = await executeFloNodes(
       flo.nodes as Parameters<typeof executeFloNodes>[0],
@@ -138,21 +163,39 @@ export const invokeFlo = onRequest(async (req, res) => {
       ctx,
     );
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    log.push(`Fatal error: ${message}`);
+    if (err instanceof RunKilledError) {
+      killed = true;
+      log.push(`Run killed: ${err instanceof Error ? err.message : String(err)}`);
+    } else {
+      log.push(logLineForUncaughtError(err));
+      if (classifyUncaughtError(err) === 'fatal') forcedFatal = true;
+    }
+  } finally {
+    try {
+      if (!killed && !forcedFatal && log.some(l => l.includes('Error in'))) {
+        await ensureRunFinalizedIfStillRunning({
+          hubId, tenantId, runId, log, output: floOutput, errorMessage: extractRunErrorFromLog(log),
+        });
+      }
+    } catch (finalizeGuardErr) {
+      console.error('[invokeFlo] finalize guard failed', finalizeGuardErr);
+    }
+  }
+
+  if (!killed && await isRunKillRequested(hubId, tenantId, runId)) {
+    killed = true;
+    if (!log.some(l => l.includes('Run killed'))) log.push('Run killed by user');
   }
 
   log.push(`╚══ END WEBHOOK RUN: ${runId} ══╝`);
-  const status = log.some(l => l.includes('Error in') || l.includes('Fatal error')) ? 'error' : 'success';
-  const { extractRunErrorFromLog } = await import('@floplug/shared');
-  const errorMessage = status === 'error' ? extractRunErrorFromLog(log) : undefined;
+  const errorMessage = killed ? 'Run cancelled by user' : extractRunErrorFromLog(log);
 
-  await runRef.update({
-    log, output: floOutput, status,
-    ...(errorMessage ? { errorMessage } : {}),
-    completedAt: FieldValue.serverTimestamp(),
-    updatedAt:   FieldValue.serverTimestamp(),
+  const status = await finalizeRunRecord({
+    hubId, tenantId, runId, log, output: floOutput, killed, forcedFatal, errorMessage,
   });
 
-  res.status(status === 'error' ? 500 : 200).json({ executionId: runId, status, output: floOutput, log });
+  const httpStatus = status === 'killed' ? 499
+    : status === 'fatal' || status === 'error' ? 500
+    : 200;
+  res.status(httpStatus).json({ executionId: runId, status, output: floOutput, log });
 });

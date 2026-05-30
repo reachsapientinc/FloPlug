@@ -17,6 +17,8 @@ export interface FlattenedFieldRow {
     minOccurs?: string;
     maxOccurs?: string;
     notes?: string;
+    /** Mapper paths of ancestor elements with minOccurs=0 (for conditional required). */
+    optionalAncestorPaths?: string[];
 }
 export interface FlattenedOperationIndex {
     /** WSDL / business operation key, e.g. Put_Sales_Item */

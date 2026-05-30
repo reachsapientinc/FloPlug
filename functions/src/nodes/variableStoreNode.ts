@@ -14,6 +14,7 @@
 
 import { getValue, setValue } from '../utils/pathUtils.js';
 import type { NodeResult, NodeStore } from '@floplug/shared';
+import { isReservedStoreKey } from '@floplug/shared';
 
 interface StoreRow {
   action:     'set' | 'get' | 'clear';
@@ -31,6 +32,9 @@ function applyRow(
   const { action, scope, varName, sourcePath, targetPath } = row;
 
   if (!varName) return { cStream, logLine: '⚠ VarStore: no varName — skipped' };
+  if (isReservedStoreKey(varName)) {
+    return { cStream, logLine: `⚠ VarStore: "${varName}" is read-only (floRunMeta)` };
+  }
 
   const ss: Record<string, any> = scope === 'local' ? store.local : store.global;
 

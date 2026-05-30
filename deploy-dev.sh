@@ -31,19 +31,15 @@ cp packages/shared/package.json functions/shared/package.json
 
 # 1.c Build Functions (TypeScript to JS)
 echo "⚙️ Compiling TypeScript Functions..."
-cd functions && npm run build && cd ..
+( cd functions && npm run build ) || exit 1
 
 echo "🏗️ Starting Development Build..."
-cd frontend
-if npx vite build --mode development; then
-    echo "✅ Build successful."
-    cd ..
-else
+( cd frontend && npx vite build --mode development ) || {
     echo "❌ Build failed. Cleaning up."
-    rm frontend/.env.development
+    rm -f frontend/.env.development
     exit 1
-fi
-echo `pwd`
+}
+echo "✅ Build successful."
 if [ "$DEPLOY_MODE" = "true" ]; then
     if [ "$FUNC_MODE" = "rules" ]; then
         # 🌟 ADDED OPTION: Deploy Security Rules and Indexes only

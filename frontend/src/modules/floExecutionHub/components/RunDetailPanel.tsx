@@ -2,7 +2,9 @@ import React, { useState, useEffect } from 'react';
 import type { FloExecutionNodeRecord } from '@floplug/shared';
 import { formatFloRunVersion, extractRunErrorFromLog } from '@floplug/shared';
 import type { ExecutionHubRunDetail } from '../api/hubApi';
-import { formatDuration, formatTime, truncateId, normalizeRunStatus } from '../utils/formatters';
+import {
+  formatDuration, formatTime, truncateId, normalizeRunStatus, isStaleRunningRun,
+} from '../utils/formatters';
 import { StatusPill } from './StatusBadge';
 import { NodeRecordCard } from './NodeRecordCard';
 import { RunPipelineVisualizer } from './RunPipelineVisualizer';
@@ -12,9 +14,15 @@ export interface RunDetailPanelProps {
   detail: ExecutionHubRunDetail | null;
   loading: boolean;
   error: string | null;
+  onKillRun?: (runId: string) => void | Promise<void>;
+  killing?: boolean;
+  onReconcileRun?: (runId: string) => void | Promise<void>;
+  reconciling?: boolean;
 }
 
-export const RunDetailPanel: React.FC<RunDetailPanelProps> = ({ detail, loading, error }) => {
+export const RunDetailPanel: React.FC<RunDetailPanelProps> = ({
+  detail, loading, error, onKillRun, killing, onReconcileRun, reconciling,
+}) => {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [showAllRecords, setShowAllRecords] = useState(false);
 
@@ -41,6 +49,9 @@ export const RunDetailPanel: React.FC<RunDetailPanelProps> = ({ detail, loading,
   const { run, nodes, graph } = detail;
   const runId = String(run.id ?? '');
   const floName = String(run.floName ?? run.floId ?? 'Unknown flo');
+  const runLabel = typeof run.runLabel === 'string' && run.runLabel.trim()
+    ? run.runLabel.trim()
+    : undefined;
   const status = String(run.status ?? 'unknown');
   const durationMs = typeof run.durationMs === 'number' ? run.durationMs : undefined;
   const versionLabel = formatFloRunVersion(
@@ -56,7 +67,12 @@ export const RunDetailPanel: React.FC<RunDetailPanelProps> = ({ detail, loading,
   const runLog = Array.isArray(run.log) ? (run.log as string[]) : [];
   const errorMessage = typeof run.errorMessage === 'string'
     ? run.errorMessage
-    : (status === 'error' ? extractRunErrorFromLog(runLog) : undefined);
+    : (status === 'error' || status === 'killed' || status === 'fatal'
+      ? extractRunErrorFromLog(runLog)
+      : undefined);
+
+  const isRunning = normalizeRunStatus(status) === 'running';
+  const stale = isStaleRunningRun(status, String(run.startedAt ?? ''));
 
   const okCount = sortedNodes.filter(n => n.status === 'ok').length;
   const errCount = sortedNodes.filter(n => n.status === 'error').length;
@@ -65,16 +81,53 @@ export const RunDetailPanel: React.FC<RunDetailPanelProps> = ({ detail, loading,
   return (
     <div className="run-detail-panel">
       <div className="run-detail-head">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6, flexWrap: 'wrap' }}>
           <h2 className="run-detail-title">{floName}</h2>
           <StatusPill status={status} />
         </div>
+        {runLabel && (
+          <div className="run-detail-label" style={{ fontSize: 13, color: 'var(--cyan)', marginBottom: 6 }}>
+            {runLabel}
+          </div>
+        )}
         <div className="run-detail-meta">
           run {truncateId(runId, 12)} · {formatTime(String(run.startedAt ?? ''))}
           {durationMs != null ? ` · ${formatDuration(durationMs)}` : ''}
           {run.source ? ` · ${String(run.source)}` : ''}
           {versionLabel !== '—' ? ` · ${versionLabel}` : ''}
         </div>
+        {(isRunning || stale) && (onKillRun || onReconcileRun) && (
+          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            {stale && (
+              <span style={{ fontSize: 11, color: '#c084fc' }}>
+                Stale — worker likely crashed (memory/CPU). New Firebase instances do not resume this run.
+                Mark as Fatal to close it, then start a new run.
+              </span>
+            )}
+            {stale && onReconcileRun && (
+              <button
+                type="button"
+                className="refresh-btn"
+                style={{ borderColor: '#c084fc', color: '#e9d5ff' }}
+                disabled={reconciling}
+                onClick={() => onReconcileRun(runId)}
+              >
+                {reconciling ? 'Reconciling…' : 'Mark as Fatal'}
+              </button>
+            )}
+            {isRunning && !stale && onKillRun && (
+              <button
+                type="button"
+                className="refresh-btn"
+                style={{ borderColor: 'var(--amber)', color: 'var(--amber)' }}
+                disabled={killing}
+                onClick={() => onKillRun(runId)}
+              >
+                {killing ? 'Killing…' : 'Kill run'}
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="run-detail-kpis">

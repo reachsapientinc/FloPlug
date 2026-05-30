@@ -1,6 +1,8 @@
 import React from 'react';
 import { type NodeProps } from '@xyflow/react';
 import { CompactNode, deriveNodeStatus, floActionIoBadge } from './CompactNode';
+import { nodeDimensions } from './FlowNodeShell';
+import { nodeDisplayTitle } from '@floplug/shared';
 
 interface FloActionNodeData {
   floActionName?:       string;
@@ -17,9 +19,10 @@ interface FloActionNodeData {
   [key: string]:        unknown;
 }
 
-const FloActionNode: React.FC<NodeProps> = ({ id, data, selected }) => {
+const FloActionNode: React.FC<NodeProps> = ({ id, data, selected, ...dimProps }) => {
   const d = data as FloActionNodeData;
-  const title = d.flaLabel ?? d.floActionName ?? 'FloAction';
+  const dims = nodeDimensions(dimProps);
+  const title = nodeDisplayTitle(d as Record<string, unknown>, d.flaLabel ?? d.floActionName ?? 'FloAction');
   const subtitle = d.connectorId ?? '';
 
   return (
@@ -32,6 +35,8 @@ const FloActionNode: React.FC<NodeProps> = ({ id, data, selected }) => {
       subtitle={subtitle}
       badge={floActionIoBadge(d as Record<string, unknown>)}
       status={deriveNodeStatus(d as Record<string, unknown>)}
+      width={dims.width}
+      height={dims.height}
       onDelete={() => d.onDelete?.(id)}
     />
   );

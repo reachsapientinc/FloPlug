@@ -22,6 +22,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { type NodeProps } from '@xyflow/react';
 import { CompactNode, deriveNodeStatus, outputTargetBadge } from './CompactNode';
+import { nodeDimensions } from './FlowNodeShell';
+import { nodeDisplayTitle } from '@floplug/shared';
 
 // ── Content-type options ──────────────────────────────────────────────────────
 export const CONTENT_TYPES = [
@@ -387,8 +389,9 @@ export const TemplateEditorModal: React.FC<EditorModalProps> = ({
 };
 
 // ── TemplateNode — compact canvas; edit in right panel ───────────────────────
-export const TemplateNode: React.FC<NodeProps> = ({ id, data, selected }) => {
+export const TemplateNode: React.FC<NodeProps> = ({ id, data, selected, ...dimProps }) => {
   const d = data as Record<string, unknown>;
+  const dims = nodeDimensions(dimProps);
   const template = String(d.template ?? '');
   const contentType = String(d.contentType ?? 'text/plain');
   const typeBadge = CONTENT_TYPES.find(c => c.value === contentType)?.badge ?? 'TXT';
@@ -403,10 +406,12 @@ export const TemplateNode: React.FC<NodeProps> = ({ id, data, selected }) => {
       selected={!!selected}
       color="#0f766e"
       icon="TN"
-      title="Template"
+      title={nodeDisplayTitle(d, 'Template')}
       subtitle={`${typeBadge} · ${lineCount > 0 ? `${lineCount} lines` : 'empty'}`}
       badge={otBadge ?? storeHint}
       status={deriveNodeStatus(d)}
+      width={dims.width}
+      height={dims.height}
       onDelete={() => (d.onDelete as (nid: string) => void)?.(id)}
     />
   );

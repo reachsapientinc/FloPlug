@@ -17,11 +17,24 @@ import {
 //   AuthProtocol, AuthProtocolField, ConnectorDoc, ConnectorAuthOverride,
 // } from '../types/AuthConnectorTypes';
 
-import type { AuthProtocol, ConnectorDoc, AuthProtocolField,ConnectorAuthOverride} from "@floplug/shared";
+import type { AuthProtocol, ConnectorDoc, AuthProtocolField, ConnectorAuthOverride, ConnectorUrlMode } from "@floplug/shared";
 import {
-  COLLECTIONS} from '@floplug/shared';
+  COLLECTIONS,
+  assembleConnectorUrl,
+  validateConnectorUrlTokensForMode,
+  resolveConnectorUrlMode,
+  defaultUrlModeForCategory,
+  defaultUrlTokensForMode,
+  connectorUrlModeRequiresTokens,
+} from '@floplug/shared';
+import ConnectorUrlTokenTable from './ConnectorUrlTokenTable';
 
 const CATEGORIES = ['ERP', 'CRM', 'HRIS', 'Payroll', 'Storage', 'Email', 'Messaging', 'Custom'];
+const URL_MODES: { value: ConnectorUrlMode; label: string; hint: string }[] = [
+  { value: 'none',      label: 'None',         hint: 'Email and non-HTTP connectors — no service URL' },
+  { value: 'generic',   label: 'Generic HTTP', hint: 'https:// + API URL on FloConnection (Custom REST APIs)' },
+  { value: 'segmented', label: 'Segmented',    hint: 'Vendor APIs — hostname, tenant, module, version, etc.' },
+];
 const FIELD_TYPES = ['text', 'password', 'url', 'textarea', 'select'] as const;
 
 
@@ -60,7 +73,12 @@ const emptyForm = (): ConnectorDoc => ({
   allowActionNodes: false,
   tierControlled:             false,
   availableForTiers:          [],
+  urlMode:                      'segmented',
+  urlTokens:                    [],
 });
+
+const effectiveUrlMode = (form: ConnectorDoc): ConnectorUrlMode =>
+  resolveConnectorUrlMode(form);
 
 // ── KV editor ────────────────────────────────────────────────────────────────
 interface KVEditorProps {
@@ -206,6 +224,7 @@ const ConnectorManagement: React.FC = () => {
   const [successMsg,   setSuccessMsg]   = useState('');
   const [expandedAuth, setExpandedAuth] = useState<string | null>(null);
   const [availableTiers, setAvailableTiers] = useState<{ id: string; tierName: string }[]>([]);
+  const [urlConfirmed, setUrlConfirmed] = useState(false);
 
   const grantTypes = [...new Set(authTypes.map(p => p.grantType).filter(Boolean))];
   // const accent = (p: AuthProtocol | ConnectorDoc) =>
@@ -249,11 +268,19 @@ const ConnectorManagement: React.FC = () => {
 
   // ── Select / new ──────────────────────────────────────────────────────────────
   const handleSelect = (c: ConnectorDoc) => {
+    const urlMode = resolveConnectorUrlMode(c);
     setSelected(c.id);
-    setForm({ ...c, supportedAuthTypes: [...(c.supportedAuthTypes ?? [])] });
+    setForm({
+      ...c,
+      supportedAuthTypes: [...(c.supportedAuthTypes ?? [])],
+      urlMode,
+      urlTokens: c.urlTokens ?? defaultUrlTokensForMode(urlMode),
+    });
     setOverride(c.authOverride ? { ...emptyOverride(), ...c.authOverride } : emptyOverride());
     setShowOverride(!!c.authOverride);
     setIsNew(false); setExpandedAuth(null);
+    const needsUrl = connectorUrlModeRequiresTokens(urlMode);
+    setUrlConfirmed(needsUrl ? !!(c.urlTokens?.length && c.urlPatternPreview) : true);
     setSuccessMsg(''); setError('');
   };
 
@@ -261,10 +288,35 @@ const ConnectorManagement: React.FC = () => {
     setSelected(null); setForm(emptyForm());
     setOverride(emptyOverride()); setShowOverride(false);
     setIsNew(true); setExpandedAuth(null);
+    setUrlConfirmed(false);
     setSuccessMsg(''); setError('');
   };
 
   const patch = (p: Partial<ConnectorDoc>) => setForm(f => ({ ...f, ...p }));
+
+  const setUrlMode = (mode: ConnectorUrlMode) => {
+    setUrlConfirmed(false);
+    setForm(f => ({
+      ...f,
+      urlMode: mode,
+      urlTokens: connectorUrlModeRequiresTokens(mode)
+        ? defaultUrlTokensForMode(mode)
+        : [],
+    }));
+  };
+
+  const onCategoryChange = (category: string) => {
+    if (category === 'Email') {
+      patch({ category });
+      setUrlMode('none');
+      setUrlConfirmed(true);
+      return;
+    }
+    patch({ category });
+    if (!form.urlTokens?.length && !form.urlPatternPreview) {
+      setUrlMode(defaultUrlModeForCategory(category));
+    }
+  };
   const patchOv = (p: Partial<ConnectorAuthOverride>) => setOverride(o => ({ ...o, ...p }));
   const patchTkMap = (p: Partial<NonNullable<ConnectorAuthOverride['tokenResponseMapping']>>) =>
     setOverride(o => ({ ...o, tokenResponseMapping: { ...o.tokenResponseMapping, ...p } }));
@@ -284,6 +336,25 @@ const ConnectorManagement: React.FC = () => {
     if (!connId)           { setError('Connector ID is required.'); return; }
     if (!form.label.trim()){ setError('Display Name is required.'); return; }
     if (form.supportedAuthTypes.length === 0) { setError('Select at least one auth type.'); return; }
+
+    const urlMode = effectiveUrlMode(form);
+    const urlTokens = connectorUrlModeRequiresTokens(urlMode) ? (form.urlTokens ?? []) : [];
+
+    if (urlTokens.length > 0) {
+      const tokenIssues = validateConnectorUrlTokensForMode(urlTokens, urlMode);
+      if (tokenIssues.length > 0) {
+        setError(`URL segments: row ${tokenIssues[0].index + 1} — ${tokenIssues[0].message}`);
+        return;
+      }
+      if (!urlConfirmed) {
+        setError('Confirm the preview URL is correct before saving URL segments.');
+        return;
+      }
+    }
+
+    const urlPatternPreview = urlTokens.length > 0
+      ? assembleConnectorUrl(urlTokens)
+      : undefined;
 
     // Build clean override — only include if showOverride and has values
     const cleanOv: ConnectorAuthOverride | undefined = showOverride ? {
@@ -310,10 +381,22 @@ const ConnectorManagement: React.FC = () => {
           updatedAt: serverTimestamp(),
         };
       if (cleanOv) payload.authOverride = cleanOv;
+      payload.urlMode = urlMode;
+      if (urlTokens.length > 0) {
+        payload.urlTokens = urlTokens;
+        payload.urlPatternPreview = urlPatternPreview;
+      } else {
+        payload.urlTokens = [];
+        payload.urlPatternPreview = null;
+      }
 
       await setDoc(doc(db, 'FloPlugConnectors', connId), payload, { merge: true });
 
-      const saved: ConnectorDoc = { ...form, id: connId, authOverride: cleanOv };
+      const saved: ConnectorDoc = {
+        ...form, id: connId, authOverride: cleanOv, urlMode,
+        urlTokens: urlTokens.length > 0 ? urlTokens : undefined,
+        urlPatternPreview,
+      };
       setConnectors(prev => {
         const idx = prev.findIndex(c => c.id === connId);
         if (idx >= 0) { const n = [...prev]; n[idx] = saved; return n; }
@@ -399,7 +482,7 @@ const ConnectorManagement: React.FC = () => {
                 <div style={s.fg}>
                   <label style={s.fl}>Category</label>
                   <select style={s.input} value={form.category}
-                    onChange={e => patch({ category: e.target.value })}>
+                    onChange={e => onCategoryChange(e.target.value)}>
                     {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </div>
@@ -494,6 +577,54 @@ const ConnectorManagement: React.FC = () => {
                     </div>
                   )}
                 </div>
+            </div>
+
+            {/* Service URL segments */}
+            <div style={s.section}>
+              <div style={s.secTitle}>Service URL Pattern</div>
+              <div style={{ fontSize: 11, color: '#6b6b80', marginBottom: 12, lineHeight: 1.5 }}>
+                Choose how this connector builds outbound URLs. Email connectors do not use HTTP service URLs.
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+                {URL_MODES.map(m => {
+                  const active = effectiveUrlMode(form) === m.value;
+                  return (
+                    <button
+                      key={m.value}
+                      type="button"
+                      onClick={() => {
+                        setUrlMode(m.value);
+                        if (m.value === 'none') setUrlConfirmed(true);
+                      }}
+                      style={{
+                        flex: '1 1 140px', textAlign: 'left', padding: '10px 12px', borderRadius: 8, cursor: 'pointer',
+                        border: `0.5px solid ${active ? 'rgba(79,142,247,0.5)' : 'rgba(255,255,255,0.1)'}`,
+                        background: active ? 'rgba(79,142,247,0.12)' : 'rgba(255,255,255,0.02)',
+                        fontFamily: 'inherit',
+                      }}
+                    >
+                      <div style={{ fontSize: 12, fontWeight: 600, color: active ? '#4f8ef7' : '#c0c0cc' }}>{m.label}</div>
+                      <div style={{ fontSize: 10, color: '#6b6b80', marginTop: 4, lineHeight: 1.4 }}>{m.hint}</div>
+                    </button>
+                  );
+                })}
+              </div>
+              {effectiveUrlMode(form) === 'none' ? (
+                <div style={{ fontSize: 11, color: '#9090a0', padding: 12, borderRadius: 8, background: 'rgba(255,255,255,0.02)', border: '0.5px solid rgba(255,255,255,0.06)' }}>
+                  No service URL configuration — appropriate for email and other non-HTTP connectors.
+                </div>
+              ) : (
+                <ConnectorUrlTokenTable
+                  mode={effectiveUrlMode(form)}
+                  tokens={form.urlTokens ?? []}
+                  confirmed={urlConfirmed}
+                  connectorLabel={form.label}
+                  connectorId={form.id}
+                  connectorCategory={form.category}
+                  onTokensChange={next => patch({ urlTokens: next })}
+                  onConfirmedChange={setUrlConfirmed}
+                />
+              )}
             </div>
 
             {/* Supported Auth Types */}
@@ -686,7 +817,11 @@ const ConnectorManagement: React.FC = () => {
             {/* Save */}
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
               <button style={s.cancelBtn}
-                onClick={() => { setSelected(null); setIsNew(false); setForm(emptyForm()); setOverride(emptyOverride()); setError(''); setSuccessMsg(''); }}>
+                onClick={() => {
+                  setSelected(null); setIsNew(false); setForm(emptyForm());
+                  setOverride(emptyOverride()); setUrlConfirmed(false);
+                  setError(''); setSuccessMsg('');
+                }}>
                 Cancel
               </button>
               <button onClick={handleSave} style={s.primaryBtn} disabled={saving}>

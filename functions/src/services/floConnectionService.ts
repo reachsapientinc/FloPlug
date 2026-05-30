@@ -89,6 +89,8 @@ interface SaveFloConnectionRequest {
   environmentLabel?: string;
   hostname?:        string;
   tenantKey?:       string;
+  baseUrl?:         string;
+  urlTokenValues?:  Record<string, string>;
   /**
    * On create: all required credential fields must be present.
    * On update: only supply fields you want to change — blank fields keep existing values.
@@ -103,8 +105,8 @@ export const saveFloConnection = onCall(async (request) => {
 
   const {
     hubId, tenantId, connectionId, connectorId, connectorLabel,
-    authProtocol, name, environmentLabel, hostname, tenantKey,
-    credentials, userId,
+    authProtocol, name, environmentLabel, hostname, tenantKey, baseUrl,
+    urlTokenValues, credentials, userId,
   } = request.data as SaveFloConnectionRequest;
 
   if (!hubId || !tenantId || !connectionId || !connectorId || !authProtocol || !name) {
@@ -147,6 +149,8 @@ export const saveFloConnection = onCall(async (request) => {
     environmentLabel: environmentLabel ?? '',
     hostname:       hostname ?? '',
     tenantKey:      tenantKey ?? '',
+    baseUrl:        baseUrl ?? '',
+    urlTokenValues: urlTokenValues ?? {},
     credentials:    mergedCredentials,
     isActive:       true,
     updatedBy:      userId,

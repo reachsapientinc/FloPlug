@@ -6,7 +6,7 @@
  *
  * Shows:
  *   - User name + email + role badge
- *   - Admin Dashboard link (isHubAdmin only)
+ *   - Hub Admin portal link (isHubAdmin only)
  *   - FloExecution Hub link (all authenticated users)
  *   - Scheduler link (invoke:flos permission)
  *   - Preferences (placeholder)
@@ -26,6 +26,8 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { PERMISSIONS } from '@floplug/shared';
+import { enterProductDocs, enterHubConfigDocs } from '../docs';
+import type { DocCategory } from '../docs';
 
 export type DashboardSection = 'admin' | 'executions' | 'scheduler' | 'preferences';
 
@@ -108,6 +110,44 @@ const ProfileDrawer: React.FC<ProfileDrawerProps> = ({
       <svg width="12" height="12" fill="none" stroke="#9CA3AF" strokeWidth="2"
            strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
         <polyline points="9 18 15 12 9 6"/>
+      </svg>
+    </button>
+  );
+
+  const helpLink = (label: string, icon: string, category: DocCategory, badge?: string) => (
+    <button
+      key={`help-${category}`}
+      onClick={() => {
+        setOpen(false);
+        enterProductDocs({ category });
+      }}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        width: '100%', padding: '9px 16px',
+        border: 'none', background: 'transparent',
+        color: '#111827', fontSize: 14, fontWeight: 500,
+        cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+        borderRadius: 0, transition: 'background 0.1s',
+      }}
+      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = '#F3F4F6'; }}
+      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+    >
+      <span style={{ fontSize: 15, width: 20, textAlign: 'center', flexShrink: 0 }}>{icon}</span>
+      <span style={{ flex: 1 }}>{label}</span>
+      {badge && (
+        <span style={{
+          fontSize: 9, fontWeight: 700, color: '#1a56db',
+          background: '#EBF2FF', borderRadius: 20, padding: '2px 7px',
+          letterSpacing: '0.3px',
+        }}>
+          {badge}
+        </span>
+      )}
+      <svg width="12" height="12" fill="none" stroke="#9CA3AF" strokeWidth="2"
+           strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+        <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/>
+        <polyline points="15 3 21 3 21 9"/>
+        <line x1="10" y1="14" x2="21" y2="3"/>
       </svg>
     </button>
   );
@@ -221,7 +261,34 @@ const ProfileDrawer: React.FC<ProfileDrawerProps> = ({
 
           {/* Navigation items */}
           <div style={{ padding: '6px 0' }}>
-            {isHubAdmin && navItem('Admin Dashboard', '⚙️', 'admin', 'ADMIN')}
+            {helpLink('Product help', '📘', 'product')}
+            <button
+              type="button"
+              onClick={() => { setOpen(false); enterHubConfigDocs('overview'); }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                width: '100%', padding: '9px 16px',
+                border: 'none', background: 'transparent',
+                color: '#111827', fontSize: 14, fontWeight: 500,
+                cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+              }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = '#F3F4F6'; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+            >
+              <span style={{ fontSize: 15, width: 20, textAlign: 'center' }}>🏢</span>
+              <span style={{ flex: 1 }}>Hub configuration</span>
+              <span style={{
+                fontSize: 9, fontWeight: 700, color: '#059669',
+                background: '#ECFDF5', borderRadius: 20, padding: '2px 7px',
+              }}>Live</span>
+              <svg width="12" height="12" fill="none" stroke="#9CA3AF" strokeWidth="2" viewBox="0 0 24 24">
+                <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/>
+                <polyline points="15 3 21 3 21 9"/>
+                <line x1="10" y1="14" x2="21" y2="3"/>
+              </svg>
+            </button>
+            <div style={{ margin: '6px 12px', borderTop: '1px solid #F3F4F6' }} />
+            {isHubAdmin && navItem('Hub Admin', '⚙️', 'admin', 'ADMIN')}
             {navItem('FloExecution Hub', '📊', 'executions')}
             {canSchedule  && navItem('Scheduler', '⏰', 'scheduler')}
             {navItem('Preferences', '🎨', 'preferences')}

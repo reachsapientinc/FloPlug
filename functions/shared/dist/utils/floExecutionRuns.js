@@ -42,12 +42,20 @@ export function collectRunVersionOptions(runs) {
     }
     return out;
 }
-/** Last fatal or per-node error line from an execution log. */
+/** Last platform, node, or unhandled error line from an execution log. */
 export function extractRunErrorFromLog(log) {
     for (let i = log.length - 1; i >= 0; i--) {
         const line = log[i];
+        if (line.includes('Platform error:')) {
+            const m = line.match(/Platform error:\s*(.+)/);
+            return m?.[1]?.trim() ?? line.trim();
+        }
         if (line.includes('Fatal error:')) {
             const m = line.match(/Fatal error:\s*(.+)/);
+            return m?.[1]?.trim() ?? line.trim();
+        }
+        if (line.includes('Unhandled error:')) {
+            const m = line.match(/Unhandled error:\s*(.+)/);
             return m?.[1]?.trim() ?? line.trim();
         }
         if (line.includes('Error in ')) {
@@ -56,6 +64,15 @@ export function extractRunErrorFromLog(log) {
         }
     }
     return undefined;
+}
+/** Trim and cap designer run labels for Firestore + search. */
+export function sanitizeRunLabel(raw) {
+    if (raw == null || typeof raw !== 'string')
+        return undefined;
+    const trimmed = raw.trim().replace(/\s+/g, ' ');
+    if (!trimmed)
+        return undefined;
+    return trimmed.slice(0, 120);
 }
 /** Remove undefined fields before writing to Firestore. */
 export function omitUndefinedFields(obj) {

@@ -75,9 +75,17 @@ export async function loadValidationResources(
 
   const connectionIds = new Set<string>();
   const activeConnectionIds = new Set<string>();
+  const connectionsById: FloValidationResourceContext['connectionsById'] = {};
   for (const d of connSnap.docs) {
     connectionIds.add(d.id);
-    if (d.data().isActive !== false) activeConnectionIds.add(d.id);
+    const data = d.data() as Record<string, unknown>;
+    if (data.isActive !== false) activeConnectionIds.add(d.id);
+    connectionsById[d.id] = {
+      urlTokenValues: data.urlTokenValues as Record<string, string> | undefined,
+      hostname:       String(data.hostname ?? '') || undefined,
+      tenantKey:      String(data.tenantKey ?? '') || undefined,
+      baseUrl:        String(data.baseUrl ?? '') || undefined,
+    };
   }
 
   const publishedFloIds = new Set<string>();
@@ -93,6 +101,7 @@ export async function loadValidationResources(
     floIds: new Set(floIds.map(f => f.floId)),
     publishedFloIds,
     plugConnectionPolicy,
+    connectionsById,
   };
 }
 

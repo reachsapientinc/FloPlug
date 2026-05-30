@@ -1,20 +1,21 @@
 /**
  * FloExecution Hub — standalone execution viewer (decoupled from Designer).
- * Visible to all authenticated hub users; per-flo access control comes later.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FloExecutionRunSummary } from '@floplug/shared';
 import { sortRunsByStartedDesc } from '@floplug/shared';
 import {
   getExecutionRun,
+  killExecutionRun,
+  reconcileExecutionRuns,
   listExecutionRuns,
   type ExecutionHubRunDetail,
 } from './api/hubApi';
-import { LiveMonitorView } from './components/LiveMonitorView';
+import { MonitorView, type MonitorSubView } from './components/MonitorView';
 import { AlertsView } from './components/AlertsView';
-import { ExecutionHubFilters } from './components/ExecutionHubFilters';
-import { DEFAULT_RUN_FILTERS, filterExecutionRuns } from './utils/filterRuns';
 import './hubTheme.css';
+import '../../styles/copy-ui.css';
+import { readTenantUiState, writeTenantUiState } from '../../utils/tenantUiState';
 
 export type HubTab = 'monitor' | 'alerts';
 
@@ -28,35 +29,46 @@ export interface FloExecutionHubAppProps {
 export const FloExecutionHubApp: React.FC<FloExecutionHubAppProps> = ({
   hubId, tenantId, hubName = 'FloPlug', onBack,
 }) => {
-  const [tab, setTab]               = useState<HubTab>('monitor');
+  const [tab, setTab]               = useState<HubTab>(() =>
+    readTenantUiState(hubId, tenantId).executionsTab ?? 'monitor',
+  );
+  const [monitorView, setMonitorView] = useState<MonitorSubView>(() =>
+    readTenantUiState(hubId, tenantId).executionsMonitorView ?? 'dashboard',
+  );
   const [runs, setRuns]             = useState<FloExecutionRunSummary[]>([]);
   const [runsLoading, setRunsLoading] = useState(true);
   const [runsError, setRunsError]   = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [floFilter, setFloFilter]   = useState<string | null>(null);
-  const [runFilters, setRunFilters] = useState(DEFAULT_RUN_FILTERS);
   const [detail, setDetail]         = useState<ExecutionHubRunDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [killing, setKilling]       = useState(false);
+  const [reconciling, setReconciling] = useState(false);
   const [clock, setClock]           = useState(() => new Date().toLocaleTimeString());
-
   const [autoRefreshing, setAutoRefreshing] = useState(false);
+
+  useEffect(() => {
+    writeTenantUiState(hubId, tenantId, {
+      view: 'executions',
+      executionsTab: tab,
+      executionsMonitorView: monitorView,
+    });
+  }, [hubId, tenantId, tab, monitorView]);
 
   const loadRuns = useCallback(async (silent = false) => {
     if (!silent) setRunsLoading(true);
     setRunsError(null);
     try {
-      const list = sortRunsByStartedDesc(await listExecutionRuns(hubId, tenantId, 100));
+      const list = sortRunsByStartedDesc(await listExecutionRuns(hubId, tenantId, 200));
       setRuns(list);
-      if (list.length > 0 && !selectedRunId) {
-        setSelectedRunId(list[0].runId);
-      }
+      setSelectedRunId(prev => (prev && list.some(r => r.runId === prev) ? prev : null));
     } catch (err: unknown) {
       setRunsError(err instanceof Error ? err.message : String(err));
     } finally {
       if (!silent) setRunsLoading(false);
     }
-  }, [hubId, tenantId, selectedRunId]);
+  }, [hubId, tenantId]);
 
   const refreshDetail = useCallback(async () => {
     if (!selectedRunId) return;
@@ -70,22 +82,21 @@ export const FloExecutionHubApp: React.FC<FloExecutionHubAppProps> = ({
 
   useEffect(() => { loadRuns(); }, [hubId, tenantId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /** Live command center — poll Firestore while Monitor tab is active. */
   useEffect(() => {
-    const hasRunning = runs.some(r => {
-      const s = (r.status ?? '').toLowerCase();
-      return s === 'running' || s === 'in_progress';
-    });
-    if (!hasRunning) {
-      setAutoRefreshing(false);
-      return;
-    }
+    if (tab !== 'monitor') return undefined;
     setAutoRefreshing(true);
-    const t = setInterval(() => {
+    const poll = () => {
       loadRuns(true);
       refreshDetail();
-    }, 5000);
-    return () => clearInterval(t);
-  }, [runs, loadRuns, refreshDetail]);
+    };
+    poll();
+    const t = setInterval(poll, 3000);
+    return () => {
+      clearInterval(t);
+      setAutoRefreshing(false);
+    };
+  }, [tab, loadRuns, refreshDetail]);
 
   useEffect(() => {
     const t = setInterval(() => setClock(new Date().toLocaleTimeString()), 1000);
@@ -115,9 +126,35 @@ export const FloExecutionHubApp: React.FC<FloExecutionHubAppProps> = ({
 
   const onSelectRun = (runId: string) => setSelectedRunId(runId);
 
-  const filteredRuns = useMemo(
-    () => filterExecutionRuns(runs, runFilters),
-    [runs, runFilters],
+  const onKillRun = useCallback(async (runId: string) => {
+    setKilling(true);
+    try {
+      await killExecutionRun(hubId, tenantId, runId);
+      await loadRuns(true);
+      await refreshDetail();
+    } catch (err: unknown) {
+      setDetailError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setKilling(false);
+    }
+  }, [hubId, tenantId, loadRuns, refreshDetail]);
+
+  const onReconcileRun = useCallback(async (runId: string) => {
+    setReconciling(true);
+    try {
+      await reconcileExecutionRuns(hubId, tenantId, runId);
+      await loadRuns(true);
+      await refreshDetail();
+    } catch (err: unknown) {
+      setDetailError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setReconciling(false);
+    }
+  }, [hubId, tenantId, loadRuns, refreshDetail]);
+
+  const hubRuns = useMemo(
+    () => runs.filter(r => Boolean(r.floId?.trim())),
+    [runs],
   );
 
   return (
@@ -140,6 +177,24 @@ export const FloExecutionHubApp: React.FC<FloExecutionHubAppProps> = ({
           ))}
         </nav>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
+          {tab === 'monitor' && (
+            <div className="hub-view-toggle">
+              <button
+                type="button"
+                className={`hub-view-toggle-btn${monitorView === 'dashboard' ? ' on' : ''}`}
+                onClick={() => setMonitorView('dashboard')}
+              >
+                Dashboard
+              </button>
+              <button
+                type="button"
+                className={`hub-view-toggle-btn${monitorView === 'pulse' ? ' on' : ''}`}
+                onClick={() => setMonitorView('pulse')}
+              >
+                Pulse
+              </button>
+            </div>
+          )}
           <span className="live"><span className="ldot" /> Live</span>
           <span style={{ fontSize: 11, color: 'var(--t3)', fontFamily: 'var(--mono)' }}>{clock}</span>
         </div>
@@ -154,40 +209,34 @@ export const FloExecutionHubApp: React.FC<FloExecutionHubAppProps> = ({
         </div>
       )}
 
-      {runsLoading && !runs.length ? (
-        <div className="empty-state" style={{ flex: 1 }}>Loading executions…</div>
-      ) : (
-        <>
-          {tab !== 'alerts' && (
-            <ExecutionHubFilters
-              runs={runs}
-              filters={runFilters}
-              onChange={patch => setRunFilters(prev => ({ ...prev, ...patch }))}
-              matchCount={filteredRuns.length}
-              totalCount={runs.length}
+      <main className="body">
+        {tab === 'monitor' && (
+          runsLoading && hubRuns.length === 0 ? (
+            <div className="empty-state" style={{ flex: 1 }}>Loading executions…</div>
+          ) : (
+            <MonitorView
+              subView={monitorView}
+              runs={hubRuns}
+              selectedRunId={selectedRunId}
+              floFilter={floFilter}
+              onFloFilter={setFloFilter}
+              onSelectRun={onSelectRun}
+              detail={detail}
+              detailLoading={detailLoading}
+              detailError={detailError}
+              onRefresh={() => loadRuns()}
+              autoRefreshing={autoRefreshing}
+              onKillRun={onKillRun}
+              killing={killing}
+              onReconcileRun={onReconcileRun}
+              reconciling={reconciling}
             />
-          )}
-          <main className="body">
-            {tab === 'monitor' && (
-              <LiveMonitorView
-                runs={filteredRuns}
-                selectedRunId={selectedRunId}
-                floFilter={floFilter}
-                onFloFilter={setFloFilter}
-                onSelectRun={onSelectRun}
-                detail={detail}
-                detailLoading={detailLoading}
-                detailError={detailError}
-                onRefresh={() => loadRuns()}
-                autoRefreshing={autoRefreshing}
-              />
-            )}
-            {tab === 'alerts' && (
-              <AlertsView hubId={hubId} tenantId={tenantId} />
-            )}
-          </main>
-        </>
-      )}
+          )
+        )}
+        {tab === 'alerts' && (
+          <AlertsView hubId={hubId} tenantId={tenantId} />
+        )}
+      </main>
     </div>
   );
 };

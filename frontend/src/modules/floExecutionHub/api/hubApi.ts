@@ -68,6 +68,32 @@ export async function getExecutionStorageUrls(
   return data;
 }
 
+export async function reconcileExecutionRuns(
+  hubId: string,
+  tenantId: string,
+  runId?: string,
+): Promise<{ reconciled: string[]; skipped: string[] }> {
+  const call = httpsCallable<
+    { hubId: string; tenantId: string; runId?: string },
+    { reconciled: string[]; skipped: string[] }
+  >(fn(), 'reconcileFloRuns');
+  const { data } = await call({ hubId, tenantId, runId });
+  return data;
+}
+
+export async function killExecutionRun(
+  hubId: string,
+  tenantId: string,
+  runId: string,
+): Promise<{ ok: boolean; status: string; alreadyTerminal?: boolean }> {
+  const call = httpsCallable<
+    { hubId: string; tenantId: string; runId: string },
+    { ok: boolean; status: string; alreadyTerminal?: boolean }
+  >(fn(), 'killFloRun');
+  const { data } = await call({ hubId, tenantId, runId });
+  return data;
+}
+
 export async function listFloAlerts(
   hubId: string,
   tenantId: string,

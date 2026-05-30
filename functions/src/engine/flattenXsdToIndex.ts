@@ -76,10 +76,10 @@ function collectComplexChildren(
   complexDef: any,
   index: XsdTypeIndex,
   visitedGroups: Set<string> = new Set(),
-): Array<{ node: any; kind: 'element' | 'attribute' }> {
-  const out: Array<{ node: any; kind: 'element' | 'attribute' }> = [];
+): Array<{ node: any; kind: 'element' | 'attribute'; fromChoice?: boolean }> {
+  const out: Array<{ node: any; kind: 'element' | 'attribute'; fromChoice?: boolean }> = [];
 
-  const pushFrom = (container: any) => {
+  const pushFrom = (container: any, opts?: { fromChoice?: boolean }) => {
     if (!container || typeof container !== 'object') return;
 
     for (const el of [].concat(container['xsd:element'] ?? container['element'] ?? [])) {
@@ -88,27 +88,34 @@ function collectComplexChildren(
         const global = index.elements.get(refName);
         if (global) {
           out.push({
-            node: { ...global, '@_name': refName, '@_type': el['@_type'] ?? global['@_type'] },
+            node: {
+              ...global,
+              '@_name': refName,
+              '@_type': el['@_type'] ?? global['@_type'],
+              '@_minOccurs': el['@_minOccurs'] ?? global['@_minOccurs'],
+              '@_maxOccurs': el['@_maxOccurs'] ?? global['@_maxOccurs'],
+            },
             kind: 'element',
+            fromChoice: opts?.fromChoice,
           });
           continue;
         }
       }
-      out.push({ node: el, kind: 'element' });
+      out.push({ node: el, kind: 'element', fromChoice: opts?.fromChoice });
     }
 
     for (const attr of [].concat(container['xsd:attribute'] ?? container['attribute'] ?? [])) {
-      out.push({ node: attr, kind: 'attribute' });
+      out.push({ node: attr, kind: 'attribute', fromChoice: opts?.fromChoice });
     }
 
     for (const seq of [].concat(container['xsd:sequence'] ?? container['sequence'] ?? [])) {
-      pushFrom(seq);
+      pushFrom(seq, opts);
     }
     for (const ch of [].concat(container['xsd:choice'] ?? container['choice'] ?? [])) {
-      pushFrom(ch);
+      pushFrom(ch, { fromChoice: true });
     }
     for (const all of [].concat(container['xsd:all'] ?? container['all'] ?? [])) {
-      pushFrom(all);
+      pushFrom(all, opts);
     }
 
     for (const g of [].concat(container['xsd:group'] ?? container['group'] ?? [])) {
@@ -234,11 +241,13 @@ function walkNode(
   node: any,
   kind: 'element' | 'attribute',
   ctx: {
-    xmlPath:      string;
-    requestRoot:  string;
-    index:        XsdTypeIndex;
-    mergedSchema: any;
-    depth:        number;
+    xmlPath:           string;
+    requestRoot:       string;
+    index:             XsdTypeIndex;
+    mergedSchema:      any;
+    depth:             number;
+    ancestorsRequired: boolean;
+    optionalAncestors: string[];
   },
   rows: FlattenedFieldRow[],
 ): void {
@@ -254,6 +263,15 @@ function walkNode(
     return;
   }
 
+  const locallyRequired = kind === 'element' ? isRequired(node, kind) : ctx.ancestorsRequired;
+  const effectiveRequired = ctx.ancestorsRequired && locallyRequired;
+  const childAncestorsRequired = kind === 'element'
+    ? ctx.ancestorsRequired && locallyRequired
+    : ctx.ancestorsRequired;
+
+  const mo = kind === 'element' ? node['@_minOccurs'] : undefined;
+  const locallyOptional = kind === 'element' && (mo === '0' || mo === 0);
+
   const rawType = stripNs(node['@_type'] as string | undefined);
   const complexDef = rawType ? ctx.index.complexTypes.get(rawType) : undefined;
   const refInfo = resolveReferenceInfo(complexDef, ctx.index, ctx.mergedSchema, name, rawType);
@@ -265,6 +283,18 @@ function walkNode(
     || !!inlineSimple
     || !!hasSimpleContent
     || (kind === 'attribute');
+
+  let segmentMapperPath = '';
+  if (kind === 'element') {
+    const xmlPath = appendXmlSegment(ctx.xmlPath, name, kind);
+    segmentMapperPath = xmlPathToMapperPath(xmlPath, ctx.requestRoot).replace(/\/@/g, '.@');
+  }
+
+  const nextOptionalAncestors = locallyOptional && segmentMapperPath
+    ? [...ctx.optionalAncestors, segmentMapperPath]
+    : ctx.optionalAncestors;
+
+  const rowOptionalAncestors = [...ctx.optionalAncestors];
 
   if (isSimpleType || isReference) {
     const xmlPath = appendXmlSegment(ctx.xmlPath, name, kind);
@@ -278,18 +308,47 @@ function walkNode(
       dataType:         resolveDataType(node, rawType, isReference),
       idTypes:          isReference ? refInfo.idTypes : undefined,
       referencePattern: isReference ? refInfo.pattern : undefined,
-      required:         isRequired(node, kind),
-      minOccurs:        kind === 'element' ? String(node['@_minOccurs'] ?? '1') : undefined,
+      required:         effectiveRequired,
+      minOccurs:        kind === 'element' ? String(mo ?? '1') : undefined,
       maxOccurs:        kind === 'element' ? String(node['@_maxOccurs'] ?? '1') : undefined,
+      optionalAncestorPaths: rowOptionalAncestors,
+    });
+  } else if (kind === 'element' && rawType) {
+    const xmlPath = appendXmlSegment(ctx.xmlPath, name, kind);
+    const mapperPath = xmlPathToMapperPath(xmlPath, ctx.requestRoot).replace(/\/@/g, '.@');
+    pushFieldRow(rows, {
+      xmlPath,
+      mapperPath,
+      name,
+      kind,
+      dataType:  'object',
+      required:  effectiveRequired,
+      minOccurs: String(mo ?? '1'),
+      maxOccurs: String(node['@_maxOccurs'] ?? '1'),
+      optionalAncestorPaths: rowOptionalAncestors,
     });
   }
 
-  if (kind === 'element') recurseIntoType(node, ctx, rows);
+  if (kind === 'element') {
+    recurseIntoType(node, {
+      ...ctx,
+      ancestorsRequired: childAncestorsRequired,
+      optionalAncestors: nextOptionalAncestors,
+    }, rows);
+  }
 }
 
 function recurseIntoType(
   node: any,
-  ctx: { xmlPath: string; requestRoot: string; index: XsdTypeIndex; mergedSchema: any; depth: number },
+  ctx: {
+    xmlPath: string;
+    requestRoot: string;
+    index: XsdTypeIndex;
+    mergedSchema: any;
+    depth: number;
+    ancestorsRequired: boolean;
+    optionalAncestors: string[];
+  },
   rows: FlattenedFieldRow[],
 ): void {
   if (ctx.depth > MAX_WALK_DEPTH) return;
@@ -303,7 +362,13 @@ function recurseIntoType(
   const nextPath = name ? appendXmlSegment(ctx.xmlPath, name, 'element') : ctx.xmlPath;
   if (nextPath === ctx.xmlPath && name) return;
   for (const child of collectComplexChildren(complexDef, ctx.index)) {
-    walkNode(child.node, child.kind, { ...ctx, xmlPath: nextPath, depth: ctx.depth + 1 }, rows);
+    const parentRequired = child.fromChoice ? false : ctx.ancestorsRequired;
+    walkNode(child.node, child.kind, {
+      ...ctx,
+      xmlPath: nextPath,
+      depth: ctx.depth + 1,
+      ancestorsRequired: parentRequired,
+    }, rows);
   }
 }
 
@@ -320,11 +385,13 @@ export function flattenOperationFromSchema(
 
   const rows: FlattenedFieldRow[] = [];
   walkNode(rootEl, 'element', {
-    xmlPath:      '',
-    requestRoot:  resolved.searchName,
+    xmlPath:           '',
+    requestRoot:       resolved.searchName,
     index,
     mergedSchema,
-    depth:        0,
+    depth:             0,
+    ancestorsRequired: true,
+    optionalAncestors: [],
   }, rows);
 
   for (const row of rows) {

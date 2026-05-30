@@ -1,138 +1,123 @@
 /**
- * functions/src/nodes/loopNode.ts
- *
- * Loop executor — two modes:
- *
- *   iterator   — splits an array at nd.arrayPath and runs the body
- *                once per element. Each iteration receives:
- *                { ...cStream, [itemVar]: element, _index: i, _total: n }
- *
- *   expression — runs while a JS expression evaluates to true.
- *                Expression receives (cStream, global, local, iteration).
- *                Good for pagination, retry, poll-until-done patterns.
- *
- * Store:
- *   global — shared across all iterations and sub-flos
- *   local  — reset at the start of each iteration
- *
- * Output:
- *   cStream after the final iteration.
- *   If nd.storeResultAs is set, the result is also written to global store.
- *
- * executeFloNodes is injected to avoid a circular import.
+ * Loop node — two canvas routes (loop / exit). Re-runs loop-region nodes until continueExpr is false.
  */
 
-import { getValue } from '../utils/pathUtils.js';
-import type {RunContext,FloNode, FloEdge,  NodeResult} from '@floplug/shared';
+import {
+  LOOP_EXIT_HANDLE,
+  buildEvalContext,
+  safeEvalExpression,
+  isReservedStoreKey,
+  collectLoopRegionNodeIds,
+  compartmentEdges,
+  type NodeResult,
+  type RunContext,
+} from '@floplug/shared';
+import { unwrapWithMeta } from '../nodes/cStreamMeta.js';
+import type { FloNode, FloEdge, FloRunner } from './subFloRunner.js';
 
-export type FloRunner = (
-  nodes:          FloNode[],
-  edges:          FloEdge[],
-  initialCStream: unknown,
-  ctx:            RunContext,
-) => Promise<unknown>;
+const DEFAULT_MAX = 500;
 
-const MAX_ITERS = 500;
+function evalContinue(
+  expr: string,
+  cStream: unknown,
+  store: { local: Record<string, unknown>; global: Record<string, unknown> },
+  iteration: number,
+  floRunMeta?: RunContext['floRunMeta'],
+): boolean {
+  const ctx = buildEvalContext(
+    typeof cStream === 'object' && cStream !== null
+      ? cStream as Record<string, unknown>
+      : { message: cStream },
+    store,
+    floRunMeta,
+  );
+  (ctx as Record<string, unknown>).iteration = iteration;
+  return Boolean(safeEvalExpression(expr, ctx, false));
+}
 
-// ── Main executor ─────────────────────────────────────────────────────────────
+export interface LoopNodeResult extends NodeResult {
+  activeHandle: typeof LOOP_EXIT_HANDLE;
+}
 
 export async function executeLoopNode(
-  cStream:  unknown,
-  nd:       Record<string, any>,
-  ctx:      RunContext,
-  runFlow:  FloRunner,
-): Promise<NodeResult> {
-  const mode          = String(nd.mode          ?? 'iterator');
-  const bodyNodes     = (nd.bodyNodes  as FloNode[]) ?? [];
-  const bodyEdges     = (nd.bodyEdges  as FloEdge[]) ?? [];
-  const storeResultAs = String(nd.storeResultAs ?? '');
-  const maxIter       = Math.min(Number(nd.maxIterations ?? MAX_ITERS), MAX_ITERS);
+  cStream:    unknown,
+  nd:         Record<string, unknown>,
+  ctx:        RunContext,
+  allNodes:   FloNode[],
+  allEdges:   FloEdge[],
+  runFlow:    FloRunner,
+  loopNodeId: string,
+): Promise<LoopNodeResult> {
+  const continueExpr       = String(nd.continueExpr ?? 'false');
+  const executeAtLeastOnce = nd.executeAtLeastOnce !== false;
+  const maxIter            = Math.min(Math.max(1, Number(nd.maxIterations ?? 100)), DEFAULT_MAX);
+  const outputTarget       = String(nd.outputTarget ?? 'cStream') as 'cStream' | 'local' | 'global';
+  const outputVarName      = String(nd.outputVarName ?? '').trim();
 
-  if (bodyNodes.length === 0) {
-    return { cStream, logLine: '⚠ Loop: no body nodes — skipped' };
+  const regionIds = collectLoopRegionNodeIds(loopNodeId, allNodes, allEdges);
+  if (regionIds.size === 0) {
+    return {
+      cStream,
+      activeHandle: LOOP_EXIT_HANDLE,
+      logLine: '⚠ Loop: no nodes on loop path — taking exit',
+    };
   }
 
-  if (ctx.depth >= 5) {
-    return { cStream, logLine: '⚠ Loop: max nesting depth reached — skipped' };
-  }
-
-  const loopCtx: RunContext = {
-    ...ctx,
-    depth: ctx.depth + 1,
-    store: { global: ctx.store.global, local: {} },
-  };
-
+  const regionNodes = allNodes.filter(n => regionIds.has(n.id));
+  const regionEdges = compartmentEdges(regionIds, allEdges);
+  const preLoopLocal = { ...ctx.store.local };
   let iterCStream: unknown = cStream;
-  let iterCount = 0;
+  let iteration = 0;
   const lines: string[] = [];
 
-  // ── Iterator mode ─────────────────────────────────────────────────────────
-  if (mode === 'iterator') {
-    const arrayPath = String(nd.arrayPath ?? '');
-    const itemVar   = String(nd.itemVar   ?? '_item');
+  const runBody = async () => {
+    ctx.store.local = { ...preLoopLocal };
+    const loopCtx: RunContext = {
+      ...ctx,
+      store: { global: ctx.store.global, local: { ...preLoopLocal } },
+    };
+    iterCStream = await runFlow(regionNodes, regionEdges, iterCStream, loopCtx);
+    ctx.store.local = { ...loopCtx.store.local };
+  };
 
-    const arr: any[] = arrayPath
-      ? (getValue(cStream, arrayPath) ?? [])
-      : (Array.isArray(cStream) ? cStream : []);
+  const shouldContinue = () => evalContinue(
+    continueExpr, iterCStream, ctx.store, iteration, ctx.floRunMeta,
+  );
 
-    if (!Array.isArray(arr)) {
-      return {
-        cStream,
-        logLine: `⚠ Loop iterator: ${arrayPath || 'cStream'} is not an array`,
-      };
+  if (!executeAtLeastOnce && !shouldContinue()) {
+    ctx.store.local = { ...preLoopLocal };
+    lines.push('↻ Loop: skipped body (continue false before first run)');
+    return { cStream: iterCStream, activeHandle: LOOP_EXIT_HANDLE, logLine: lines.join(' | ') };
+  }
+
+  do {
+    if (iteration >= maxIter) {
+      lines.push(`⚠ Loop: max iterations (${maxIter}) — forced exit`);
+      break;
     }
+    await runBody();
+    iteration++;
+    lines.push(`↻ Loop iteration ${iteration}`);
+  } while (iteration < maxIter && shouldContinue());
 
-    lines.push(`↻ Loop iterator: ${arr.length} items`);
+  ctx.store.local = { ...preLoopLocal };
 
-    for (let i = 0; i < arr.length && i < maxIter; i++) {
-      const itemCStream: Record<string, any> = {
-        ...(typeof iterCStream === 'object' && iterCStream ? iterCStream as object : {}),
-        [itemVar]: arr[i],
-        _index:    i,
-        _total:    arr.length,
-      };
-      loopCtx.store.local = {};  // reset local store each iteration
-      iterCStream = await runFlow(bodyNodes, bodyEdges, itemCStream, loopCtx);
-      iterCount++;
-    }
-
-  // ── Expression mode ───────────────────────────────────────────────────────
+  let outCStream = iterCStream;
+  if (outputTarget === 'local' && outputVarName && !isReservedStoreKey(outputVarName)) {
+    ctx.store.local[outputVarName] = unwrapWithMeta(iterCStream).value;
+    outCStream = cStream;
+    lines.push(`✓ Loop result → local.${outputVarName}`);
+  } else if (outputTarget === 'global' && outputVarName && !isReservedStoreKey(outputVarName)) {
+    ctx.store.global[outputVarName] = unwrapWithMeta(iterCStream).value;
+    outCStream = cStream;
+    lines.push(`✓ Loop result → global.${outputVarName}`);
   } else {
-    const expression = String(nd.expression ?? 'false');
-    lines.push(`↻ Loop expression: "${expression}"`);
-
-    // eslint-disable-next-line no-new-func
-    const condFn = new Function(
-      'cStream', 'global', 'local', 'iteration',
-      `return !!(${expression})`,
-    );
-
-    while (iterCount < maxIter) {
-      const shouldContinue = condFn(
-        iterCStream,
-        ctx.store.global,
-        loopCtx.store.local,
-        iterCount,
-      );
-      if (!shouldContinue) break;
-
-      loopCtx.store.local = {};
-      iterCStream = await runFlow(bodyNodes, bodyEdges, iterCStream, loopCtx);
-      iterCount++;
-    }
-
-    if (iterCount >= maxIter) {
-      lines.push(`⚠ Loop hit max iterations (${maxIter})`);
-    }
+    outCStream = iterCStream;
+    lines.push('✓ Loop: exit path uses last iteration cStream');
   }
 
-  // ── Persist result to global store if requested ───────────────────────────
-  if (storeResultAs) {
-    ctx.store.global[storeResultAs] = iterCStream;
-    lines.push(`✓ Loop result → global.${storeResultAs}`);
-  }
-
-  lines.push(`✓ Loop: ${iterCount} iteration(s) complete`);
-
-  return { cStream: iterCStream, logLine: lines.join(' | ') };
+  lines.push(`✓ Loop complete (${iteration} iteration(s))`);
+  return { cStream: outCStream, activeHandle: LOOP_EXIT_HANDLE, logLine: lines.join(' | ') };
 }
+
+export { LOOP_LOOP_HANDLE, LOOP_EXIT_HANDLE } from '@floplug/shared';

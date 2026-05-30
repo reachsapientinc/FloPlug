@@ -12,7 +12,12 @@ import {
   FloActionAuthError,
   FloActionSchemaError,
 } from './floActionErrors.js';
-import type { StreamSource, NodeHttpTrace } from '@floplug/shared';
+import type { StreamSource, NodeHttpTrace, FloRunMeta } from '@floplug/shared';
+import { isReservedStoreKey } from '@floplug/shared';
+import {
+  resolveFloActionRuntimeFromHub,
+  type HubFloActionDocCache,
+} from './resolveFloActionNodeHub.js';
 
 export interface FloActionNodeData {
   actionId:      string;
@@ -25,6 +30,7 @@ export interface FloActionNodeData {
   mappingRules?: MappingRule[];
   inputSource?:  StreamSource;
   inputVarName?: string;
+  urlVariables?: Record<string, { source: string; value: string }>;
 }
 
 export interface FloActionExecutionContext {
@@ -36,6 +42,10 @@ export interface FloActionExecutionContext {
   tenantId:    string;
   userId?:     string;
   nodeId?:     string;
+  dryRun?:     boolean;
+  floRunMeta?: Readonly<FloRunMeta>;
+  /** Per-run cache for hub FloActionNodes lookups */
+  hubFloActionCache?: HubFloActionDocCache;
 }
 
 export interface FloActionNodeResult {
@@ -81,18 +91,36 @@ function resolveInputPayload(
 export async function executeFloActionNode(
   ctx: FloActionExecutionContext,
 ): Promise<FloActionNodeResult> {
-  const { node, hubId, tenantId, cStream, localStore, globalStore } = ctx;
+  const { hubId, tenantId, cStream, localStore, globalStore } = ctx;
 
-  const missing = (['actionId', 'connectorId', 'connectionId'] as const)
+  const resolved = await resolveFloActionRuntimeFromHub(
+    hubId,
+    tenantId,
+    ctx.node as unknown as Record<string, unknown>,
+    ctx.hubFloActionCache,
+  );
+
+  const node: FloActionNodeData = {
+    ...ctx.node,
+    floKitId:     resolved.floKitId || ctx.node.floKitId,
+    actionId:     resolved.actionId,
+    connectorId:  resolved.connectorId,
+    connectionId: resolved.connectionId,
+  };
+
+  const missing = (['actionId', 'connectorId', 'connectionId', 'floKitId'] as const)
     .filter(f => !node[f]);
   if (missing.length > 0) {
     throw new FloActionValidationError(
-      'FloAction node missing actionId, connectorId, or connectionId',
+      missing.includes('floKitId')
+        ? 'FloAction node missing floKitId — re-add the node from the FloAction palette'
+        : 'FloAction node missing actionId, connectorId, or connectionId — check Hub Admin FloActionNodes config and inspector picks',
       [...missing],
       {
         actionId:     node.actionId ?? '',
         connectionId: node.connectionId ?? '',
         connectorId:  node.connectorId ?? '',
+        floKitId:     node.floKitId ?? '',
       },
     );
   }
@@ -113,8 +141,23 @@ export async function executeFloActionNode(
       localStore,
       globalStore,
       mappingRules: node.mappingRules,
+      urlVariables: node.urlVariables,
+      dryRun:       ctx.dryRun === true,
+      floRunMeta:   ctx.floRunMeta,
     });
   } catch (err) {
+    if (err instanceof FloActionValidationError && err.debug) {
+      const dbg = err.debug;
+      (err as FloActionValidationError & { httpTrace?: NodeHttpTrace }).httpTrace = {
+        method:         dbg.method,
+        url:            dbg.url || '(validation failed before HTTP)',
+        requestHeaders: dbg.headersSafe,
+        requestBody:    dbg.requestBody,
+        status:         0,
+        statusText:     'Validation failed',
+        responseBody:   err.inputHint ?? err.message,
+      };
+    }
     if (err instanceof FloActionValidationError) throw err;
     if (err instanceof FloActionAuthError) throw err;
     if (err instanceof FloActionSchemaError) throw err;
@@ -150,9 +193,9 @@ export async function executeFloActionNode(
       { ...((getMessage(cStream) as Record<string, unknown>) ?? {}), ...payload },
       { source: ctx.nodeId ?? 'floActionNode', contentType: 'application/json' },
     ) as Record<string, unknown>;
-  } else if (outputTarget === 'local' && outputVarName) {
+  } else if (outputTarget === 'local' && outputVarName && !isReservedStoreKey(outputVarName)) {
     setValue(nextLocal as Record<string, unknown>, outputVarName, payload);
-  } else if (outputTarget === 'global' && outputVarName) {
+  } else if (outputTarget === 'global' && outputVarName && !isReservedStoreKey(outputVarName)) {
     setValue(nextGlobal as Record<string, unknown>, outputVarName, payload);
   } else {
     nextCStream = wrapMessage(payload, { source: ctx.nodeId ?? 'floActionNode' }) as Record<string, unknown>;
@@ -160,7 +203,8 @@ export async function executeFloActionNode(
 
   const payloadKeys = Object.keys(payload).filter(k => !k.startsWith('_')).slice(0, 8).join(', ');
   const logLine = [
-    `✓ FloAction: ${node.actionId}`,
+    ctx.dryRun ? '[DRY RUN]' : '✓',
+    `FloAction: ${node.actionId}`,
     `[${node.connectorId}/${node.connectionId}]`,
     `${result.executionMs}ms`,
     result.unmappedFields.length ? `unmapped:${result.unmappedFields.length}` : '',

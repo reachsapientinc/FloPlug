@@ -127,6 +127,7 @@ export declare const NODE_TYPES: {
     readonly END: "endNode";
     readonly MAPPER: "mapperNode";
     readonly FILTER: "filterNode";
+    readonly SWITCH: "floSwitchNode";
     readonly TEMPLATE: "templateNode";
     readonly FUNCTION: "functionNode";
     readonly VAR_STORE: "variableStoreNode";
@@ -137,6 +138,9 @@ export declare const NODE_TYPES: {
     readonly ORACLE: "oracleNode";
     readonly FIF: "fifNode";
     readonly LOOP: "loopNode";
+    readonly SUB_FLO: "subFloNode";
+    readonly SUB_FLO_RETURN: "subFloReturnNode";
+    readonly INVOKE_SUB_FLO: "invokeSubFloNode";
     readonly EMAIL: "emailNode";
 };
 export declare const HTTP_METHOD_GET = "GET";

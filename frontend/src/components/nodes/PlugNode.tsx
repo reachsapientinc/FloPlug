@@ -2,6 +2,7 @@ import React from 'react';
 import { type NodeProps } from '@xyflow/react';
 import type { PlugVariableBinding, PlugVariableHint } from '@floplug/shared';
 import { CompactNode, deriveNodeStatus, outputTargetBadge } from './CompactNode';
+import { nodeDimensions } from './FlowNodeShell';
 
 interface PlugNodeData {
   plugName?:         string;
@@ -16,8 +17,9 @@ interface PlugNodeData {
   [key: string]:     unknown;
 }
 
-const PlugNode: React.FC<NodeProps> = ({ id, data, selected }) => {
+const PlugNode: React.FC<NodeProps> = ({ id, data, selected, ...dimProps }) => {
   const d = data as PlugNodeData;
+  const dims = nodeDimensions(dimProps);
   const isEmail = d.authProtocol === 'smtp_basic' || d.nodeType === 'emailNode';
   const urlVars = isEmail ? [] : [...((d.urlPattern ?? '').matchAll(/\{\{(\w+)\}\}/g))].map(m => m[1]);
   const filledCount = urlVars.filter(v => {
@@ -44,6 +46,8 @@ const PlugNode: React.FC<NodeProps> = ({ id, data, selected }) => {
       subtitle={subtitle}
       badge={outputTargetBadge(d as Record<string, unknown>)}
       status={deriveNodeStatus(d as Record<string, unknown>)}
+      width={dims.width}
+      height={dims.height}
       onDelete={() => d.onDelete?.(id)}
     />
   );

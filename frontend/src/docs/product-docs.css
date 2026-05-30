@@ -1,0 +1,339 @@
+/* FloPlug product manual — readable light theme */
+
+.fp-product-docs {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #F3F4F6;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  color: #111827;
+}
+
+.fp-doc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 24px;
+  background: #fff;
+  border-bottom: 1px solid #E5E7EB;
+  flex-shrink: 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.fp-doc-header-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.fp-doc-logo {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #EBF2FF, #DBEAFE);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+}
+
+.fp-doc-header-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #111827;
+}
+
+.fp-doc-header-sub {
+  font-size: 12px;
+  color: #6B7280;
+  margin-top: 2px;
+}
+
+.fp-doc-header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.fp-doc-btn {
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  border: 1px solid transparent;
+}
+
+.fp-doc-btn-ghost {
+  background: #F9FAFB;
+  border-color: #E5E7EB;
+  color: #374151;
+}
+
+.fp-doc-btn-ghost:hover {
+  background: #F3F4F6;
+}
+
+.fp-doc-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  max-width: 1200px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 24px;
+  gap: 24px;
+  box-sizing: border-box;
+}
+
+.fp-doc-sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  background: #fff;
+  border: 1px solid #E5E7EB;
+  border-radius: 12px;
+  padding: 12px;
+  align-self: flex-start;
+  position: sticky;
+  top: 24px;
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+}
+
+.fp-doc-sidebar-group {
+  margin-bottom: 8px;
+}
+
+.fp-doc-cat-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+}
+
+.fp-doc-cat-btn:hover {
+  background: #F9FAFB;
+}
+
+.fp-doc-cat-btn.active {
+  background: #EBF2FF;
+  color: #1a56db;
+}
+
+.fp-doc-badge {
+  margin-left: auto;
+  font-size: 9px;
+  font-weight: 700;
+  color: #1a56db;
+  background: #DBEAFE;
+  padding: 2px 6px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.fp-doc-badge-inline {
+  margin-left: 0;
+  font-size: 8px;
+  padding: 1px 5px;
+}
+
+.fp-doc-badge-live {
+  margin-left: auto;
+  font-size: 8px;
+  background: #ECFDF5;
+  color: #059669;
+  border: 1px solid #A7F3D0;
+}
+
+.fp-doc-page-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 0 8px 8px;
+}
+
+.fp-doc-page-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-align: left;
+  padding: 7px 12px 7px 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 12px;
+  color: #4B5563;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.fp-doc-page-link:hover {
+  background: #F9FAFB;
+  color: #111827;
+}
+
+.fp-doc-page-link.active {
+  background: #F3F4F6;
+  color: #1a56db;
+  font-weight: 600;
+}
+
+.fp-doc-sidebar-foot {
+  margin-top: 12px;
+  padding: 10px 8px 4px;
+  border-top: 1px solid #F3F4F6;
+  font-size: 10px;
+  color: #9CA3AF;
+  line-height: 1.45;
+}
+
+.fp-doc-main {
+  flex: 1;
+  min-width: 0;
+  background: #fff;
+  border: 1px solid #E5E7EB;
+  border-radius: 12px;
+  padding: 32px 40px 48px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.fp-doc-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: #9CA3AF;
+  margin-bottom: 12px;
+}
+
+.fp-doc-meta-cat {
+  color: #1a56db;
+  font-weight: 600;
+}
+
+.fp-doc-page-title {
+  margin: 0 0 8px;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.fp-doc-page-summary {
+  margin: 0 0 28px;
+  font-size: 16px;
+  color: #4B5563;
+  line-height: 1.55;
+}
+
+.fp-doc-content {
+  font-size: 15px;
+  line-height: 1.65;
+  color: #374151;
+}
+
+.fp-doc-section {
+  margin-bottom: 28px;
+}
+
+.fp-doc-section h2 {
+  margin: 0 0 12px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.fp-doc-section p {
+  margin: 0 0 12px;
+}
+
+.fp-doc-section ul {
+  margin: 0 0 12px;
+  padding-left: 22px;
+}
+
+.fp-doc-section li {
+  margin-bottom: 6px;
+}
+
+.fp-doc-section li strong {
+  color: #111827;
+}
+
+.fp-doc-code {
+  margin: 12px 0;
+  padding: 14px 16px;
+  background: #F9FAFB;
+  border: 1px solid #E5E7EB;
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: 'Fira Code', 'Consolas', monospace;
+  overflow-x: auto;
+}
+
+.fp-doc-callout {
+  display: flex;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid;
+  font-size: 14px;
+  margin-top: 12px;
+}
+
+.fp-doc-nav-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 40px;
+  padding-top: 24px;
+  border-top: 1px solid #E5E7EB;
+}
+
+.fp-doc-nav-btn {
+  padding: 10px 16px;
+  border: 1px solid #E5E7EB;
+  border-radius: 8px;
+  background: #F9FAFB;
+  font-size: 13px;
+  font-weight: 500;
+  color: #1a56db;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.fp-doc-nav-btn:hover {
+  background: #EBF2FF;
+}
+
+.fp-doc-empty {
+  color: #9CA3AF;
+  font-size: 15px;
+  padding: 40px 0;
+}
+
+@media (max-width: 768px) {
+  .fp-doc-body {
+    flex-direction: column;
+    padding: 16px;
+  }
+
+  .fp-doc-sidebar {
+    width: 100%;
+    position: static;
+    max-height: none;
+  }
+
+  .fp-doc-main {
+    padding: 24px 20px;
+  }
+}

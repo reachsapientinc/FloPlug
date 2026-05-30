@@ -15,7 +15,7 @@
 
 import nodemailer                                             from 'nodemailer';
 import { getFirestore }                                      from 'firebase-admin/firestore';
-import { COLLECTIONS, HUB_COLLECTIONS }                     from '@floplug/shared';
+import { COLLECTIONS, HUB_COLLECTIONS, isReservedStoreKey, type FloRunMeta } from '@floplug/shared';
 import { resolveToString, wrapMessage, type ResolveContext } from './cStreamMeta.js';
 import type { FloConnectionDoc }                             from '@floplug/shared';
 
@@ -113,6 +113,7 @@ export async function executeEmailNode(
   cStream: Record<string, unknown>,
   nd:      Record<string, any>,
   store:   { global: Record<string, unknown>; local: Record<string, unknown> },
+  floRunMeta?: Readonly<FloRunMeta>,
 ): Promise<{ cStream: Record<string, unknown>; logLine: string }> {
 
   const { hubId, tenantId }  = nd;
@@ -125,7 +126,7 @@ export async function executeEmailNode(
   console.log(`[emailNode] START plugId=${plugId} hubId=${hubId} nodeConnectionId=${nodeConnectionId || '(none)'}`);
 
   // ── Build resolve context ──────────────────────────────────────────────────
-  const ctx: ResolveContext = { cStream, store };
+  const ctx: ResolveContext = { cStream, store, floRunMeta };
 
   // ── Read emailBindings ─────────────────────────────────────────────────────
   const bindings = (nd.emailBindings ?? {}) as Record<string, {
@@ -199,23 +200,42 @@ export async function executeEmailNode(
     ),
   };
 
-  // ── Send ───────────────────────────────────────────────────────────────────
-  console.log(`[emailNode] Sending via ${smtp.host}:${smtp.port} secure=${smtp.secure}`);
-  const info = await transporter.sendMail(mailOptions);
-  console.log(`[emailNode] Sent messageId=${info.messageId}`);
-
-  const emailResult = {
-    messageId: info.messageId,
-    to:        toList,
-    cc:        ccList,
-    bcc:       bccList,
-    subject,
-    mode:      isAttach ? 'attachment' : 'inline',
-    status:    'sent',
-  };
-
+  const dryRun = nd.dryRun === true;
   const connLabel = nodeConnectionId || 'inline-creds';
-  const logLine = `✓ EmailNode: to=${toList.join(',')} subject="${subject}" msgId=${info.messageId} mode=${emailResult.mode} conn=${connLabel}`;
+
+  let emailResult: Record<string, unknown>;
+  let logLine: string;
+
+  if (dryRun) {
+    emailResult = {
+      _dryRun:    true,
+      _simulated: true,
+      to:         toList,
+      cc:         ccList,
+      bcc:        bccList,
+      subject,
+      mode:       isAttach ? 'attachment' : 'inline',
+      status:     'simulated',
+      messageId:  '(dry-run)',
+    };
+    logLine = `[DRY RUN] EmailNode: would send to=${toList.join(',')} subject="${subject}" via ${smtp.host} (not sent) conn=${connLabel}`;
+  } else {
+    // ── Send ─────────────────────────────────────────────────────────────────
+    console.log(`[emailNode] Sending via ${smtp.host}:${smtp.port} secure=${smtp.secure}`);
+    const info = await transporter.sendMail(mailOptions);
+    console.log(`[emailNode] Sent messageId=${info.messageId}`);
+
+    emailResult = {
+      messageId: info.messageId,
+      to:        toList,
+      cc:        ccList,
+      bcc:       bccList,
+      subject,
+      mode:      isAttach ? 'attachment' : 'inline',
+      status:    'sent',
+    };
+    logLine = `✓ EmailNode: to=${toList.join(',')} subject="${subject}" msgId=${info.messageId} mode=${emailResult.mode} conn=${connLabel}`;
+  }
 
   // ── Route output ───────────────────────────────────────────────────────────
   if (outputTarget === 'local' && outputVarName) {
@@ -224,7 +244,7 @@ export async function executeEmailNode(
     return { cStream: nextCs, logLine };
   }
 
-  if (outputTarget === 'global' && outputVarName) {
+  if (outputTarget === 'global' && outputVarName && !isReservedStoreKey(outputVarName)) {
     store.global[outputVarName] = emailResult;
     const nextCs = { ...cStream, _meta: { ...(cStream._meta as object ?? {}), source: 'emailNode' } };
     return { cStream: nextCs, logLine };

@@ -29,8 +29,14 @@
  */
 
 import { getValue } from '../utils/pathUtils.js';
+import {
+  buildEvalContext,
+  safeEvalExpression,
+  looksLikeExpression,
+  type FloRunMeta,
+} from '@floplug/shared';
 
-export type ValueSource = 'static' | 'cStream' | 'local' | 'global';
+export type ValueSource = 'static' | 'cStream' | 'local' | 'global' | 'expression';
 
 export interface ValueBinding {
   source: ValueSource;
@@ -40,6 +46,7 @@ export interface ValueBinding {
 export interface ResolveContext {
   cStream: Record<string, unknown>;
   store:   { local: Record<string, unknown>; global: Record<string, unknown> };
+  floRunMeta?: Readonly<FloRunMeta>;
 }
 
 /**
@@ -49,6 +56,10 @@ export interface ResolveContext {
 export function getMessage(cStream: Record<string, unknown>): unknown {
   // New canonical shape: { message: <payload>, _meta: {...} }
   if ('message' in cStream) return cStream.message;
+  // TemplateNode envelope: { __floplug_envelope, value, contentType }
+  if ((cStream as { __floplug_envelope?: boolean }).__floplug_envelope === true) {
+    return (cStream as { value: unknown }).value;
+  }
   // Legacy: cStream IS the payload — return as-is
   return cStream;
 }
@@ -132,6 +143,20 @@ export function resolveToRaw(
       return binding.value
         ? getValue(ctx.store.global, binding.value)
         : ctx.store.global;
+
+    case 'expression': {
+      const expr = binding.value?.trim() ?? '';
+      if (!expr) return undefined;
+      const msg = getMessage(ctx.cStream);
+      const payload = (msg !== null && typeof msg === 'object' && !Array.isArray(msg))
+        ? msg as Record<string, unknown>
+        : { value: msg };
+      const evalCtx = buildEvalContext(payload, ctx.store, ctx.floRunMeta);
+      if (looksLikeExpression(expr)) {
+        return safeEvalExpression(expr, evalCtx, '');
+      }
+      return getValue(payload, expr);
+    }
 
     default:
       return undefined;

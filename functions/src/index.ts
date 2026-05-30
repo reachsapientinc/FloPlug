@@ -18,7 +18,7 @@ import { provisionHubAndTenants }              from './services/provisioning.js'
 export { updateHubDetails } from './services/hubUpdate.js';
 
 import type { RunContext } from '@floplug/shared';
-import {toHubRole, ROLE_PERMISSIONS} from  '@floplug/shared';
+import { toHubRole, ROLE_PERMISSIONS, buildFloRunMeta, mapRunSourceToRunType } from '@floplug/shared';
 
 // Storage
 export { storageUpload, storageGetUrl, storageDelete, storageList } from "./helpers/storageHandlers.js";
@@ -43,9 +43,19 @@ export {
   getExecutionHubRun,
   getExecutionHubStorageUrls,
   getFloValidationSnapshot,
+  killFloRun,
+  reconcileFloRuns,
 } from './services/floExecutionHubApi.js';
 import { db } from './utils/firebase.js';
 import { executeFloNodes} from './engine/executeFloNodes.js';
+import {
+  RunKilledError,
+  finalizeRunRecord,
+  ensureRunFinalizedIfStillRunning,
+  isRunKillRequested,
+  logLineForUncaughtError,
+} from './engine/runLifecycle.js';
+import { classifyUncaughtError } from '@floplug/shared';
 import { executeEmailNode } from './nodes/emailNode.js';
 import { executePlugNode }   from './nodes/plugNode.js';
 import { wrapMessage }       from './nodes/cStreamMeta.js';
@@ -63,7 +73,10 @@ export {
   updateAdminRole,
 //  updateHubUserRole,
 } from './services/provisionUsers.js';
-import {HUB_ROLES,COLLECTIONS,HUB_COLLECTIONS,PERMISSIONS, getPublishedGraph, extractRunErrorFromLog} from '@floplug/shared';
+import {
+  HUB_ROLES, COLLECTIONS, HUB_COLLECTIONS, PERMISSIONS,
+  getPublishedGraph, extractRunErrorFromLog, sanitizeRunLabel,
+} from '@floplug/shared';
 
 export {
   getHubPlugs,
@@ -345,6 +358,7 @@ export const testPlugNode = onCall<{
     tenantId,
     plugId,
     id:            'test-plug-node',
+    dryRun:        true,
     urlVariables:  nodeConfig.urlVariables,
     emailBindings: nodeConfig.emailBindings,
     connectionId:  nodeConfig.connectionId,
@@ -360,15 +374,6 @@ export const testPlugNode = onCall<{
       ? await executeEmailNode(cStream, nd, store)
       : await executePlugNode(cStream, nd, store);
 
-    await db.collection(
-      `${COLLECTIONS.HUBS}/${hubId}/${HUB_COLLECTIONS.TENANTS}/${tenantId}/${HUB_COLLECTIONS.EXEC_LOG}`,
-    ).add({
-      type:      'plug_test',
-      plugId,
-      timestamp: FieldValue.serverTimestamp(),
-      status:    'success',
-    });
-
     return {
       success: true,
       message: logLine,
@@ -383,7 +388,7 @@ export const testPlugNode = onCall<{
 });
 
 //------------------
-export const executeFlo = onCall(async (request) => {
+export const executeFlo = onCall({ memory: '512MiB', timeoutSeconds: 540 }, async (request) => {
   const {
     hubId,
     tenantId,
@@ -393,8 +398,10 @@ export const executeFlo = onCall(async (request) => {
     inputJson = {},
     wsId = '',
     mode,
-    persistNodes,
     source,
+    runLabel:  rawRunLabel,
+    dryRun:    rawDryRun,
+    simulate:  rawSimulate,
   } = request.data as {
     hubId:     string;
     tenantId:  string;
@@ -406,7 +413,12 @@ export const executeFlo = onCall(async (request) => {
     mode?:     'test' | 'production';
     persistNodes?: boolean;
     source?:   string;
+    runLabel?: string;
+    /** Simulate flow — evaluate nodes without outbound HTTP/SMTP */
+    dryRun?:   boolean;
+    simulate?: boolean;
   };
+  const runLabel = sanitizeRunLabel(rawRunLabel);
   //const { hubId, tenantId, floId, nodes, edges, inputJson = {} } = request.data;
   //const wsId = request.data.wsId ?? '';
   const log:   string[] = [];
@@ -415,13 +427,37 @@ export const executeFlo = onCall(async (request) => {
   const runRef = db.collection(`${COLLECTIONS.HUBS}/${hubId}/${HUB_COLLECTIONS.TENANTS}/${tenantId}/${HUB_COLLECTIONS.EXEC_LOG}`).doc();
   const runId  = runRef.id;
   const isTestRun = mode === 'test';
-  const shouldPersistNodes = persistNodes === true || !isTestRun;
+  const isNodeTest = source === 'nodeTest';
+  const dryRun = isNodeTest || rawDryRun === true || rawSimulate === true;
   const runSource = source ?? (isTestRun ? 'designer' : 'production');
 
   let runNodes: FloNode[] = nodes;
   let runEdges: FloEdge[] = edges;
   let floVersion = 0;
   let executedGraph: 'draft' | 'published' = isTestRun ? 'draft' : 'published';
+  let floName = floId;
+  let floSlug = floId;
+
+  // Full designer runs only — node tests use source=nodeTest and skip graph preflight.
+  if (isTestRun && runSource === 'designer') {
+    const { loadValidationResources } = await import('./services/floValidationService.js');
+    const { validateFloGraph } = await import('@floplug/shared');
+    const resources = await loadValidationResources(hubId, tenantId);
+    const preflight = validateFloGraph({
+      floId,
+      nodes: runNodes,
+      edges: runEdges,
+      resources,
+      checkResources: true,
+    });
+    if (preflight.errors.length > 0) {
+      const first = preflight.errors[0];
+      throw new HttpsError(
+        'failed-precondition',
+        `Flow validation failed (${first.nodeLabel}: ${first.message})`,
+      );
+    }
+  }
 
   if (wsId) {
     const floSnap = await db.doc(
@@ -429,6 +465,8 @@ export const executeFlo = onCall(async (request) => {
     ).get();
     if (floSnap.exists) {
       const floData = floSnap.data() as Record<string, unknown>;
+      floName = String(floData.name ?? floData.label ?? floId);
+      floSlug = String(floData.slug ?? floId);
       const pubVer = Number(floData.publishedVersion ?? 0);
 
       if (!isTestRun) {
@@ -471,12 +509,44 @@ export const executeFlo = onCall(async (request) => {
     });
   };
 
+  const persistHub = !isNodeTest && !isTestRun;
+  const authToken = request.auth?.token as { email?: string } | undefined;
+  const floRunMeta = buildFloRunMeta({
+    runId,
+    floId,
+    floName,
+    slug:      floSlug,
+    tenant:    tenantId,
+    hubId,
+    floRunName: runLabel ?? '',
+    runType:   mapRunSourceToRunType(isNodeTest ? 'nodeTest' : runSource),
+    userId:    request.auth?.uid ?? '',
+    userEmail: authToken?.email ?? '',
+  });
   const ctx: RunContext = {
-    hubId, tenantId, wsId, runId, floId, store, log, depth: 0,
-    onNodeComplete: shouldPersistNodes ? onNodeComplete : undefined,
+    hubId, tenantId, wsId, runId, floId, floRunMeta, store, log, depth: 0,
+    dryRun,
+    onNodeComplete: persistHub ? onNodeComplete : undefined,
+    shouldAbort: () => isRunKillRequested(hubId, tenantId, runId),
   };
 
+  if (isNodeTest) {
+    log.push('╔══ NODE TEST (simulated) ══╗');
+    log.push(`Flow: ${floId} · ${runNodes.length} nodes`);
+    if (dryRun) log.push('No outbound I/O — dry run enforced');
+    let floOutput: unknown = null;
+    try {
+      floOutput = await executeFloNodes(runNodes, runEdges, inputJson, ctx);
+    } catch (err: unknown) {
+      log.push(logLineForUncaughtError(err));
+    }
+    log.push('╚══ END NODE TEST ══╝');
+    const status = log.some(l => l.includes('Error in')) ? 'error' : 'success';
+    return { log, status, output: floOutput, simulated: true };
+  }
+
   log.push(`╔══ RUN: ${runId} ══╗`);
+  if (dryRun) log.push('[DRY RUN] Simulated — no outbound HTTP/email');
   log.push(`Flow: ${floId} · ${runNodes.length} nodes`);
   log.push(`Input: ${JSON.stringify(inputJson)}`);
 
@@ -484,6 +554,8 @@ export const executeFlo = onCall(async (request) => {
     runId, floId, inputJson, log: [], output: null,
     nodeCount: runNodes.length, status: 'running',
     source: runSource,
+    ...(dryRun ? { dryRun: true } : {}),
+    ...(runLabel ? { runLabel } : {}),
     floVersion,
     executedGraph,
     invokedByUid: request.auth?.uid ?? null,
@@ -492,25 +564,47 @@ export const executeFlo = onCall(async (request) => {
   });
 
   let floOutput: unknown = null;
+  let killed = false;
+  let forcedFatal = false;
   try {
     floOutput = await executeFloNodes(runNodes, runEdges, inputJson, ctx);
-  } catch (err: any) {
-    log.push(`Fatal error: ${err.message}`);
+  } catch (err: unknown) {
+    if (err instanceof RunKilledError) {
+      killed = true;
+      log.push(`Run killed: ${err.message}`);
+    } else {
+      log.push(logLineForUncaughtError(err));
+      if (classifyUncaughtError(err) === 'fatal') forcedFatal = true;
+    }
+  } finally {
+    try {
+      if (!killed && !forcedFatal && log.some(l => l.includes('Error in'))) {
+        await ensureRunFinalizedIfStillRunning({
+          hubId, tenantId, runId, log, output: floOutput, errorMessage: extractRunErrorFromLog(log),
+        });
+      }
+    } catch (finalizeGuardErr) {
+      console.error('[executeFlo] finalize guard failed', finalizeGuardErr);
+    }
   }
 
-  const hasError = log.some(l => l.includes('Error in') || l.includes('Fatal error'));
-  const errorMessage = hasError ? extractRunErrorFromLog(log) : undefined;
+  if (!killed && await isRunKillRequested(hubId, tenantId, runId)) {
+    killed = true;
+    if (!log.some(l => l.includes('Run killed'))) {
+      log.push('Run killed by user');
+    }
+  }
+
+  const errorMessage = killed
+    ? 'Run cancelled by user'
+    : extractRunErrorFromLog(log);
   log.push(`╚══ END RUN: ${runId} ══╝`);
 
-  await runRef.update({
-    log, output: floOutput,
-    status:      hasError ? 'error' : 'success',
-    ...(errorMessage ? { errorMessage } : {}),
-    completedAt: FieldValue.serverTimestamp(),
-    updatedAt:   FieldValue.serverTimestamp(),
+  const status = await finalizeRunRecord({
+    hubId, tenantId, runId, log, output: floOutput, killed, forcedFatal, errorMessage,
   });
 
-  return { executionId: runId, log, status: hasError ? 'error' : 'success', output: floOutput };
+  return { executionId: runId, log, status, output: floOutput, runLabel: runLabel ?? undefined };
 });
 
 

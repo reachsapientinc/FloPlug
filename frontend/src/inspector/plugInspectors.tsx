@@ -1,33 +1,35 @@
 /** Plug + email inspectors (moved from NodePaletteAndInspector). */
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { getFunctions, httpsCallable } from 'firebase/functions';
-import type { PlugVariableHint, PlugVariableBinding, FloConnectionSafe } from '@floplug/shared';
+import type { PlugVariableHint, PlugVariableBinding, FloConnectionSafe, ConnectorUrlToken } from '@floplug/shared';
 import {
   extractUrlTemplateVarNames,
   isDeveloperPlugUrlVar,
+  resolveConnectorUrlPreview,
+  tokenHasSource,
 } from '@floplug/shared';
+import ConnectorUrlPreviewBox from '../components/ConnectorUrlPreviewBox';
 import type { NodeInspectorProps } from './types';
 import { Section, Field, Inp, Sel, Help } from './ui';
 import { NodeTestPanel } from './InspectorChrome';
 import { OutputTargetSection } from './OutputTargetSection';
+import { DataPersistenceSection } from './DataPersistenceSection';
+import type { NodeDataPersistence } from '@floplug/shared';
+import { DEFAULT_NODE_DATA_PERSISTENCE } from '@floplug/shared';
 import { PlugTestInput } from './PlugTestInput';
 import { DEFAULT_PLUG_TEST_INPUT } from './plugTest';
 import { useTheme } from '../theme/ThemeContext';
 
-type SourceType = 'static' | 'cStream' | 'local' | 'global';
+import { BindingValueInput, type BindingSourceType } from './BindingValueInput';
+
 interface EmailFieldBinding {
-  source: SourceType;
+  source: BindingSourceType;
   value: string;
   asAttachment?: boolean;
   fileName?: string;
   contentType?: string;
 }
 type EmailBindings = Record<string, EmailFieldBinding>;
-
-const SOURCE_OPTIONS: { value: SourceType; label: string }[] = [
-  { value: 'static', label: 'Static' }, { value: 'cStream', label: 'cStream' },
-  { value: 'local', label: 'Local' }, { value: 'global', label: 'Global' },
-];
 const CONTENT_TYPES = [
   'text/plain', 'text/csv', 'text/html', 'text/xml', 'application/pdf',
   'application/json', 'application/vnd.ms-excel',
@@ -45,56 +47,84 @@ const EmailFieldRow: React.FC<{
   binding: EmailFieldBinding; onChange: (p: Partial<EmailFieldBinding>) => void;
 }> = ({ fieldKey, label, binding, onChange }) => {
   const t = useTheme();
-  const isStatic = binding.source === 'static';
-  return (
-    <Section>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-        <span style={{ fontSize: 9, color: t.accent, fontWeight: 600, textTransform: 'uppercase' }}>{label}</span>
-        <Sel value={binding.source} onChange={e => onChange({ source: e.target.value as SourceType, asAttachment: false })} style={{ width: 80, fontSize: 9 }}>
-          {SOURCE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </Sel>
-      </div>
-      {isStatic ? (
+
+  if (fieldKey === 'body' && binding.source === 'static') {
+    return (
+      <Section>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+          <span style={{ fontSize: 9, color: t.accent, fontWeight: 600, textTransform: 'uppercase' }}>{label}</span>
+          <Sel value={binding.source} onChange={e => onChange({ source: e.target.value as BindingSourceType, asAttachment: false })} style={{ width: 88, fontSize: 9 }}>
+            <option value="static">Static</option>
+            <option value="cStream">cStream</option>
+            <option value="local">Local</option>
+            <option value="global">Global</option>
+            <option value="expression">Expression</option>
+          </Sel>
+        </div>
         <textarea
           value={binding.value}
           onChange={e => onChange({ value: e.target.value })}
           style={{
-            width: '100%', minHeight: fieldKey === 'body' ? 90 : 32, padding: '5px 7px',
-            borderRadius: 4, border: `0.5px solid ${t.border}`, background: t.inputBg,
-            color: t.inputText, fontSize: 10, fontFamily: 'inherit', resize: 'vertical',
+            width: '100%', minHeight: 90, padding: '5px 7px', borderRadius: 4,
+            border: `0.5px solid ${t.border}`, background: t.inputBg, color: t.inputText,
+            fontSize: 10, resize: 'vertical',
           }}
         />
-      ) : (
-        <>
-          <Inp value={binding.value} onChange={e => onChange({ value: e.target.value })} placeholder="variable path" />
-          {fieldKey === 'body' && (
-            <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-              {[{ val: false, label: 'Inline' }, { val: true, label: 'Attachment' }].map(opt => (
-                <button key={String(opt.val)} type="button" onClick={() => onChange({ asAttachment: opt.val })} style={{
-                  flex: 1, padding: '4px', fontSize: 9, borderRadius: 4, cursor: 'pointer',
-                  border: `0.5px solid ${binding.asAttachment === opt.val ? t.accent : t.border}`,
-                  background: binding.asAttachment === opt.val ? `${t.accent}22` : 'transparent',
-                  color: binding.asAttachment === opt.val ? t.accent : t.textMuted,
-                }}>{opt.label}</button>
-              ))}
-            </div>
-          )}
-          {fieldKey === 'body' && binding.asAttachment && (
-            <>
-              <Field label="File name"><Inp value={binding.fileName ?? ''} onChange={e => onChange({ fileName: e.target.value })} /></Field>
-              <Field label="Content type">
-                <Sel value={binding.contentType ?? ''} onChange={e => onChange({ contentType: e.target.value })}>
-                  <option value="">— Select —</option>
-                  {CONTENT_TYPES.map(ct => <option key={ct} value={ct}>{ct}</option>)}
-                </Sel>
-              </Field>
-            </>
-          )}
-        </>
+        <BodyAttachmentExtras binding={binding} onChange={onChange} t={t} />
+      </Section>
+    );
+  }
+
+  return (
+    <Section>
+      <BindingValueInput
+        label={label}
+        source={binding.source}
+        value={binding.value}
+        onChange={p => onChange({ ...p, asAttachment: false })}
+        pathPlaceholder={
+          fieldKey === 'to' || fieldKey === 'cc' || fieldKey === 'bcc'
+            ? 'defaultToEmail'
+            : 'dot.path'
+        }
+        compact={binding.source !== 'expression'}
+      />
+      {fieldKey === 'body' && binding.source !== 'static' && binding.source !== 'expression' && (
+        <BodyAttachmentExtras binding={binding} onChange={onChange} t={t} />
       )}
     </Section>
   );
 };
+
+const BodyAttachmentExtras: React.FC<{
+  binding: EmailFieldBinding;
+  onChange: (p: Partial<EmailFieldBinding>) => void;
+  t: ReturnType<typeof useTheme>;
+}> = ({ binding, onChange, t }) => (
+  <>
+    <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+      {[{ val: false, label: 'Inline' }, { val: true, label: 'Attachment' }].map(opt => (
+        <button key={String(opt.val)} type="button" onClick={() => onChange({ asAttachment: opt.val })} style={{
+          flex: 1, padding: '4px', fontSize: 9, borderRadius: 4, cursor: 'pointer',
+          border: `0.5px solid ${binding.asAttachment === opt.val ? t.accent : t.border}`,
+          background: binding.asAttachment === opt.val ? `${t.accent}22` : 'transparent',
+          color: binding.asAttachment === opt.val ? t.accent : t.textMuted,
+        }}>{opt.label}</button>
+      ))}
+    </div>
+    {binding.asAttachment && (
+      <>
+        <Field label="File name"><Inp value={binding.fileName ?? ''} onChange={e => onChange({ fileName: e.target.value })} /></Field>
+        <Field label="Content type">
+          <Sel value={binding.contentType ?? ''} onChange={e => onChange({ contentType: e.target.value })}>
+            <option value="">— Select —</option>
+            {CONTENT_TYPES.map(ct => <option key={ct} value={ct}>{ct}</option>)}
+          </Sel>
+        </Field>
+      </>
+    )}
+  </>
+);
 
 export const PlugNodeInspectorPanel: React.FC<NodeInspectorProps> = ({ node, onUpdate, ctx }) => {
   const t = useTheme();
@@ -154,7 +184,11 @@ export const PlugNodeInspectorPanel: React.FC<NodeInspectorProps> = ({ node, onU
       <>
         <Section>
           <div style={{ fontSize: 11, fontWeight: 600, color: t.accent }}>✉ {String(d.plugName ?? 'Email plug')}</div>
-          <Help>Map recipients and body from static text or variables.</Help>
+          <Help>
+            Map fields from static, cStream/local/global paths, or FloExpression.
+            Reuse hub-wide values: set <code>defaultToEmail</code> in global once (Start/Var Store), then To → Global → <code>defaultToEmail</code>.
+            For joins use Expression: <code>concat(cStream.a, '.', cStream.b)</code> — not <code>{'{{ }}'}</code> (that is Template node only).
+          </Help>
         </Section>
         {EMAIL_FIELDS.map(f => (
           <EmailFieldRow key={f.key} fieldKey={f.key} label={f.label} isList={f.isList}
@@ -164,6 +198,10 @@ export const PlugNodeInspectorPanel: React.FC<NodeInspectorProps> = ({ node, onU
           outputTarget={(d.outputTarget as string) ?? 'cStream'}
           outputVarName={(d.outputVarName as string) ?? ''}
           onChange={p => onUpdate(node.id, p)}
+        />
+        <DataPersistenceSection
+          value={(d.dataPersistence as NodeDataPersistence | undefined) ?? DEFAULT_NODE_DATA_PERSISTENCE}
+          onChange={dataPersistence => onUpdate(node.id, { dataPersistence })}
         />
         <PlugTestInput
           value={String(d.testInputJson ?? DEFAULT_PLUG_TEST_INPUT)}
@@ -175,10 +213,40 @@ export const PlugNodeInspectorPanel: React.FC<NodeInspectorProps> = ({ node, onU
     );
   }
 
-  const devUrlVars = extractUrlTemplateVarNames(String(d.urlPattern ?? ''))
-    .filter(isDeveloperPlugUrlVar);
+  const plugNodeTokenDefs = (d.plugNodeUrlTokens as { key: string; label?: string; description?: string }[] | undefined) ?? [];
+  const devUrlVars = plugNodeTokenDefs.length > 0
+    ? plugNodeTokenDefs.map(t => t.key)
+    : extractUrlTemplateVarNames(String(d.urlPattern ?? '')).filter(isDeveloperPlugUrlVar);
   const urlVariables = (d.urlVariables ?? {}) as Record<string, PlugVariableBinding>;
   const selectedConn = connections.find(c => c.id === selectedConnectionId);
+  const urlTokensSnapshot = (d.urlTokensSnapshot as ConnectorUrlToken[] | undefined) ?? [];
+  const plugUrlByConn = (d.plugUrlValuesByConnection as Record<string, Record<string, string>> | undefined) ?? {};
+
+  const resolvedUrlPreview = useMemo(() => {
+    if (!urlTokensSnapshot.length || !selectedConn) return '';
+    const hubPlugVals = plugUrlByConn[selectedConnectionId] ?? {};
+    const plugNodeVals: Record<string, string> = {};
+    for (const t of plugNodeTokenDefs) {
+      const b = urlVariables[t.key];
+      if (b?.source === 'static' && b.value?.trim()) {
+        const v = b.value.trim();
+        plugNodeVals[t.key] = v;
+        if (t.field) plugNodeVals[t.field] = v;
+      }
+    }
+    return resolveConnectorUrlPreview({
+      urlTokens: urlTokensSnapshot,
+      connection: {
+        urlTokenValues: selectedConn.urlTokenValues,
+        hostname:  selectedConn.hostname,
+        tenantKey: selectedConn.tenantKey,
+        baseUrl:   selectedConn.baseUrl,
+      },
+      kit: (d.kitUrlContext as { urlTokenValues?: Record<string, string>; serviceModule?: string; serviceVersion?: string; schemaLabel?: string; schemaVersion?: string } | undefined),
+      plugValues: hubPlugVals,
+      plugNodeValues: plugNodeVals,
+    });
+  }, [urlTokensSnapshot, selectedConn, selectedConnectionId, plugUrlByConn, plugNodeTokenDefs, urlVariables]);
 
   return (
     <>
@@ -234,34 +302,64 @@ export const PlugNodeInspectorPanel: React.FC<NodeInspectorProps> = ({ node, onU
         ) : null}
       </Field>
 
-      {devUrlVars.map(varName => {
+      {(resolvedUrlPreview || urlTokensSnapshot.length > 0) && selectedConn ? (
+        <Field label="Resolved URL">
+          <ConnectorUrlPreviewBox
+            preview={resolvedUrlPreview}
+            urlTokens={urlTokensSnapshot}
+            captureSources={['plugNode']}
+            connection={{
+              urlTokenValues: selectedConn.urlTokenValues,
+              hostname: selectedConn.hostname,
+              tenantKey: selectedConn.tenantKey,
+              baseUrl: selectedConn.baseUrl,
+            }}
+            plugValues={plugUrlByConn[selectedConnectionId] ?? {}}
+            plugNodeValues={Object.fromEntries(
+              plugNodeTokenDefs.flatMap(t => {
+                const b = urlVariables[t.key];
+                if (b?.source === 'static' && b.value?.trim()) {
+                  const v = b.value.trim();
+                  return [[t.key, v], ...(t.field ? [[t.field, v] as [string, string]] : [])];
+                }
+                return [] as [string, string][];
+              }),
+            )}
+          />
+        </Field>
+      ) : null}
+
+      {devUrlVars.length > 0 && devUrlVars.map(varName => {
+        const tokenDef = plugNodeTokenDefs.find(t => t.key === varName);
         const hint = (d.variableHints as PlugVariableHint[] | undefined)?.find(h => h.name === varName);
         const binding = urlVariables[varName];
-        const label = varName === 'version' ? 'API version' : varName === 'module' ? 'Module' : varName;
+        const label = tokenDef?.label ?? (varName === 'version' ? 'API version' : varName === 'module' ? 'Module' : varName);
+        const isOverride = tokenDef && urlTokensSnapshot.some(
+          t => t.key === tokenDef.key && tokenHasSource(t, 'kit') && tokenHasSource(t, 'plugNode'),
+        );
         return (
-          <Field key={varName} label={label}>
-            <div style={{ display: 'flex', gap: 5 }}>
-              <Sel style={{ flex: '0 0 75px' }} value={binding?.source ?? 'static'}
-                onChange={e => onUpdate(node.id, {
-                  urlVariables: { ...urlVariables, [varName]: { source: e.target.value, value: binding?.value ?? hint?.defaultValue ?? '' } },
-                })}>
-                <option value="static">Static</option>
-                <option value="cStream">cStream</option>
-                <option value="global">Global</option>
-                <option value="local">Local</option>
-              </Sel>
-              <Inp value={binding?.value ?? ''} placeholder={hint?.defaultValue ?? varName}
-                onChange={e => onUpdate(node.id, {
-                  urlVariables: { ...urlVariables, [varName]: { source: binding?.source ?? 'static', value: e.target.value } },
-                })} />
-            </div>
-          </Field>
+          <BindingValueInput
+            key={varName}
+            label={isOverride ? `${label} (override)` : label}
+            hint={tokenDef?.description ?? hint?.hint}
+            source={(binding?.source ?? 'static') as BindingSourceType}
+            value={binding?.value ?? hint?.defaultValue ?? ''}
+            pathPlaceholder={varName === 'module' || varName === 'version' ? `global.${varName}` : varName}
+            onChange={patch => onUpdate(node.id, {
+              urlVariables: { ...urlVariables, [varName]: patch },
+            })}
+            compact={(binding?.source ?? 'static') !== 'expression'}
+          />
         );
       })}
       <OutputTargetSection
         outputTarget={(d.outputTarget as string) ?? 'cStream'}
         outputVarName={(d.outputVarName as string) ?? ''}
         onChange={p => onUpdate(node.id, p)}
+      />
+      <DataPersistenceSection
+        value={(d.dataPersistence as NodeDataPersistence | undefined) ?? DEFAULT_NODE_DATA_PERSISTENCE}
+        onChange={dataPersistence => onUpdate(node.id, { dataPersistence })}
       />
       <PlugTestInput
         value={String(d.testInputJson ?? DEFAULT_PLUG_TEST_INPUT)}

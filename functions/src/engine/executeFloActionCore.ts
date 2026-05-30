@@ -5,7 +5,7 @@
 
 import { getFirestore } from 'firebase-admin/firestore';
 import type {
-  AuthProtocol, ConnectorDoc, FloConnectionDoc, PlugCredentialValues, NodeHttpTrace,
+  AuthProtocol, ConnectorDoc, FloConnectionDoc, PlugCredentialValues, PlugVariableBinding, NodeHttpTrace,
 } from '@floplug/shared';
 import { COLLECTIONS, HUB_COLLECTIONS, SUB_COLLECTIONS, redactSecretHeaders } from '@floplug/shared';
 import { applyAuth } from './applyAuth.js';
@@ -19,28 +19,60 @@ import {
   FloActionNetworkError,
   FloActionValidationError,
   type FloActionErrorContext,
+  type FloActionDebugInfo,
 } from './floActionErrors.js';
 import { getMessage } from './resolveValue.js';
+import { resolveFloActionRequestUrl } from './resolveFloActionUrl.js';
+import { getValue } from '../utils/pathUtils.js';
 
 const db = getFirestore();
 
 const FETCH_TIMEOUT_MS = 30_000;
 const MAX_RETRIES      = 3;
 
-export interface FloActionDebugInfo {
-  resolved:            Record<string, unknown>;
-  requestBody:         string;
-  requestBodyInner:    string;
-  url:                 string;
-  method:              string;
-  contentType:         string;
-  unmappedFields:      string[];
-  unmappedRequired:    string[];
-  mappedFieldCount:    number;
-  schemaFieldCount:    number;
-  headersSafe:         Record<string, string>;
-  validationWouldFail: boolean;
+function detectMappingInputMismatch(
+  cStream: Record<string, unknown>,
+  mappingRules: MappingRule[] | undefined,
+): string | undefined {
+  const rules = mappingRules ?? [];
+  const jsonPathRules = rules.filter(
+    r => r.sourceType === 'cStream' && r.sourceField && r.sourceField !== 'value',
+  );
+  if (jsonPathRules.length === 0) return undefined;
+
+  const isWrappedScalar = Object.keys(cStream).length === 1 && 'value' in cStream;
+  const scalar = isWrappedScalar ? cStream.value : undefined;
+  if (typeof scalar === 'string') {
+    const trimmed = scalar.trim();
+    if (trimmed.startsWith('<') || trimmed.startsWith('<?xml')) {
+      return (
+        'cStream input is XML/text from an upstream node, but mapping rules expect JSON paths ' +
+        `(e.g. ${jsonPathRules[0]?.sourceField}). ` +
+        'Add a Variable Store node before template/plug nodes to preserve the JSON payload, ' +
+        'then set FloAction Input Source to local or global.'
+      );
+    }
+  }
+
+  for (const rule of jsonPathRules) {
+    const val = rule.sourceField ? getValue(cStream, rule.sourceField) : undefined;
+    if (val !== undefined && val !== null) return undefined;
+  }
+
+  if (Object.keys(cStream).length > 0 && jsonPathRules.length > 0) {
+    const sample = jsonPathRules[0]?.sourceField ?? '';
+    const topKeys = Object.keys(cStream).slice(0, 6).join(', ');
+    return (
+      `Mapping source "${sample}" not found in FloAction input. ` +
+      `Available top-level keys: ${topKeys || '(none)'}. ` +
+      'If upstream nodes replaced JSON with XML, store the JSON in a Variable Store and point Input Source to that variable.'
+    );
+  }
+
+  return undefined;
 }
+
+export type { FloActionDebugInfo };
 
 export interface ExecuteFloActionInput {
   hubId:         string;
@@ -58,6 +90,9 @@ export interface ExecuteFloActionInput {
   debug?:        boolean;
   /** Build request but do not call the connector API. Implies debug output. */
   dryRun?:       boolean;
+  /** Canvas URL segment bindings (floActionNode-classified tokens) */
+  urlVariables?: Record<string, { source: string; value: string }>;
+  floRunMeta?:   Readonly<import('@floplug/shared').FloRunMeta>;
 }
 
 export interface ExecuteFloActionResult {
@@ -144,15 +179,10 @@ function mergeProtocolWithConnector(
   };
 }
 
-function buildUrl(hostname: string, endpoint: string, queryParam?: Record<string, string>): string {
-  const base = hostname.replace(/\/$/, '');
-  const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-  let url    = `${base}${path}`;
-  if (queryParam && Object.keys(queryParam).length > 0) {
-    const qs = new URLSearchParams(queryParam).toString();
-    url += (url.includes('?') ? '&' : '?') + qs;
-  }
-  return url;
+function appendQueryParams(url: string, queryParam?: Record<string, string>): string {
+  if (!queryParam || Object.keys(queryParam).length === 0) return url;
+  const qs = new URLSearchParams(queryParam).toString();
+  return url + (url.includes('?') ? '&' : '?') + qs;
 }
 
 async function fetchWithRetry(
@@ -160,7 +190,9 @@ async function fetchWithRetry(
   init: RequestInit,
   ctx: FloActionErrorContext,
 ): Promise<Response> {
-  let lastErr: Error | null = null;
+  let lastNetworkErr: FloActionNetworkError | Error | null = null;
+  /** Return final 5xx response so caller can attach full httpTrace (do not throw early). */
+  let last5xx: Response | null = null;
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     const controller = new AbortController();
@@ -168,23 +200,30 @@ async function fetchWithRetry(
     try {
       const res = await fetch(url, { ...init, signal: controller.signal });
       clearTimeout(timer);
-      if (res.ok || res.status < 500) return res;
-      lastErr = new FloActionNetworkError(
-        `HTTP ${res.status} from connector endpoint`,
-        ctx,
-        res.status,
-      );
+      if (res.ok) return res;
+      if (res.status < 500) return res;
+      last5xx = res;
     } catch (err) {
       clearTimeout(timer);
-      lastErr = err instanceof Error ? err : new Error(String(err));
+      const raw = err instanceof Error ? err.message : String(err);
+      if (/failed to parse url/i.test(raw)) {
+        lastNetworkErr = new FloActionNetworkError(
+          `Invalid FloAction request URL "${url}" — connection hostname must include https:// or a hub plug urlPattern must be configured. (${raw})`,
+          ctx,
+        );
+      } else {
+        lastNetworkErr = err instanceof Error ? err : new Error(String(err));
+      }
     }
     if (attempt < MAX_RETRIES - 1) {
       await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 500));
     }
   }
 
+  if (last5xx) return last5xx;
+
   throw new FloActionNetworkError(
-    lastErr?.message ?? 'Network request failed after retries',
+    lastNetworkErr?.message ?? 'Network request failed after retries',
     ctx,
   );
 }
@@ -267,18 +306,37 @@ export async function executeFloActionCore(
     localStore:   stores.localStore,
     globalStore:  stores.globalStore,
     mappingRules: input.mappingRules,
+    floRunMeta:   input.floRunMeta,
     /** Production: never server-side guess mappings — explicit rules only */
     explicitRulesOnly: true,
   });
 
   const requestBodyInner = buildRequestBody(actionDoc, resolved);
   const validationWouldFail = unmappedRequired.length > 0;
+  const inputHint = detectMappingInputMismatch(stores.cStream, input.mappingRules);
+
+  const debugInfo: FloActionDebugInfo | undefined = wantDebug || validationWouldFail ? {
+    resolved,
+    requestBody:         requestBodyInner,
+    requestBodyInner,
+    url:                 '',
+    method:              actionDoc.method ?? 'POST',
+    contentType:         actionDoc.contentType ?? 'application/json',
+    unmappedFields,
+    unmappedRequired,
+    mappedFieldCount:    Object.keys(resolved).length,
+    schemaFieldCount:    actionDoc.inputSchema?.length ?? 0,
+    headersSafe:         {},
+    validationWouldFail,
+  } : undefined;
 
   if (validationWouldFail && !input.dryRun) {
+    const hint = inputHint ? ` ${inputHint}` : '';
     throw new FloActionValidationError(
-      `Required fields could not be mapped: ${unmappedRequired.join(', ')}`,
+      `Required fields could not be mapped: ${unmappedRequired.join(', ')}.${hint}`,
       unmappedRequired,
       ctx,
+      { debug: debugInfo, inputHint: inputHint ?? undefined },
     );
   }
 
@@ -291,7 +349,17 @@ export async function executeFloActionCore(
   }
 
   const queryParam = (authResult as { queryParam?: Record<string, string> }).queryParam;
-  const url        = buildUrl(connection.hostname ?? '', actionDoc.endpoint, queryParam);
+  const baseUrl    = await resolveFloActionRequestUrl({
+    hubId:       input.hubId,
+    tenantId:    input.tenantId,
+    connectorId: input.connectorId,
+    floKitId:    input.floKitId,
+    connection,
+    actionDoc,
+    connector,
+    urlVariables: input.urlVariables as Record<string, PlugVariableBinding> | undefined,
+  });
+  const url        = appendQueryParams(baseUrl, queryParam);
 
   const headers: Record<string, string> = {
     ...authResult.headers,
@@ -308,20 +376,11 @@ export async function executeFloActionCore(
 
   const method = actionDoc.method ?? 'POST';
 
-  const debugInfo: FloActionDebugInfo | undefined = wantDebug ? {
-    resolved,
-    requestBody:         body,
-    requestBodyInner,
-    url,
-    method,
-    contentType:         actionDoc.contentType ?? 'application/json',
-    unmappedFields,
-    unmappedRequired,
-    mappedFieldCount:    Object.keys(resolved).length,
-    schemaFieldCount:    actionDoc.inputSchema?.length ?? 0,
-    headersSafe:         redactSecretHeaders(headers),
-    validationWouldFail,
-  } : undefined;
+  if (debugInfo) {
+    debugInfo.url = url;
+    debugInfo.requestBody = body;
+    debugInfo.headersSafe = redactSecretHeaders(headers);
+  }
 
   if (input.dryRun) {
     return {
@@ -358,13 +417,18 @@ export async function executeFloActionCore(
   };
 
   if (!response.ok) {
+    const snippet = responseText.replace(/\s+/g, ' ').slice(0, 240);
     const netErr = new FloActionNetworkError(
-      `Connector request failed with status ${response.status}`,
+      `Connector HTTP ${response.status} ${response.statusText}: ${method} ${url}` +
+      (snippet ? ` — ${snippet}` : ''),
       ctx,
       response.status,
     ) as FloActionNetworkError & { httpTrace?: NodeHttpTrace };
     netErr.httpTrace = httpTrace;
-    console.error(`[executeFloAction] Error response (${response.status}): ${responseText.slice(0, 500)}`);
+    console.error(
+      `[executeFloAction] ${method} ${url} conn=${input.connectionId} ` +
+      `status=${response.status} body=${responseText.slice(0, 500)}`,
+    );
     throw netErr;
   }
 

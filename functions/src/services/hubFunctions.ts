@@ -4,7 +4,18 @@ import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 import { getPermissionsForRole } from '../helpers/settingsHelper.js';
 import '../constants.js';
-import { COLLECTIONS, HUB_COLLECTIONS, HUB_ROLES, PERMISSIONS, ROLES, SUB_COLLECTIONS } from '@floplug/shared';
+import {
+  COLLECTIONS, HUB_COLLECTIONS, HUB_ROLES, PERMISSIONS, ROLES, SUB_COLLECTIONS,
+  buildKitUrlContextFromFloKit,
+  floActionNodeTokensForConnector,
+  omitUndefinedFields,
+} from '@floplug/shared';
+import type { ConnectorUrlToken, KitUrlContext } from '@floplug/shared';
+
+/** Firestore rejects undefined anywhere in a document — strip from each record. */
+function firestoreSafeRecords<T extends Record<string, unknown>>(items: T[]): Partial<T>[] {
+  return items.map(item => omitUndefinedFields(item));
+}
 
 if (!getApps().length) initializeApp();
 
@@ -151,9 +162,78 @@ export const getHubActionNodes = onCall(async (request) => {
     nodes = nodes.filter(n => (n as { enabledForDevelopers?: boolean }).enabledForDevelopers !== false);
   }
 
+  nodes = await enrichHubActionNodesKitUrlContext(nodes);
+
   console.log(`[getHubActionNodes] tenantId=${tenantId} connectorId=${connectorId ?? 'all'} → ${nodes.length} nodes`);
   return { nodes };
 });
+
+type HubActionNodeRow = {
+  id?:           string;
+  connectorId?:  string;
+  floKitId?:     string;
+  kitUrlContext?: KitUrlContext;
+  urlTokensSnapshot?: ConnectorUrlToken[];
+};
+
+/** Refresh kit URL segments from live FloKit + connector registry (fixes stale hub snapshots). */
+async function enrichHubActionNodesKitUrlContext<T extends HubActionNodeRow>(
+  nodes: T[],
+): Promise<T[]> {
+  const pairs = new Map<string, { connectorId: string; floKitId: string }>();
+  for (const n of nodes) {
+    const connectorId = String(n.connectorId ?? '').trim();
+    const floKitId = String(n.floKitId ?? '').trim();
+    if (!connectorId || !floKitId) continue;
+    pairs.set(`${connectorId}:${floKitId}`, { connectorId, floKitId });
+  }
+  if (pairs.size === 0) return nodes;
+
+  const kitCtxByPair = new Map<string, { kitUrlContext: KitUrlContext; urlTokensSnapshot?: ConnectorUrlToken[] }>();
+
+  await Promise.all([...pairs.values()].map(async ({ connectorId, floKitId }) => {
+    const [connectorSnap, kitSnap] = await Promise.all([
+      db.collection(COLLECTIONS.FLOPLUGCONNECTORS).doc(connectorId).get(),
+      db.collection(COLLECTIONS.FLOPLUGCONNECTORS).doc(connectorId)
+        .collection(SUB_COLLECTIONS.FLOKITS).doc(floKitId).get(),
+    ]);
+    const connectorData = connectorSnap.data() as { urlTokens?: ConnectorUrlToken[] } | undefined;
+    const urlTokens = (connectorData?.urlTokens ?? []) as ConnectorUrlToken[];
+    const kitData = kitSnap.data() as {
+      name?: string;
+      serviceModule?: string;
+      serviceVersion?: string;
+      servicesSchemaVersion?: string;
+      schemaVersion?: string;
+      urlTokenValues?: Record<string, string>;
+    } | undefined;
+    if (!kitData && !urlTokens.length) return;
+
+    const kitUrlContext = buildKitUrlContextFromFloKit(
+      kitData ?? {},
+      floKitId,
+      urlTokens,
+    );
+    kitCtxByPair.set(`${connectorId}:${floKitId}`, {
+      kitUrlContext,
+      urlTokensSnapshot: urlTokens.length > 0 ? urlTokens : undefined,
+    });
+  }));
+
+  return nodes.map(n => {
+    const connectorId = String(n.connectorId ?? '').trim();
+    const floKitId = String(n.floKitId ?? '').trim();
+    const enriched = kitCtxByPair.get(`${connectorId}:${floKitId}`);
+    if (!enriched) return n;
+    return {
+      ...n,
+      kitUrlContext: enriched.kitUrlContext,
+      urlTokensSnapshot: n.urlTokensSnapshot?.length
+        ? n.urlTokensSnapshot
+        : enriched.urlTokensSnapshot,
+    };
+  });
+}
 
 // ═════════════════════════════════════════════════════════════════════════════
 // PLUG MUTATIONS
@@ -366,6 +446,8 @@ interface SaveHubActionNodeRequest {
   floActionName?:       string;
   flaLabel?:            string;
   description?:         string;
+  floActionUrlValuesByConnection?: Record<string, Record<string, string>>;
+  floActionNodeUrlTokens?:        { key: string; label?: string; description?: string; field?: string }[];
   /** @deprecated Use floActionName */
   displayName?:         string;
 }
@@ -373,13 +455,15 @@ interface SaveHubActionNodeRequest {
 export const saveHubActionNode = onCall(async (request) => {
   const callerUid = requireHubAdmin(request);
 
+  const raw = request.data as SaveHubActionNodeRequest & { defaultConnectionId?: string };
   const {
     hubId, tenantId, floKitId, connectorId,
-    connectionId,
     allowedConnectionIds,
     actionIds, outputTarget, varName,
     floActionName, flaLabel, description, displayName,
-  } = request.data as SaveHubActionNodeRequest;
+    floActionUrlValuesByConnection,
+  } = raw;
+  const connectionId = String(raw.connectionId ?? raw.defaultConnectionId ?? '').trim();
 
   // ── Validate ──────────────────────────────────────────────────────────────
   if (!hubId || !tenantId || !floKitId || !connectorId) {
@@ -408,6 +492,28 @@ export const saveHubActionNode = onCall(async (request) => {
   }
 
   requireSameHub(request, hubId, tenantId);
+
+  const connSnap = await tenantCol(hubId, tenantId)
+    .collection(HUB_COLLECTIONS.FLO_CONNECTIONS)
+    .get();
+  const connById = new Map(connSnap.docs.map(d => [d.id, d.data() as Record<string, unknown>]));
+
+  for (const cid of allowedConnectionIds) {
+    const c = connById.get(cid);
+    if (!c) {
+      throw new HttpsError('invalid-argument', `Connection "${cid}" not found.`);
+    }
+    if (c.isActive === false) {
+      throw new HttpsError('invalid-argument', `Connection "${cid}" is inactive.`);
+    }
+    const connConnectorId = String(c.connectorId ?? '').trim();
+    if (connConnectorId && connConnectorId !== connectorId) {
+      throw new HttpsError(
+        'invalid-argument',
+        `Connection "${cid}" belongs to connector "${connConnectorId}", but this FloAction uses "${connectorId}".`,
+      );
+    }
+  }
 
   // Deterministic id: one FloActionNode per floKit per tenant
   const instanceId = `flan_${floKitId}`;
@@ -462,6 +568,20 @@ export const saveHubActionNode = onCall(async (request) => {
     ...(primaryRequestTypeName ? { requestTypeName: primaryRequestTypeName } : {}),
   };
 
+  const [connectorSnap, kitSnap] = await Promise.all([
+    db.collection(COLLECTIONS.FLOPLUGCONNECTORS).doc(connectorId).get(),
+    db.collection(COLLECTIONS.FLOPLUGCONNECTORS).doc(connectorId)
+      .collection(SUB_COLLECTIONS.FLOKITS).doc(floKitId).get(),
+  ]);
+  const connectorData = connectorSnap.data() as { urlTokens?: unknown[] } | undefined;
+  const urlTokens = ((connectorData?.urlTokens ?? []) as ConnectorUrlToken[]);
+  const kitData = kitSnap.data() as {
+    serviceModule?: string; serviceVersion?: string;
+    servicesSchemaVersion?: string; schemaVersion?: string; name?: string;
+    urlTokenValues?: Record<string, string>;
+  } | undefined;
+  const kitUrlContext = buildKitUrlContextFromFloKit(kitData ?? {}, floKitId, urlTokens);
+
   const doc: Record<string, any> = {
     id:                   instanceId,
     hubId,
@@ -479,7 +599,7 @@ export const saveHubActionNode = onCall(async (request) => {
     description:          description?.trim() ?? '',
     displayName:          resolvedName,
     outputTarget:         outputTarget ?? 'cStream',
-    varName:              varName?.trim() ?? '',
+    varName:              varName == null ? '' : String(varName).trim(),
     enabledForDevelopers: true,
     isActive:             true,
     updatedBy:            callerUid,
@@ -489,6 +609,22 @@ export const saveHubActionNode = onCall(async (request) => {
     ...(primaryInputMessageName ? { inputMessageName: primaryInputMessageName } : {}),
     ...(primaryRequestRootElement ? { requestRootElement: primaryRequestRootElement } : {}),
     ...(primaryRequestTypeName ? { requestTypeName: primaryRequestTypeName } : {}),
+    urlTokensSnapshot: firestoreSafeRecords(
+      ((connectorData?.urlTokens ?? []) as Record<string, unknown>[]),
+    ),
+    kitUrlContext: omitUndefinedFields(kitUrlContext as Record<string, unknown>),
+    ...(floActionUrlValuesByConnection && Object.keys(floActionUrlValuesByConnection).length > 0
+      ? { floActionUrlValuesByConnection } : {}),
+    floActionNodeUrlTokens: firestoreSafeRecords(
+      floActionNodeTokensForConnector(
+        connectorData ? { urlTokens: (connectorData.urlTokens ?? []) as ConnectorUrlToken[] } : null,
+      ).map(t => ({
+        key: t.key,
+        label: t.label,
+        description: t.description,
+        field: t.field,
+      })),
+    ),
   };
 
   // Only set createdAt on first write — merge: true alone would overwrite it
@@ -498,7 +634,13 @@ export const saveHubActionNode = onCall(async (request) => {
     doc.kitVersion = '';
   }
 
-  await docRef.set(doc, { merge: true });
+  try {
+    await docRef.set(doc, { merge: true });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[saveHubActionNode] Firestore write failed:', msg);
+    throw new HttpsError('internal', `Failed to save FloAction: ${msg}`);
+  }
 
   console.log(
     `[saveHubActionNode] ${isCreate ? 'Created' : 'Updated'} ${instanceId} ` +

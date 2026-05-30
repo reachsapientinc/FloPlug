@@ -1,0 +1,140 @@
+rules_version = '2';
+
+// Firebase Storage security rules (SEPARATE from firestore.rules).
+//
+// Deploy:  firebase deploy --only storage
+// Console: Firebase → Storage → Rules (if not using CLI)
+//
+// Path layout:
+//   floplug-schemas/     — WSDL/XSD uploads (Schema Management UI)
+//   floplug-dev/         — runtime bucket (execution-hub JSON, engine schemas/)
+//     execution-hub/{hubId}/{tenantId}/{runId}/manifest.json
+//     execution-hub/{hubId}/{tenantId}/{runId}/nodes/{nodeId}.json
+//
+// Note: Cloud Functions use the Admin SDK and BYPASS these rules when writing
+// execution records. Rules govern client SDK access (browser) and direct reads.
+// Execution Hub UI should prefer getExecutionHubRun / getExecutionHubStorageUrls
+// (signed URLs). These rules allow authenticated hub users to read their tenant data.
+
+service firebase.storage {
+
+  // ── Shared helpers (mirror firestore.rules) ───────────────────────────────
+
+  function isSignedIn() {
+    return request.auth != null;
+  }
+
+  function isProductAdmin() {
+    return isSignedIn() &&
+      request.auth.token.get('role', '') in
+        ['product_admin', 'developer', 'admin_sales'] &&
+      request.auth.token.get('isAdmin', 'false') == true;
+  }
+
+  function isHubAdmin() {
+    return isSignedIn() &&
+      request.auth.token.get('isHubAdmin', false) == true;
+  }
+
+  function belongsToHub(hubId, tenantId) {
+    return isSignedIn() &&
+      request.auth.token.get('hubId', '') == hubId &&
+      request.auth.token.get('tenantId', '') == tenantId;
+  }
+
+  function hasPermission(perm) {
+    return isSignedIn() &&
+      perm in request.auth.token.get('permissions', []);
+  }
+
+  function canReadExecutionHub(hubId, tenantId) {
+    return isProductAdmin() ||
+      (belongsToHub(hubId, tenantId) && hasPermission('view:logs'));
+  }
+
+  // Tenant users + product admins may write under their hub/tenant path
+  // (e.g. future client uploads). Flo runs also persist via Cloud Functions (Admin SDK).
+  function canWriteExecutionHub(hubId, tenantId) {
+    return isProductAdmin() ||
+      (belongsToHub(hubId, tenantId) &&
+        (hasPermission('invoke:flos') || hasPermission('view:logs') || isHubAdmin()));
+  }
+
+  // ── Dedicated schema upload bucket ────────────────────────────────────────
+
+  match /b/floplug-schemas/o {
+    match /{allPaths=**} {
+      allow read:  if isSignedIn();
+      allow write: if isProductAdmin();
+    }
+  }
+
+  // ── Runtime buckets (execution hub + engine /schemas folder) ──────────────
+
+  match /b/floplug-dev/o {
+    match /execution-hub/{hubId}/{tenantId}/{runId}/{allPaths=**} {
+      allow read:  if canReadExecutionHub(hubId, tenantId);
+      allow write: if canWriteExecutionHub(hubId, tenantId);
+    }
+    match /schemas/{allPaths=**} {
+      allow read:  if isSignedIn();
+      allow write: if isProductAdmin();
+    }
+  }
+
+  match /b/floplug-prod/o {
+    match /execution-hub/{hubId}/{tenantId}/{runId}/{allPaths=**} {
+      allow read:  if canReadExecutionHub(hubId, tenantId);
+      allow write: if canWriteExecutionHub(hubId, tenantId);
+    }
+    match /schemas/{allPaths=**} {
+      allow read:  if isSignedIn();
+      allow write: if isProductAdmin();
+    }
+  }
+
+  match /b/floplug-staging/o {
+    match /execution-hub/{hubId}/{tenantId}/{runId}/{allPaths=**} {
+      allow read:  if canReadExecutionHub(hubId, tenantId);
+      allow write: if canWriteExecutionHub(hubId, tenantId);
+    }
+    match /schemas/{allPaths=**} {
+      allow read:  if isSignedIn();
+      allow write: if isProductAdmin();
+    }
+  }
+
+  match /b/floplug-sandbox/o {
+    match /execution-hub/{hubId}/{tenantId}/{runId}/{allPaths=**} {
+      allow read:  if canReadExecutionHub(hubId, tenantId);
+      allow write: if canWriteExecutionHub(hubId, tenantId);
+    }
+    match /schemas/{allPaths=**} {
+      allow read:  if isSignedIn();
+      allow write: if isProductAdmin();
+    }
+  }
+
+  // Default Firebase bucket (project-id.appspot.com) — same rules if used
+  match /b/floplug-dev.appspot.com/o {
+    match /execution-hub/{hubId}/{tenantId}/{runId}/{allPaths=**} {
+      allow read:  if canReadExecutionHub(hubId, tenantId);
+      allow write: if canWriteExecutionHub(hubId, tenantId);
+    }
+    match /schemas/{allPaths=**} {
+      allow read:  if isSignedIn();
+      allow write: if isProductAdmin();
+    }
+  }
+
+  match /b/floplug-stage/o {
+    match /execution-hub/{hubId}/{tenantId}/{runId}/{allPaths=**} {
+      allow read:  if canReadExecutionHub(hubId, tenantId);
+      allow write: if canWriteExecutionHub(hubId, tenantId);
+    }
+    match /schemas/{allPaths=**} {
+      allow read:  if isSignedIn();
+      allow write: if isProductAdmin();
+    }
+  }
+}

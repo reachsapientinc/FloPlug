@@ -25,8 +25,12 @@ export interface FloConnectionDoc {
     /** Human label, e.g. "Production", "Sandbox" */
     environmentLabel?: string;
     hostname?: string;
+    /** Full API host/path for generic HTTP connectors (scheme supplied by connector urlTokens) */
+    baseUrl?: string;
     /** Target-system tenant / company id */
     tenantKey?: string;
+    /** URL segment values keyed by urlToken1, urlToken2, … */
+    urlTokenValues?: Record<string, string>;
     credentials: PlugCredentialValues;
     isActive: boolean;
     createdBy?: string;

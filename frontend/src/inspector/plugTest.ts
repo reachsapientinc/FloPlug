@@ -2,25 +2,8 @@ import { httpsCallable } from 'firebase/functions';
 import type { Functions } from 'firebase/functions';
 import type { Node } from '@xyflow/react';
 
-export const DEFAULT_PLUG_TEST_INPUT = JSON.stringify(
-  { message: 'Hello FloPlug', value: 42 },
-  null,
-  2,
-);
-
-export function parsePlugTestInput(raw: string): { ok: true; value: Record<string, unknown> } | { ok: false; error: string } {
-  const trimmed = (raw ?? '').trim();
-  if (!trimmed) return { ok: true, value: {} };
-  try {
-    const parsed = JSON.parse(trimmed);
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return { ok: false, error: 'Input must be a JSON object' };
-    }
-    return { ok: true, value: parsed as Record<string, unknown> };
-  } catch {
-    return { ok: false, error: 'Invalid JSON' };
-  }
-}
+export { DEFAULT_NODE_TEST_INPUT as DEFAULT_PLUG_TEST_INPUT, parseNodeTestInput as parsePlugTestInput } from './nodeTestPayload';
+import { DEFAULT_NODE_TEST_INPUT, parseNodeTestInput } from './nodeTestPayload';
 
 /** Run a single plug node with user-provided cStream input (like connector test). */
 export async function testPlugNode(
@@ -39,8 +22,8 @@ export async function testPlugNode(
     return true;
   }
 
-  const rawInput = String(d.testInputJson ?? DEFAULT_PLUG_TEST_INPUT);
-  const parsed = parsePlugTestInput(rawInput);
+  const rawInput = String(d.testInputJson ?? DEFAULT_NODE_TEST_INPUT);
+  const parsed = parseNodeTestInput(rawInput);
   if (parsed.ok === false) {
     onUpdate(node.id, { _loading: false, _result: parsed.error, _isError: true });
     return true;
@@ -67,6 +50,7 @@ export async function testPlugNode(
       plugId,
       inputJson,
       nodeConfig: {
+        dryRun:        true,
         urlVariables:  d.urlVariables,
         emailBindings: d.emailBindings,
         connectionId:  d.connectionId,

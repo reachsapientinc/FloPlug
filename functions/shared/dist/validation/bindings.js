@@ -1,6 +1,7 @@
 /**
  * Shared binding / placeholder validation helpers.
  */
+import { validateFloExpression, structuralExpressionCheck } from '../utils/floExpression.js';
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export function isNonEmptyString(v) {
     return typeof v === 'string' && v.trim().length > 0;
@@ -38,8 +39,30 @@ export function validateBinding(nodeId, nodeType, nodeLabel, field, label, bindi
             nodeId, nodeType, nodeLabel, field,
             code: 'REQUIRED_BINDING_MISSING',
             severity: 'error',
-            message: `${label} is required — set a ${source} path.`,
+            message: source === 'expression'
+                ? `${label} is required — enter a FloExpression.`
+                : `${label} is required — set a ${source} path.`,
         });
+        return issues;
+    }
+    if (source === 'expression') {
+        const structural = structuralExpressionCheck(val);
+        if (structural) {
+            issues.push({
+                nodeId, nodeType, nodeLabel, field,
+                code: 'EXPRESSION_INVALID', severity: 'error',
+                message: `${label}: ${structural}`,
+            });
+            return issues;
+        }
+        const parsed = validateFloExpression(val);
+        if (!parsed.ok) {
+            issues.push({
+                nodeId, nodeType, nodeLabel, field,
+                code: 'EXPRESSION_INVALID', severity: 'error',
+                message: `${label}: ${parsed.message}`,
+            });
+        }
     }
     return issues;
 }
@@ -79,5 +102,12 @@ export function extractUrlVariables(urlPattern) {
     return out;
 }
 export function nodeLabel(data, fallback) {
-    return String(data.flaLabel ?? data.floActionName ?? data.plugName ?? data.label ?? fallback);
+    return String(data.displayName ?? data.flaLabel ?? data.floActionName ?? data.plugName ?? data.label ?? fallback);
+}
+/** Canvas card title — custom display name overrides palette label. */
+export function nodeDisplayTitle(data, defaultTitle) {
+    const custom = data.displayName;
+    if (typeof custom === 'string' && custom.trim())
+        return custom.trim();
+    return defaultTitle;
 }

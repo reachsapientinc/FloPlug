@@ -37,7 +37,14 @@ export const NodeTestPanel: React.FC<{
   result?:       string;
   isError?:      boolean;
   loading?:      boolean;
-}> = ({ nodeId, testingNodeId, onTest, canTest = true, result, isError, loading }) => {
+  /** When set, shows test payload editor above the run button */
+  testInputJson?: string;
+  onTestInputChange?: (json: string) => void;
+  testInputHint?: string;
+}> = ({
+  nodeId, testingNodeId, onTest, canTest = true, result, isError, loading,
+  testInputJson, onTestInputChange, testInputHint,
+}) => {
   const t = useTheme();
   const busy = testingNodeId === nodeId || loading;
 
@@ -48,6 +55,28 @@ export const NodeTestPanel: React.FC<{
       marginTop: 12, paddingTop: 12,
       borderTop: `0.5px solid ${t.panelBorder}`,
     }}>
+      {canTest && onTestInputChange && testInputJson !== undefined && (
+        <div style={{ marginBottom: 10 }}>
+          {/* Lazy import avoided — parent passes NodeTestInput via withOutput */}
+          <label style={{ display: 'block', fontSize: 10, color: t.textMuted, marginBottom: 4 }}>
+            Test input (JSON → cStream)
+          </label>
+          <textarea
+            rows={5}
+            value={testInputJson}
+            onChange={e => onTestInputChange(e.target.value)}
+            spellCheck={false}
+            style={{
+              width: '100%', boxSizing: 'border-box', padding: '6px 8px', borderRadius: 5,
+              color: t.inputText, background: t.codeBg, border: `0.5px solid ${t.border}`,
+              fontFamily: 'monospace', fontSize: 9, resize: 'vertical',
+            }}
+          />
+          <div style={{ fontSize: 9, color: t.textDim, marginTop: 4, lineHeight: 1.45 }}>
+            {testInputHint ?? 'Simulated only — no outbound HTTP/email. Does not write to Execution Hub.'}
+          </div>
+        </div>
+      )}
       {canTest && (
         <Btn fullWidth disabled={busy} onClick={onTest}>
           {busy ? 'Running…' : '▶ Test node'}
@@ -58,7 +87,7 @@ export const NodeTestPanel: React.FC<{
           marginTop: 8, marginBottom: 0, padding: '6px 8px', borderRadius: 5,
           background: t.codeBg, border: `0.5px solid ${t.border}`,
           fontSize: 9, fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-          color: isError ? t.danger : t.success, maxHeight: 120, overflowY: 'auto',
+          color: isError ? t.danger : t.success, maxHeight: 160, overflowY: 'auto',
         }}>{result}</pre>
       )}
     </div>

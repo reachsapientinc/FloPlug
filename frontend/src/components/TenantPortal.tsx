@@ -1,8 +1,10 @@
-import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useRef, useState, useCallback } from 'react';
 import type { TenantConfig } from '../types/types.ts';
 import type { FloMeta } from '@floplug/shared';
 import { useTenantAuth } from '../hooks/useTenantAuth';
 import TenantLogin from './TenantLogin';
+import { ProductDocsApp, isDocsHash } from '../docs';
+import { detectPortalMode } from '../utils/tenantResolver';
 
 // Lazy-load the designer so it only runs after auth is confirmed
 const Designer = lazy(() => import('./Designer.tsx'));
@@ -154,24 +156,50 @@ const AuthenticatedShell: React.FC<{
 
   const [activeFlo, setActiveFlo]       = useState<FloMeta | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [docsMode, setDocsMode]         = useState(() => isDocsHash(window.location.hash));
+
+  const exitDocs = useCallback(() => {
+    const url = `${window.location.pathname}${window.location.search}`;
+    window.history.replaceState(null, '', url);
+    setDocsMode(false);
+    window.dispatchEvent(new HashChangeEvent('hashchange'));
+  }, []);
+
+  useEffect(() => {
+    const onHash = () => setDocsMode(isDocsHash(window.location.hash));
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
 
   const slugRef = useRef(tenant.slug);
-  const envRef  = useRef(tenant.env);
 
   useEffect(() => {
     const handlePop = () => {
-      const parts = window.location.pathname.replace(/^\//, '').split('/');
-      const newSlug = parts[0] ?? '';
-      const newEnv  = parts[1] ?? '';
-      if (newSlug !== slugRef.current || newEnv !== envRef.current) {
+      // Env lives on hostname (dev.floplug.xyz), not path — only slug changes matter.
+      const detected = detectPortalMode();
+      if (detected.mode !== 'tenant') return;
+      const newSlug = detected.slug ?? '';
+      if (newSlug && newSlug !== slugRef.current) {
         logout();
-        // Reload so tenantResolver re-runs with the new path
         window.location.reload();
       }
     };
     window.addEventListener('popstate', handlePop);
     return () => window.removeEventListener('popstate', handlePop);
   }, [logout]);
+
+  if (docsMode) {
+    return (
+      <ProductDocsApp
+        portal="tenant"
+        isHubAdmin={isHubAdmin}
+        hubId={tenant.hubId}
+        tenantId={tenant.tenantId}
+        hubName={displayName}
+        onClose={exitDocs}
+      />
+    );
+  }
 
   return (
     <div style={styles.shell}>

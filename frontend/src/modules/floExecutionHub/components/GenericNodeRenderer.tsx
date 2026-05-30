@@ -7,6 +7,7 @@ const NODE_HINTS: Record<string, string> = {
   floActionNode:     'FloKit action — connector API call',
   templateNode:      'Template transform',
   filterNode:        'Filter / branch',
+  floSwitchNode:     'FloSwitch',
   loopNode:          'Loop iteration',
   variableStoreNode: 'Variable store read/write',
   fifNode:           'FIF conditional',

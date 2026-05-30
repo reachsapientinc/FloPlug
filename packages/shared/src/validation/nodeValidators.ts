@@ -20,6 +20,26 @@ import {
   isBindingConfigured,
   type VariableBinding,
 } from './bindings.js';
+import {
+  structuralExpressionCheck,
+  validateFloExpression,
+} from '../utils/floExpression.js';
+import { validateConditionRowsParentheses } from '../utils/conditionRows.js';
+import type { ConditionRow } from '../types/conditionRows.js';
+import type { SwitchBranch } from '../types/switchNode.js';
+import type { SubFloInputArg, SubFloReturnArg, SubFloReturnBinding } from '../types/subFloNode.js';
+import {
+  detectSubFloInvokeCycle,
+  compartmentEdges,
+  listSubFloAnchors,
+  loopHasExitEdge,
+  loopHasLoopEdge,
+  nodeSubFloId,
+} from '../utils/subFloGraph.js';
+import {
+  validateFloActionNodeConnectorUrl,
+  validatePlugNodeConnectorUrl,
+} from './connectorUrlNodeValidation.js';
 
 /** Email plug bindings may carry attachment metadata on the body field. */
 interface EmailBinding extends VariableBinding {
@@ -239,6 +259,9 @@ export function validateNode(
             message: `Connection "${connId}" is not allowed for this plug.`,
           });
         }
+
+        const connFields = connId ? resources?.connectionsById?.[connId] : undefined;
+        issues.push(...validatePlugNodeConnectorUrl(node, connFields));
       }
       break;
     }
@@ -281,11 +304,27 @@ export function validateNode(
     }
 
     case NODE_TYPES.FILTER: {
-      if (!isNonEmptyString(d.field)) {
+      const rows = d.conditionRows as ConditionRow[] | undefined;
+      if (Array.isArray(rows) && rows.length > 0) {
+        const paren = validateConditionRowsParentheses(rows);
+        if (!paren.ok) {
+          issues.push({
+            nodeId: node.id, nodeType: node.type, nodeLabel: label,
+            field: 'conditionRows', code: 'PAREN_MISMATCH', severity: 'error',
+            message: paren.message ?? 'Parentheses do not balance.',
+          });
+        }
+        break;
+      }
+
+      const op = String(d.operator ?? '');
+      const isLegacyExpr = op === 'expression';
+
+      if (!isLegacyExpr && !isNonEmptyString(d.field)) {
         issues.push({
           nodeId: node.id, nodeType: node.type, nodeLabel: label,
           field: 'field', code: 'REQUIRED_FIELD_MISSING', severity: 'error',
-          message: 'Filter field path is required.',
+          message: 'Filter left side (field) is required.',
         });
       }
       if (!isNonEmptyString(d.operator)) {
@@ -295,47 +334,214 @@ export function validateNode(
           message: 'Filter operator is required.',
         });
       }
-      const op = String(d.operator ?? '');
-      if (op && !['exists', 'not_exists', 'is_empty', 'is_not_empty'].includes(op) && !isNonEmptyString(d.value)) {
+      if (!isLegacyExpr && !isNonEmptyString(d.value)) {
         issues.push({
           nodeId: node.id, nodeType: node.type, nodeLabel: label,
           field: 'value', code: 'REQUIRED_FIELD_MISSING', severity: 'error',
-          message: 'Filter value is required for this operator.',
+          message: 'Filter right side (compare value) is required.',
         });
+      }
+
+      const fieldSrc = String(d.fieldSource ?? '');
+      const valueSrc = String(d.valueSource ?? '');
+      const fieldVal = String(d.field ?? '');
+      const valueVal = String(d.value ?? '');
+      if ((fieldSrc === 'expression' || (fieldVal && structuralExpressionCheck(fieldVal)))
+        && fieldVal.trim()) {
+        const parsed = validateFloExpression(fieldVal);
+        if (!parsed.ok) {
+          issues.push({
+            nodeId: node.id, nodeType: node.type, nodeLabel: label,
+            field: 'field', code: 'EXPRESSION_INVALID', severity: 'error',
+            message: parsed.message ?? 'Invalid expression on left side.',
+          });
+        }
+      }
+      if ((valueSrc === 'expression' || (valueVal && structuralExpressionCheck(valueVal)))
+        && valueVal.trim()) {
+        const parsed = validateFloExpression(valueVal);
+        if (!parsed.ok) {
+          issues.push({
+            nodeId: node.id, nodeType: node.type, nodeLabel: label,
+            field: 'value', code: 'EXPRESSION_INVALID', severity: 'error',
+            message: parsed.message ?? 'Invalid expression on right side.',
+          });
+        }
+      }
+      if (isLegacyExpr && valueVal.trim()) {
+        const parsed = validateFloExpression(valueVal);
+        if (!parsed.ok) {
+          issues.push({
+            nodeId: node.id, nodeType: node.type, nodeLabel: label,
+            field: 'value', code: 'EXPRESSION_INVALID', severity: 'error',
+            message: parsed.message ?? 'Invalid boolean expression.',
+          });
+        }
       }
       break;
     }
 
-    case NODE_TYPES.FIF:
-    case NODE_TYPES.LOOP: {
-      const floField = node.type === NODE_TYPES.LOOP ? 'bodyFloId' : 'selectedFloId';
-      const subFloId = String(d[floField] ?? '');
+    case NODE_TYPES.SWITCH: {
+      const branches = (d.branches as SwitchBranch[]) ?? [];
+      if (branches.length === 0) {
+        issues.push({
+          nodeId: node.id, nodeType: node.type, nodeLabel: label,
+          field: 'branches', code: 'REQUIRED_FIELD_MISSING', severity: 'error',
+          message: 'FloSwitch needs at least one route branch.',
+        });
+      }
+      for (const br of branches) {
+        if (!br.label?.trim()) {
+          issues.push({
+            nodeId: node.id, nodeType: node.type, nodeLabel: label,
+            field: `branches.${br.id}.label`, code: 'REQUIRED_FIELD_MISSING', severity: 'error',
+            message: 'Each switch route needs a label.',
+          });
+        }
+        const paren = validateConditionRowsParentheses(br.conditionRows ?? []);
+        if (!paren.ok) {
+          issues.push({
+            nodeId: node.id, nodeType: node.type, nodeLabel: label,
+            field: `branches.${br.id}.conditionRows`, code: 'PAREN_MISMATCH', severity: 'error',
+            message: `Route "${br.label}": ${paren.message ?? 'Parentheses do not balance.'}`,
+          });
+        }
+      }
+      break;
+    }
+
+    case NODE_TYPES.FIF: {
+      const subFloId = String(d.selectedFloId ?? '');
       if (!subFloId) {
         issues.push({
           nodeId: node.id, nodeType: node.type, nodeLabel: label,
-          field: floField, code: 'SUB_FLO_NOT_SELECTED', severity: 'error',
+          field: 'selectedFloId', code: 'SUB_FLO_NOT_SELECTED', severity: 'error',
           message: 'Sub-flow is not selected.',
         });
       } else if (checkResources) {
-        const miss = refMissing(node, floField, 'Flo', subFloId, hasResource(resources, 'flo', subFloId));
+        const miss = refMissing(node, 'selectedFloId', 'Flo', subFloId, hasResource(resources, 'flo', subFloId));
         if (miss) issues.push(miss);
       }
-      if (node.type === NODE_TYPES.LOOP) {
-        const mode = String(d.mode ?? 'array');
-        if (mode === 'array' && !isNonEmptyString(d.arrayPath)) {
+      break;
+    }
+
+    case NODE_TYPES.LOOP: {
+      if (!isNonEmptyString(d.continueExpr)) {
+        issues.push({
+          nodeId: node.id, nodeType: node.type, nodeLabel: label,
+          field: 'continueExpr', code: 'REQUIRED_FIELD_MISSING', severity: 'error',
+          message: 'Loop continue expression is required.',
+        });
+      } else {
+        const exprCheck = validateFloExpression(String(d.continueExpr));
+        if (!exprCheck.ok) {
           issues.push({
             nodeId: node.id, nodeType: node.type, nodeLabel: label,
-            field: 'arrayPath', code: 'REQUIRED_FIELD_MISSING', severity: 'error',
-            message: 'Array path is required for array loop mode.',
+            field: 'continueExpr', code: 'EXPRESSION_INVALID', severity: 'error',
+            message: exprCheck.message ?? 'Invalid continue expression.',
           });
         }
-        if (mode === 'expression' && !isNonEmptyString(d.expression)) {
+      }
+      const max = Number(d.maxIterations ?? 100);
+      if (!Number.isFinite(max) || max < 1 || max > 500) {
+        issues.push({
+          nodeId: node.id, nodeType: node.type, nodeLabel: label,
+          field: 'maxIterations', code: 'INVALID_VALUE', severity: 'error',
+          message: 'Max iterations must be between 1 and 500.',
+        });
+      }
+      const ot = String(d.outputTarget ?? 'cStream');
+      if (ot === 'local' || ot === 'global') {
+        if (!isNonEmptyString(d.outputVarName)) {
           issues.push({
             nodeId: node.id, nodeType: node.type, nodeLabel: label,
-            field: 'expression', code: 'REQUIRED_FIELD_MISSING', severity: 'error',
-            message: 'Loop expression is required.',
+            field: 'outputVarName', code: 'REQUIRED_FIELD_MISSING', severity: 'error',
+            message: 'Variable name is required when output target is local or global.',
           });
         }
+      }
+      break;
+    }
+
+    case NODE_TYPES.SUB_FLO: {
+      const displayName = String(d.displayName ?? d.canvasName ?? '').trim();
+      if (!displayName) {
+        issues.push({
+          nodeId: node.id, nodeType: node.type, nodeLabel: label,
+          field: 'displayName', code: 'REQUIRED_FIELD_MISSING', severity: 'error',
+          message: 'SubFlo canvas display name is required (shown in InvokeSubFlo dropdown).',
+        });
+      }
+      const inputs = (d.inputArgs as SubFloInputArg[] | undefined) ?? [];
+      const returns = (d.returnArgs as SubFloReturnArg[] | undefined) ?? [];
+      const inputNames = new Set<string>();
+      for (const arg of inputs) {
+        if (!isNonEmptyString(arg.name)) {
+          issues.push({
+            nodeId: node.id, nodeType: node.type, nodeLabel: label,
+            field: 'inputArgs', code: 'REQUIRED_FIELD_MISSING', severity: 'error',
+            message: 'Each SubFlo input argument needs a name.',
+          });
+        } else if (inputNames.has(arg.name.trim())) {
+          issues.push({
+            nodeId: node.id, nodeType: node.type, nodeLabel: label,
+            field: 'inputArgs', code: 'DUPLICATE_NAME', severity: 'error',
+            message: `Duplicate SubFlo input name "${arg.name}".`,
+          });
+        } else {
+          inputNames.add(arg.name.trim());
+        }
+      }
+      const returnNames = new Set<string>();
+      for (const arg of returns) {
+        if (!isNonEmptyString(arg.name)) {
+          issues.push({
+            nodeId: node.id, nodeType: node.type, nodeLabel: label,
+            field: 'returnArgs', code: 'REQUIRED_FIELD_MISSING', severity: 'error',
+            message: 'Each SubFlo return argument needs a name.',
+          });
+        } else if (returnNames.has(arg.name.trim())) {
+          issues.push({
+            nodeId: node.id, nodeType: node.type, nodeLabel: label,
+            field: 'returnArgs', code: 'DUPLICATE_NAME', severity: 'error',
+            message: `Duplicate SubFlo return name "${arg.name}".`,
+          });
+        } else {
+          returnNames.add(arg.name.trim());
+        }
+      }
+      break;
+    }
+
+    case NODE_TYPES.SUB_FLO_RETURN: {
+      const bindings = (d.returnBindings as SubFloReturnBinding[] | undefined) ?? [];
+      if (bindings.length === 0) {
+        issues.push({
+          nodeId: node.id, nodeType: node.type, nodeLabel: label,
+          field: 'returnBindings', code: 'REQUIRED_FIELD_MISSING', severity: 'warning',
+          message: 'SubFloReturn has no return bindings.',
+        });
+      }
+      for (const b of bindings) {
+        if (!isNonEmptyString(b.argName) || !isNonEmptyString(b.value)) {
+          issues.push({
+            nodeId: node.id, nodeType: node.type, nodeLabel: label,
+            field: 'returnBindings', code: 'REQUIRED_FIELD_MISSING', severity: 'error',
+            message: 'Each return binding needs an argument name and value/path.',
+          });
+        }
+      }
+      break;
+    }
+
+    case NODE_TYPES.INVOKE_SUB_FLO: {
+      const target = String(d.targetSubFloId ?? '');
+      if (!target) {
+        issues.push({
+          nodeId: node.id, nodeType: node.type, nodeLabel: label,
+          field: 'targetSubFloId', code: 'SUB_FLO_NOT_SELECTED', severity: 'error',
+          message: 'Select a SubFlo to invoke.',
+        });
       }
       break;
     }
@@ -426,6 +632,11 @@ export function validateNode(
           field: 'mappingRules', code: 'MAPPING_INCOMPLETE', severity: 'error',
           message: 'FloAction: at least one explicit mapping rule is required before publish.',
         });
+      }
+
+      if (connectionId) {
+        const connFields = resources?.connectionsById?.[connectionId];
+        issues.push(...validateFloActionNodeConnectorUrl(node, connFields));
       }
 
       metrics = {

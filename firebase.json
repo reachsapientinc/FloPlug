@@ -40,5 +40,31 @@
       { "source": "**", "destination": "/index.html" }
     ]
   }
-]
+],
+  "storage": [
+    {
+      "bucket": "floplug-schemas",
+      "rules": "storage.rules"
+    },
+    {
+      "bucket": "floplug-dev",
+      "rules": "storage.rules"
+    },
+    {
+      "bucket": "floplug-prod",
+      "rules": "storage.rules"
+    },
+    {
+      "bucket": "floplug-staging",
+      "rules": "storage.rules"
+    },
+    {
+      "bucket": "floplug-sandbox",
+      "rules": "storage.rules"
+    },
+    {
+      "bucket": "floplug-stage",
+      "rules": "storage.rules"
+    }
+  ]
 }

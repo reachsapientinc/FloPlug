@@ -56,3 +56,14 @@ export function computeGraphHash(graph: FloGraphSnapshot): string {
 export function graphsEqual(a: FloGraphSnapshot, b: FloGraphSnapshot): boolean {
   return computeGraphHash(a) === computeGraphHash(b);
 }
+
+/** True when a saved draft graph differs from the last published version. */
+export function hasInProgressDraft(floData: Record<string, unknown>): boolean {
+  const published = getPublishedGraph(floData);
+  if (!published?.nodes?.length) return false;
+  const draft = getDraftGraph(floData);
+  return !graphsEqual(
+    { nodes: draft.nodes, edges: draft.edges ?? [] },
+    { nodes: published.nodes, edges: published.edges ?? [] },
+  );
+}

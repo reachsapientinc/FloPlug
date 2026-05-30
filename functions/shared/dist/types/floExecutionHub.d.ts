@@ -2,12 +2,15 @@
  * FloExecution Hub — persisted run + validation records (JSON per node).
  */
 import type { FloValidationReport, FloNodeValidationSnapshot } from './floValidation.js';
-export type ExecutionRunStatus = 'running' | 'success' | 'error';
+/** `fatal` = platform/worker failure (OOM, timeout, crash). `error` = app/logic (mapping, URL, node). */
+export type ExecutionRunStatus = 'running' | 'success' | 'error' | 'killed' | 'fatal';
 /** Summary row for Pulse / Dashboard lists */
 export interface FloExecutionRunSummary {
     runId: string;
     floId: string;
     floName?: string;
+    /** User-provided label from designer Run (e.g. "Testing action mapping") */
+    runLabel?: string;
     floVersion?: number;
     /** Whether this run used draft canvas or published graph */
     executedGraph?: 'draft' | 'published';
@@ -20,6 +23,14 @@ export interface FloExecutionRunSummary {
     logLineCount?: number;
     /** Primary error message when status is error */
     errorMessage?: string;
+    /** Set when user requests kill; worker checks between nodes */
+    killRequested?: boolean;
+    killRequestedAt?: string;
+    killedByUid?: string;
+    /** Last engine heartbeat while status was running */
+    lastHeartbeatAt?: string;
+    /** application | platform | user_cancel */
+    failureCategory?: 'application' | 'platform' | 'user_cancel';
 }
 export type FloAlertType = 'FLO_INVALIDATED' | 'FLO_PUBLISH_BLOCKED' | 'FLO_RUN_FAILED' | 'FLO_REFERENCE_DRIFT';
 export type FloAlertSeverity = 'critical' | 'warning' | 'info';

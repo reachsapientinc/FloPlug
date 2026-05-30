@@ -94,6 +94,8 @@ export function useHubEntitledCatalog(hubId: string, tenantId: string) {
         label:       kit.name ?? kit.id,
         description: kit.description,
         actionIds:   entitledIds,
+        serviceModule:  kit.serviceModule,
+        serviceVersion: kit.serviceVersion,
       };
       if (!out[ref.connectorId]) out[ref.connectorId] = [];
       out[ref.connectorId].push(meta);

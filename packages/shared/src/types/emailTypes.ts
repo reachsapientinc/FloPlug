@@ -3,7 +3,7 @@
  * Types for emailNode configuration — used by both engine and designer.
  */
 
-export type EmailValueSource  = 'static' | 'cStream' | 'local' | 'global';
+export type EmailValueSource  = 'static' | 'cStream' | 'local' | 'global' | 'expression';
 export type EmailContentType  = 'text' | 'html';
 export type EmailBodyMode     = 'inline' | 'attachment';
 

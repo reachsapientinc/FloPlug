@@ -8,7 +8,17 @@ import { createPortal } from 'react-dom';
 import { httpsCallable } from 'firebase/functions';
 import type { Functions } from 'firebase/functions';
 import type { ParsedField } from '@floplug/shared';
-import { isWorkdayIdCompositePath, parseWorkdayIdCompositePath } from '@floplug/shared';
+import {
+  isWorkdayIdCompositePath,
+  parseWorkdayIdCompositePath,
+  isFieldEffectivelyRequired,
+} from '@floplug/shared';
+import {
+  ExpressionInsertProvider,
+  ExpressionTextarea,
+  FunctionLibraryPanel,
+  expressionSyntaxError,
+} from './expression/ExpressionEditorKit';
 import { Field, Btn, Help } from './ui';
 import {
   buildSourceTree,
@@ -65,6 +75,18 @@ interface Props {
 }
 
 type MapperLayout = 'compact' | 'full';
+/** Where the mapping editor sits in full-screen mapper. */
+type MapperEditorDock = 'bottom' | 'left';
+/** Left-docked editor width (trees shrink on the right). */
+type MapperEditorWidth = 'normal' | 'wide' | 'max';
+
+const MAPPER_SCROLL_CLASS = 'fp-mapper-scroll';
+
+const LEFT_EDITOR_WIDTH: Record<MapperEditorWidth, string> = {
+  normal: '42%',
+  wide:   '58%',
+  max:    '78%',
+};
 
 /** Isolated from App.css light --text-primary (#111) on dark modal. */
 const MAPPER_UI = {
@@ -107,15 +129,23 @@ const mapperFieldInput: React.CSSProperties = {
   boxSizing: 'border-box',
 };
 
-function mapperStyles(layout: MapperLayout) {
+const mapperScrollStyle: React.CSSProperties = {
+  overflowY: 'scroll',
+  overflowX: 'auto',
+  scrollbarWidth: 'thin',
+  scrollbarColor: 'rgba(148,163,184,0.55) rgba(30,41,59,0.85)',
+};
+
+function mapperStyles(layout: MapperLayout, inFlexWorkspace = false) {
   const full = layout === 'full';
   return {
     col: {
       flex: 1,
       minWidth: 0,
-      maxHeight: full ? 'calc(100vh - 300px)' : 160,
-      minHeight: full ? 320 : 120,
-      overflowY: 'auto' as const,
+      maxHeight: full && inFlexWorkspace ? '100%' : full ? 'calc(100vh - 300px)' : 160,
+      minHeight: full ? 200 : 120,
+      height: full && inFlexWorkspace ? '100%' : undefined,
+      ...mapperScrollStyle,
       border: '0.5px solid #2a2a3a',
       borderRadius: 8,
       padding: full ? 12 : 6,
@@ -148,7 +178,7 @@ function mapperStyles(layout: MapperLayout) {
       color: '#9ca3af',
       whiteSpace: 'pre-wrap' as const,
       maxHeight: full ? 220 : 120,
-      overflow: 'auto' as const,
+      ...mapperScrollStyle,
       background: '#0d0d14',
       padding: full ? 12 : 6,
       borderRadius: 6,
@@ -272,7 +302,7 @@ function CollapsibleTree({
                       : undefined}
                     title={
                       isClickLocked?.(n.path)
-                        ? 'Mapped — right-click to remove'
+                        ? 'Mapped — click or right-click to edit'
                         : isIdBranch
                           ? 'Map ID value (text)'
                           : undefined
@@ -362,7 +392,7 @@ function CollapsibleTree({
                 : undefined}
               title={
                 locked
-                  ? 'Mapped — right-click to remove'
+                  ? 'Mapped — click or right-click to edit'
                   : isTypeOption && n.idTypeValue
                     ? `wd:type="${n.idTypeValue}"`
                     : undefined
@@ -384,26 +414,19 @@ function CollapsibleTree({
   );
 }
 
-const editorPanelStyle: React.CSSProperties = {
-  marginTop: 10,
-  padding: 12,
-  borderRadius: 8,
-  border: '0.5px solid rgba(79,142,247,0.35)',
-  background: 'rgba(79,142,247,0.08)',
-  color: MAPPER_UI.text,
-};
-
 function TargetRuleEditor({
   targetPath,
   rule,
   onSave,
   onClear,
+  onCancel,
   layout,
 }: {
   targetPath: string;
   rule:       MappingRuleClient | undefined;
   onSave:     (rule: MappingRuleClient) => void;
   onClear:    () => void;
+  onCancel:   () => void;
   layout:     MapperLayout;
 }) {
   const [sourceType, setSourceType] = useState<MappingRuleClient['sourceType']>(
@@ -411,30 +434,45 @@ function TargetRuleEditor({
   );
   const [sourceField, setSourceField] = useState(rule?.sourceField ?? '');
   const [literalValue, setLiteralValue] = useState(rule?.literalValue ?? '');
+  const [exprError, setExprError] = useState<string | null>(null);
 
   useEffect(() => {
     setSourceType(rule?.sourceType ?? 'cStream');
     setSourceField(rule?.sourceField ?? '');
     setLiteralValue(rule?.literalValue ?? '');
+    setExprError(null);
   }, [targetPath, rule]);
 
   const fs = layout === 'full' ? 12 : 10;
+  const isExpression = sourceType === 'expression';
+  const exprInvalid = isExpression && expressionSyntaxError(sourceField);
+
+  const handleExprBlur = () => {
+    if (!isExpression) {
+      setExprError(null);
+      return;
+    }
+    setExprError(expressionSyntaxError(sourceField));
+  };
 
   return (
-    <div style={editorPanelStyle}>
-      <div style={{ fontSize: 11, color: MAPPER_UI.textMuted, marginBottom: 6 }}>Map target</div>
+    <div>
       <div style={{ fontSize: 12, fontWeight: 600, color: MAPPER_UI.inputText, marginBottom: 8, fontFamily: 'monospace' }}>
         {targetPath}
       </div>
       <label style={{ fontSize: 10, color: MAPPER_UI.textMuted }}>Source</label>
       <select
         value={sourceType}
-        onChange={e => setSourceType(e.target.value as MappingRuleClient['sourceType'])}
+        onChange={e => {
+          setSourceType(e.target.value as MappingRuleClient['sourceType']);
+          setExprError(null);
+        }}
         style={{ ...mapperFieldInput, fontSize: fs }}
       >
         <option value="cStream">cStream path</option>
         <option value="local">local path</option>
         <option value="global">global path</option>
+        <option value="expression">Expression</option>
         <option value="literal">Static value</option>
       </select>
       {sourceType === 'literal' ? (
@@ -444,6 +482,32 @@ function TargetRuleEditor({
           placeholder="Static value"
           style={{ ...mapperFieldInput, fontSize: fs }}
         />
+      ) : isExpression ? (
+        <ExpressionInsertProvider>
+          <div style={{
+            display: 'flex',
+            flexDirection: layout === 'full' ? 'row' : 'column',
+            gap: 0,
+            border: `0.5px solid ${MAPPER_UI.inputBorder}`,
+            borderRadius: 8,
+            overflow: 'hidden',
+            minHeight: layout === 'full' ? 260 : undefined,
+          }}>
+            <div style={{ flex: 1, padding: layout === 'full' ? 8 : 0, minWidth: 0 }}>
+              <ExpressionTextarea
+                value={sourceField}
+                onChange={setSourceField}
+                onBlur={handleExprBlur}
+                placeholder="e.g. concat(cStream.name, ' — ', floRunMeta.runId)"
+                rows={layout === 'full' ? 4 : 3}
+                syntaxError={exprError ?? exprInvalid}
+                showCursorPos={layout === 'full'}
+                active
+              />
+            </div>
+            <FunctionLibraryPanel layout={layout === 'full' ? 'sidebar' : 'stack'} width={layout === 'full' ? 198 : undefined} />
+          </div>
+        </ExpressionInsertProvider>
       ) : (
         <input
           value={sourceField}
@@ -452,20 +516,31 @@ function TargetRuleEditor({
           style={{ ...mapperFieldInput, fontSize: fs, fontFamily: 'monospace' }}
         />
       )}
-      <div style={{ display: 'flex', gap: 8 }}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <Btn
           variant="primary"
-          onClick={() => onSave({
-            targetField: targetPath,
-            sourceType,
-            ...(sourceType === 'literal'
-              ? { literalValue }
-              : { sourceField: sourceField.trim() }),
-          })}
+          disabled={Boolean(isExpression && (exprError || exprInvalid))}
+          onClick={() => {
+            if (isExpression) {
+              const err = expressionSyntaxError(sourceField);
+              if (err) {
+                setExprError(err);
+                return;
+              }
+            }
+            onSave({
+              targetField: targetPath,
+              sourceType,
+              ...(sourceType === 'literal'
+                ? { literalValue }
+                : { sourceField: sourceField.trim() }),
+            });
+          }}
         >
           Apply
         </Btn>
         <Btn variant="ghost" onClick={onClear} disabled={!rule}>Clear</Btn>
+        <Btn variant="ghost" onClick={onCancel}>Cancel</Btn>
       </div>
     </div>
   );
@@ -480,6 +555,7 @@ function IdMappingEditor({
   fixedTypeToken,
   onSave,
   onClear,
+  onCancel,
   layout,
 }: {
   idPath:          string;
@@ -490,6 +566,7 @@ function IdMappingEditor({
   fixedTypeToken?:  string;
   onSave:           (valueRule: MappingRuleClient, typeRule: MappingRuleClient) => void;
   onClear:          () => void;
+  onCancel:         () => void;
   layout:           MapperLayout;
 }) {
   const [sourceField, setSourceField] = useState(valueRule?.sourceField ?? '');
@@ -507,8 +584,7 @@ function IdMappingEditor({
   const typeLocked = !!fixedTypeToken;
 
   return (
-    <div style={editorPanelStyle}>
-      <div style={{ fontSize: 11, color: MAPPER_UI.textMuted, marginBottom: 6 }}>ID mapping</div>
+    <div>
       <div style={{ fontSize: 12, fontWeight: 600, color: MAPPER_UI.inputText, marginBottom: 8, fontFamily: 'monospace' }}>
         {idPath}
       </div>
@@ -562,7 +638,7 @@ function IdMappingEditor({
         placeholder="e.g. salesItem.revenueCategory"
         style={{ ...mapperFieldInput, fontSize: fs, fontFamily: 'monospace' }}
       />
-      <div style={{ display: 'flex', gap: 8 }}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <Btn
           variant="primary"
           onClick={() => {
@@ -600,6 +676,7 @@ function IdMappingEditor({
           Apply
         </Btn>
         <Btn variant="ghost" onClick={onClear} disabled={!valueRule && !typeRule}>Clear</Btn>
+        <Btn variant="ghost" onClick={onCancel}>Cancel</Btn>
       </div>
     </div>
   );
@@ -722,28 +799,38 @@ function CollapsiblePath({
   );
 }
 
+type ContextMenuItem = {
+  label:  string;
+  action: () => void;
+  danger?: boolean;
+};
+
 function MapperContextMenu({
   x,
   y,
-  label,
-  onRemove,
+  items,
   onClose,
 }: {
-  x:        number;
-  y:        number;
-  label:    string;
-  onRemove: () => void;
-  onClose:  () => void;
+  x:      number;
+  y:      number;
+  items:  ContextMenuItem[];
+  onClose: () => void;
 }) {
   useEffect(() => {
-    const close = () => onClose();
-    window.addEventListener('click', close);
-    window.addEventListener('contextmenu', close);
-    window.addEventListener('scroll', close, true);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    const closeOnOutside = () => onClose();
+    window.addEventListener('keydown', onKey, true);
+    window.addEventListener('click', closeOnOutside);
+    window.addEventListener('scroll', closeOnOutside, true);
     return () => {
-      window.removeEventListener('click', close);
-      window.removeEventListener('contextmenu', close);
-      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('click', closeOnOutside);
+      window.removeEventListener('scroll', closeOnOutside, true);
     };
   }, [onClose]);
 
@@ -754,41 +841,256 @@ function MapperContextMenu({
         left: x,
         top: y,
         zIndex: 10001,
-        minWidth: 160,
+        minWidth: 200,
         background: '#1a1f2e',
         border: '0.5px solid rgba(255,255,255,0.12)',
         borderRadius: 8,
         boxShadow: '0 8px 24px rgba(0,0,0,0.45)',
-        padding: 4,
+        overflow: 'hidden',
       }}
       onClick={e => e.stopPropagation()}
+      onContextMenu={e => e.preventDefault()}
     >
-      <button
-        type="button"
-        style={{
-          display: 'block',
-          width: '100%',
-          textAlign: 'left',
-          padding: '8px 12px',
-          border: 'none',
-          borderRadius: 6,
-          background: 'transparent',
-          color: '#f87171',
-          fontSize: 12,
-          cursor: 'pointer',
-          fontFamily: 'inherit',
-        }}
-        onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(248,113,113,0.12)'; }}
-        onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
-        onClick={() => {
-          onRemove();
-          onClose();
-        }}
-      >
-        {label}
-      </button>
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '6px 8px 6px 12px',
+        borderBottom: '0.5px solid rgba(255,255,255,0.08)',
+      }}>
+        <span style={{ fontSize: 10, color: MAPPER_UI.textMuted, letterSpacing: '0.04em' }}>Target</span>
+        <button
+          type="button"
+          aria-label="Close menu"
+          title="Close (Esc)"
+          onClick={onClose}
+          style={{
+            border: 'none',
+            background: 'transparent',
+            color: MAPPER_UI.textMuted,
+            cursor: 'pointer',
+            fontSize: 16,
+            lineHeight: 1,
+            padding: '2px 6px',
+            borderRadius: 4,
+            fontFamily: 'inherit',
+          }}
+        >
+          ×
+        </button>
+      </div>
+      <div style={{ padding: 4 }}>
+        {items.map(item => (
+          <button
+            key={item.label}
+            type="button"
+            style={{
+              display: 'block',
+              width: '100%',
+              textAlign: 'left',
+              padding: '8px 12px',
+              border: 'none',
+              borderRadius: 6,
+              background: 'transparent',
+              color: item.danger ? '#f87171' : MAPPER_UI.text,
+              fontSize: 12,
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+            }}
+            onMouseEnter={e => {
+              (e.currentTarget as HTMLButtonElement).style.background = item.danger
+                ? 'rgba(248,113,113,0.12)'
+                : 'rgba(79,142,247,0.12)';
+            }}
+            onMouseLeave={e => {
+              (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
+            }}
+            onClick={() => {
+              item.action();
+              onClose();
+            }}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
     </div>,
     document.body,
+  );
+}
+
+function MapperLayoutIconBtn({
+  title,
+  onClick,
+  children,
+  active,
+}: {
+  title:    string;
+  onClick:  () => void;
+  children: React.ReactNode;
+  active?:  boolean;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      onClick={onClick}
+      style={{
+        border: active ? '0.5px solid rgba(79,142,247,0.55)' : '0.5px solid rgba(255,255,255,0.12)',
+        background: active ? 'rgba(79,142,247,0.2)' : 'rgba(255,255,255,0.06)',
+        color: active ? MAPPER_UI.accent : MAPPER_UI.textMuted,
+        cursor: 'pointer',
+        fontSize: 14,
+        lineHeight: 1,
+        width: 32,
+        height: 32,
+        borderRadius: 6,
+        fontFamily: 'inherit',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function MappingEditorSheet({
+  open,
+  title,
+  subtitle,
+  onClose,
+  layout,
+  dock,
+  width,
+  onDockBottom,
+  onDockLeft,
+  onWiden,
+  onRestoreWidth,
+  children,
+}: {
+  open:            boolean;
+  title:           string;
+  subtitle?:       string;
+  onClose:         () => void;
+  layout:          MapperLayout;
+  dock:            MapperEditorDock;
+  width:           MapperEditorWidth;
+  onDockBottom:    () => void;
+  onDockLeft:      () => void;
+  onWiden:         () => void;
+  onRestoreWidth:  () => void;
+  children:        React.ReactNode;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  const isLeft = layout === 'full' && dock === 'left';
+  const canLayout = layout === 'full';
+
+  return (
+    <div style={{
+      flexShrink: isLeft ? 0 : 0,
+      flex: isLeft ? `0 0 ${LEFT_EDITOR_WIDTH[width]}` : undefined,
+      alignSelf: isLeft ? 'stretch' : undefined,
+      display: isLeft ? 'flex' : 'block',
+      flexDirection: isLeft ? 'column' : undefined,
+      minWidth: isLeft ? 280 : undefined,
+      maxWidth: isLeft ? '85%' : undefined,
+      marginTop: isLeft ? 0 : layout === 'full' ? 12 : 8,
+      borderTop: isLeft ? undefined : '0.5px solid rgba(79,142,247,0.35)',
+      borderRight: isLeft ? '0.5px solid rgba(79,142,247,0.35)' : undefined,
+      background: 'rgba(79,142,247,0.06)',
+      borderRadius: isLeft ? 8 : layout === 'full' ? '0 0 8px 8px' : 8,
+      overflow: 'hidden',
+      minHeight: isLeft ? 0 : undefined,
+    }}>
+      <div style={{
+        display: 'flex',
+        alignItems: 'flex-start',
+        justifyContent: 'space-between',
+        gap: 8,
+        padding: layout === 'full' ? '12px 14px 0' : '10px 10px 0',
+        flexShrink: 0,
+      }}>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: layout === 'full' ? 13 : 11, fontWeight: 600, color: MAPPER_UI.inputText }}>
+            {title}
+          </div>
+          {subtitle && (
+            <div style={{ fontSize: 10, color: MAPPER_UI.textMuted, marginTop: 4, lineHeight: 1.45 }}>
+              {subtitle}
+            </div>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: 4, flexShrink: 0, alignItems: 'center' }}>
+          {canLayout && (
+            <>
+              <MapperLayoutIconBtn
+                title="Dock editor on left (wider workspace)"
+                onClick={onDockLeft}
+                active={dock === 'left'}
+              >
+                ◧
+              </MapperLayoutIconBtn>
+              <MapperLayoutIconBtn
+                title="Dock editor at bottom (original)"
+                onClick={onDockBottom}
+                active={dock === 'bottom'}
+              >
+                ◫
+              </MapperLayoutIconBtn>
+              {dock === 'left' && (
+                <>
+                  <MapperLayoutIconBtn
+                    title="Expand editor left (shrink trees)"
+                    onClick={onWiden}
+                    active={width !== 'normal'}
+                  >
+                    ◀
+                  </MapperLayoutIconBtn>
+                  <MapperLayoutIconBtn
+                    title="Restore balanced split"
+                    onClick={onRestoreWidth}
+                    active={width === 'normal'}
+                  >
+                    ▣
+                  </MapperLayoutIconBtn>
+                </>
+              )}
+            </>
+          )}
+          <MapperLayoutIconBtn title="Close (Esc)" onClick={onClose}>
+            ×
+          </MapperLayoutIconBtn>
+        </div>
+      </div>
+      <div
+        className={MAPPER_SCROLL_CLASS}
+        style={{
+          padding: layout === 'full' ? '10px 14px 14px' : '8px 10px 10px',
+          flex: isLeft ? 1 : undefined,
+          minHeight: isLeft ? 0 : undefined,
+          maxHeight: isLeft ? undefined : layout === 'full' ? 'min(42vh, 380px)' : 220,
+          ...mapperScrollStyle,
+        }}
+      >
+        {children}
+      </div>
+    </div>
   );
 }
 
@@ -836,9 +1138,12 @@ const modalHeader: React.CSSProperties = {
 
 const modalBody: React.CSSProperties = {
   flex: 1,
-  overflow: 'auto',
+  overflow: 'hidden',
   padding: '16px 18px 18px',
   color: MAPPER_UI.text,
+  display: 'flex',
+  flexDirection: 'column',
+  minHeight: 0,
 };
 
 export const FloActionFieldMapper: React.FC<Props> = (props) => {
@@ -867,12 +1172,26 @@ export const FloActionFieldMapper: React.FC<Props> = (props) => {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewText, setPreviewText]       = useState('');
   const [mapperHint, setMapperHint] = useState('');
+  const [mappingEditorOpen, setMappingEditorOpen] = useState(false);
+  const [editorDock, setEditorDock] = useState<MapperEditorDock>('left');
+  const [editorWidth, setEditorWidth] = useState<MapperEditorWidth>('wide');
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
-    label: string;
-    onRemove: () => void;
+    items: ContextMenuItem[];
   } | null>(null);
+
+  const closeMappingEditor = useCallback(() => {
+    setMappingEditorOpen(false);
+    setSelectedTargetPath(null);
+    setSelectedTargetPaths(new Set());
+  }, []);
+
+  const openMappingEditor = useCallback((valuePath: string) => {
+    setSelectedTargetPaths(new Set());
+    setSelectedTargetPath(valuePath);
+    setMappingEditorOpen(true);
+  }, []);
 
   const flashHint = useCallback((msg: string) => {
     setMapperHint(msg);
@@ -964,6 +1283,16 @@ export const FloActionFieldMapper: React.FC<Props> = (props) => {
     return countMappedRequired(targetMeta.fields, mappingRules);
   }, [targetMeta, mappingRules]);
 
+  const effectivelyRequired = useCallback((path: string) => {
+    const f = fieldByPath.get(path);
+    if (!f || !targetMeta?.fields) return false;
+    const resolved: Record<string, unknown> = {};
+    for (const r of mappingRules) {
+      if (r.targetField) resolved[r.targetField] = r.literalValue ?? r.sourceField ?? true;
+    }
+    return isFieldEffectivelyRequired(f, targetMeta.fields, resolved, mappingRules);
+  }, [fieldByPath, targetMeta, mappingRules]);
+
   const loadTarget = useCallback(async (forceRefresh = false) => {
     if (!connectorId || !floKitId || !actionId) return;
     setLoadingTarget(true);
@@ -988,25 +1317,42 @@ export const FloActionFieldMapper: React.FC<Props> = (props) => {
   useEffect(() => {
     if (!mapperOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (pickSource) {
-          setPickSource(null);
-          return;
-        }
-        if (selectedTargetPaths.size > 0) {
-          setSelectedTargetPaths(new Set());
-          return;
-        }
-        if (selectedTargetPath) {
-          setSelectedTargetPath(null);
-          return;
-        }
-        setMapperOpen(false);
+      if (e.key !== 'Escape') return;
+      if (contextMenu) {
+        setContextMenu(null);
+        e.stopPropagation();
+        return;
       }
+      if (mappingEditorOpen) {
+        closeMappingEditor();
+        e.stopPropagation();
+        return;
+      }
+      if (pickSource) {
+        setPickSource(null);
+        return;
+      }
+      if (selectedTargetPaths.size > 0) {
+        setSelectedTargetPaths(new Set());
+        return;
+      }
+      if (selectedTargetPath) {
+        setSelectedTargetPath(null);
+        return;
+      }
+      setMapperOpen(false);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [mapperOpen, pickSource, selectedTargetPath, selectedTargetPaths]);
+  }, [
+    mapperOpen,
+    contextMenu,
+    mappingEditorOpen,
+    closeMappingEditor,
+    pickSource,
+    selectedTargetPath,
+    selectedTargetPaths,
+  ]);
 
   const onSampleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1090,7 +1436,11 @@ export const FloActionFieldMapper: React.FC<Props> = (props) => {
     setSelectedTargetPaths(new Set());
 
     if (hasMappingToTarget(mappingRules, valuePath)) {
-      flashHint('This target is mapped — right-click it to remove the mapping.');
+      if (mappingEditorOpen && selectedTargetPath === valuePath) {
+        closeMappingEditor();
+        return;
+      }
+      openMappingEditor(valuePath);
       return;
     }
 
@@ -1103,11 +1453,11 @@ export const FloActionFieldMapper: React.FC<Props> = (props) => {
         }));
         return;
       }
-      if (selectedTargetPath === valuePath) {
-        setSelectedTargetPath(null);
+      if (mappingEditorOpen && selectedTargetPath === valuePath) {
+        closeMappingEditor();
         return;
       }
-      setSelectedTargetPath(valuePath);
+      openMappingEditor(valuePath);
       return;
     }
 
@@ -1129,8 +1479,8 @@ export const FloActionFieldMapper: React.FC<Props> = (props) => {
         onRulesChange(rules);
         return;
       }
-      if (selectedTargetPath === path || selectedTargetPath === idPath) {
-        setSelectedTargetPath(null);
+      if (mappingEditorOpen && (selectedTargetPath === path || selectedTargetPath === idPath)) {
+        closeMappingEditor();
         return;
       }
       onRulesChange(upsertRule(mappingRules, {
@@ -1138,7 +1488,7 @@ export const FloActionFieldMapper: React.FC<Props> = (props) => {
         sourceType:  'literal',
         literalValue: typeVal,
       }));
-      setSelectedTargetPath(idPath);
+      openMappingEditor(idPath);
       return;
     }
 
@@ -1150,11 +1500,11 @@ export const FloActionFieldMapper: React.FC<Props> = (props) => {
       }));
       return;
     }
-    if (selectedTargetPath === path || selectedTargetPath === valuePath) {
-      setSelectedTargetPath(null);
+    if (mappingEditorOpen && (selectedTargetPath === path || selectedTargetPath === valuePath)) {
+      closeMappingEditor();
       return;
     }
-    setSelectedTargetPath(valuePath);
+    openMappingEditor(valuePath);
   };
 
   const onContextMenuSource = (path: string, e: React.MouseEvent) => {
@@ -1165,34 +1515,48 @@ export const FloActionFieldMapper: React.FC<Props> = (props) => {
     setContextMenu({
       x: e.clientX,
       y: e.clientY,
-      label: `Remove ${n} mapping(s) from this source`,
-      onRemove: () => {
-        onRulesChange(removeRulesForSource(mappingRules, path));
-        if (pickSource === path) setPickSource(null);
-      },
+      items: [{
+        label: `Remove ${n} mapping(s) from this source`,
+        danger: true,
+        action: () => {
+          onRulesChange(removeRulesForSource(mappingRules, path));
+          if (pickSource === path) setPickSource(null);
+        },
+      }],
     });
   };
 
   const onContextMenuTarget = (path: string, e: React.MouseEvent) => {
+    if (!isTargetLeaf(path) || path.includes('.__type_unresolved__')) return;
     const valuePath = resolveTargetValuePath(path);
-    if (!hasMappingToTarget(mappingRules, valuePath)) return;
+    const mapped = hasMappingToTarget(mappingRules, valuePath);
     e.preventDefault();
     e.stopPropagation();
-    setContextMenu({
-      x: e.clientX,
-      y: e.clientY,
-      label: 'Remove mapping to this target',
-      onRemove: () => {
-        onRulesChange(removeMappingsForTarget(mappingRules, valuePath));
-        if (
-          selectedTargetPath === path
-          || selectedTargetPath === valuePath
-          || selectedTargetPath === `${valuePath}.@type`
-        ) {
-          setSelectedTargetPath(null);
-        }
+    const items: ContextMenuItem[] = [
+      {
+        label: mapped ? 'Edit mapping…' : 'Add mapping…',
+        action: () => openMappingEditor(
+          isWorkdayIdCompositePath(valuePath) ? valuePath : valuePath,
+        ),
       },
-    });
+    ];
+    if (mapped) {
+      items.push({
+        label: 'Remove mapping to this target',
+        danger: true,
+        action: () => {
+          onRulesChange(removeMappingsForTarget(mappingRules, valuePath));
+          if (
+            selectedTargetPath === path
+            || selectedTargetPath === valuePath
+            || selectedTargetPath === `${valuePath}.@type`
+          ) {
+            closeMappingEditor();
+          }
+        },
+      });
+    }
+    setContextMenu({ x: e.clientX, y: e.clientY, items });
   };
 
   const removeConnection = (targetField: string) => {
@@ -1202,7 +1566,7 @@ export const FloActionFieldMapper: React.FC<Props> = (props) => {
       selectedTargetPath === targetField
       || selectedTargetPath === valuePath
     ) {
-      setSelectedTargetPath(null);
+      closeMappingEditor();
     }
   };
 
@@ -1310,10 +1674,33 @@ export const FloActionFieldMapper: React.FC<Props> = (props) => {
     );
   }
 
+  const cycleEditorWidth = useCallback(() => {
+    setEditorWidth(w => (w === 'normal' ? 'wide' : w === 'wide' ? 'max' : 'normal'));
+  }, []);
+
   const renderMapperBody = (layout: MapperLayout) => {
-    const s = mapperStyles(layout);
+    const inFlexWorkspace = layout === 'full' && mappingEditorOpen && editorDock === 'left';
+    const s = mapperStyles(layout, inFlexWorkspace);
+    const editorOpen = mappingEditorOpen && !!selectedTargetPath;
+    const useLeftDock = layout === 'full' && editorOpen && editorDock === 'left';
+    const editorTitle = idMappingContext
+      ? 'ID mapping'
+      : selectedTargetPath
+        ? (selectedRule ? 'Edit mapping' : 'Add mapping')
+        : '';
+    const editorSubtitle = selectedTargetPath && !idMappingContext
+      ? 'cStream, local, global, expression, or static value — Esc or × to cancel'
+      : idMappingContext
+        ? 'wd:type and cStream value for Workday ID — Esc or × to cancel'
+        : undefined;
+
     return (
-      <>
+      <div style={layout === 'full' ? {
+        display: 'flex',
+        flexDirection: 'column',
+        flex: 1,
+        minHeight: 0,
+      } : undefined}>
         {loadingTarget && <div style={s.hint}>Loading target schema…</div>}
         {targetError && <span style={{ fontSize: layout === 'full' ? 13 : 9, color: '#ef4444' }}>{targetError}</span>}
         {targetMeta && (
@@ -1337,7 +1724,7 @@ export const FloActionFieldMapper: React.FC<Props> = (props) => {
           />
           <div style={s.hint}>
             Pin a source, then click targets (same source → many targets). Or ⌘/Ctrl+click multiple targets, then click the source.
-            Mapped targets lock until removed (right-click). ID type rows: pick wd:type under ID. Reload mapping index if fields look stale.
+            Click or right-click a target → Add mapping opens the editor (left by default; use ◧/◫ to dock). Expand ◀ shrinks trees on the right. Right-click mapped targets to edit or remove.
           </div>
           {mapperHint && (
             <span style={{
@@ -1356,23 +1743,102 @@ export const FloActionFieldMapper: React.FC<Props> = (props) => {
           )}
         </div>
 
-        {(pickSource || selectedTargetPath || selectedTargetPaths.size > 0) && (
+        {(pickSource || (mappingEditorOpen && selectedTargetPath) || selectedTargetPaths.size > 0) && (
           <span style={{ ...s.hint, color: '#4f8ef7', marginBottom: 8, display: 'block' }}>
             {pickSource
               ? `Source "${pickSource}" pinned — click targets to wire (repeat for multiple targets)`
               : selectedTargetPaths.size > 0
                 ? `${selectedTargetPaths.size} target(s) selected — click a source to wire all`
-                : `Editing target "${selectedTargetPath}"`}
+                : mappingEditorOpen && selectedTargetPath
+                  ? `Mapping editor open for "${selectedTargetPath}"`
+                  : null}
           </span>
         )}
 
         <div style={{
           display: 'flex',
           gap: layout === 'full' ? 12 : 6,
-          minHeight: layout === 'full' ? 400 : undefined,
+          flex: layout === 'full' ? 1 : undefined,
+          minHeight: layout === 'full' ? 0 : 280,
           alignItems: 'stretch',
+          minWidth: 0,
+          overflow: 'hidden',
         }}>
-          <div style={{ ...s.col, flex: 1 }}>
+          {useLeftDock && (
+            <MappingEditorSheet
+              open={editorOpen}
+              title={editorTitle}
+              subtitle={editorSubtitle}
+              onClose={closeMappingEditor}
+              layout={layout}
+              dock={editorDock}
+              width={editorWidth}
+              onDockLeft={() => setEditorDock('left')}
+              onDockBottom={() => setEditorDock('bottom')}
+              onWiden={cycleEditorWidth}
+              onRestoreWidth={() => setEditorWidth('normal')}
+            >
+              {idMappingContext ? (
+                <IdMappingEditor
+                  idPath={idMappingContext.fixedTypeToken && selectedTargetPath
+                    ? selectedTargetPath
+                    : idMappingContext.idPath}
+                  typeField={idMappingContext.typeField}
+                  typeEnumValues={idMappingContext.typeEnumValues}
+                  valueRule={idMappingContext.valueRule}
+                  typeRule={idMappingContext.typeRule}
+                  fixedTypeToken={idMappingContext.fixedTypeToken}
+                  layout={layout}
+                  onSave={(valueRule, typeRule) => {
+                    if (idMappingContext.fixedTypeToken && selectedTargetPath) {
+                      onRulesChange(upsertRule(mappingRules, {
+                        ...valueRule,
+                        targetField: selectedTargetPath,
+                      }));
+                    } else {
+                      let rules = upsertRule(mappingRules, typeRule);
+                      rules = upsertRule(rules, valueRule);
+                      onRulesChange(rules);
+                    }
+                    closeMappingEditor();
+                  }}
+                  onClear={() => {
+                    onRulesChange(
+                      removeMappingsForTarget(
+                        mappingRules,
+                        selectedTargetPath ?? idMappingContext.idPath,
+                      ),
+                    );
+                  }}
+                  onCancel={closeMappingEditor}
+                />
+              ) : selectedTargetPath ? (
+                <TargetRuleEditor
+                  targetPath={selectedTargetPath}
+                  rule={selectedRule}
+                  layout={layout}
+                  onSave={rule => {
+                    onRulesChange(upsertRule(mappingRules, rule));
+                    closeMappingEditor();
+                  }}
+                  onClear={() => {
+                    onRulesChange(removeMappingsForTarget(mappingRules, selectedTargetPath));
+                  }}
+                  onCancel={closeMappingEditor}
+                />
+              ) : null}
+            </MappingEditorSheet>
+          )}
+
+          <div style={{
+            display: 'flex',
+            gap: layout === 'full' ? 12 : 6,
+            flex: 1,
+            minWidth: 0,
+            minHeight: 0,
+            alignItems: 'stretch',
+          }}>
+          <div className={MAPPER_SCROLL_CLASS} style={{ ...s.col, flex: 1 }}>
             <span style={{ ...s.colTitle, color: '#6ee7b7' }}>Your data (source)</span>
             <span style={{ display: 'block', fontSize: layout === 'full' ? 11 : 9, color: '#9ca3af', marginBottom: 6 }}>
               Right-click mapped source to remove all its connections
@@ -1396,16 +1862,20 @@ export const FloActionFieldMapper: React.FC<Props> = (props) => {
             )}
           </div>
 
-          <div style={{
-            ...s.col,
-            flex: layout === 'full' ? '0 0 300px' : '0 0 130px',
-            maxHeight: layout === 'full' ? 'calc(100vh - 300px)' : 160,
-            background: 'rgba(16,185,129,0.04)',
-            overflowX: 'hidden',
-          }}>
+          <div
+            className={MAPPER_SCROLL_CLASS}
+            style={{
+              ...s.col,
+              flex: layout === 'full'
+                ? (useLeftDock ? '0 0 200px' : '0 0 300px')
+                : '0 0 130px',
+              maxHeight: inFlexWorkspace ? '100%' : layout === 'full' ? 'calc(100vh - 300px)' : 160,
+              background: 'rgba(16,185,129,0.04)',
+            }}
+          >
             <span style={{ ...s.colTitle, color: '#6ee7b7' }}>Connections</span>
             <span style={{ display: 'block', fontSize: layout === 'full' ? 11 : 9, color: '#9ca3af', marginBottom: 6 }}>
-              Right-click a card to remove
+              Click a card to edit · right-click to remove
             </span>
             {mappingRules.length === 0 ? (
               <span style={{ color: MAPPER_UI.textMuted, fontSize: layout === 'full' ? 12 : 10 }}>
@@ -1419,29 +1889,49 @@ export const FloActionFieldMapper: React.FC<Props> = (props) => {
                     type="button"
                     onClick={() => {
                       const vp = resolveTargetValuePath(r.targetField);
-                      if (hasMappingToTarget(mappingRules, vp)) return;
-                      setSelectedTargetPath(
-                        selectedTargetPath === r.targetField ? null : r.targetField,
-                      );
+                      const editPath = r.targetField.endsWith('.ID') || isWorkdayIdCompositePath(r.targetField)
+                        ? r.targetField
+                        : vp;
+                      if (mappingEditorOpen && selectedTargetPath === editPath) {
+                        closeMappingEditor();
+                      } else {
+                        openMappingEditor(editPath);
+                      }
                     }}
                     onContextMenu={e => {
                       e.preventDefault();
                       e.stopPropagation();
+                      const vp = resolveTargetValuePath(r.targetField);
+                      const editPath = r.targetField.endsWith('.ID') || isWorkdayIdCompositePath(r.targetField)
+                        ? r.targetField
+                        : vp;
                       setContextMenu({
                         x: e.clientX,
                         y: e.clientY,
-                        label: 'Remove this connection',
-                        onRemove: () => removeConnection(r.targetField),
+                        items: [
+                          { label: 'Edit mapping…', action: () => openMappingEditor(editPath) },
+                          {
+                            label: 'Remove this connection',
+                            danger: true,
+                            action: () => removeConnection(r.targetField),
+                          },
+                        ],
                       });
                     }}
                     style={{
                       textAlign: 'left',
                       padding: '8px 8px',
                       borderRadius: 6,
-                      border: selectedTargetPath === r.targetField
+                      border: mappingEditorOpen && (
+                        selectedTargetPath === r.targetField
+                        || selectedTargetPath === resolveTargetValuePath(r.targetField)
+                      )
                         ? '0.5px solid rgba(79,142,247,0.5)'
                         : '0.5px solid rgba(255,255,255,0.06)',
-                      background: selectedTargetPath === r.targetField
+                      background: mappingEditorOpen && (
+                        selectedTargetPath === r.targetField
+                        || selectedTargetPath === resolveTargetValuePath(r.targetField)
+                      )
                         ? 'rgba(79,142,247,0.15)'
                         : 'rgba(255,255,255,0.02)',
                       cursor: 'pointer',
@@ -1478,10 +1968,10 @@ export const FloActionFieldMapper: React.FC<Props> = (props) => {
             )}
           </div>
 
-          <div style={{ ...s.col, flex: 1.1 }}>
+          <div className={MAPPER_SCROLL_CLASS} style={{ ...s.col, flex: useLeftDock ? 1 : 1.1 }}>
             <span style={{ ...s.colTitle, color: '#fcd34d' }}>Action needs (target)</span>
             <span style={{ display: 'block', fontSize: layout === 'full' ? 11 : 9, color: '#9ca3af', marginBottom: 6 }}>
-              Right-click mapped target to remove
+              Right-click any field — Add mapping or Remove
             </span>
             {!targetTree.length ? (
               <span style={{ color: MAPPER_UI.textMuted }}>Loading…</span>
@@ -1506,7 +1996,7 @@ export const FloActionFieldMapper: React.FC<Props> = (props) => {
                   const composite = parseWorkdayIdCompositePath(path);
                   return (
                     <>
-                      {f.required && !isTypeOpt && <span style={{ color: '#ef4444' }}> *</span>}
+                      {effectivelyRequired(path) && !isTypeOpt && <span style={{ color: '#ef4444' }}> *</span>}
                       {isTypeOpt && (
                         <span style={{ color: '#ddd6fe', fontSize: layout === 'full' ? 11 : 9 }}>
                           {composite ? ` wd:type="${composite.typeToken}"` : ' wd:type'}
@@ -1517,53 +2007,77 @@ export const FloActionFieldMapper: React.FC<Props> = (props) => {
                 }}
               />
             )}
-            {idMappingContext ? (
-              <IdMappingEditor
-                idPath={idMappingContext.fixedTypeToken && selectedTargetPath
-                  ? selectedTargetPath
-                  : idMappingContext.idPath}
-                typeField={idMappingContext.typeField}
-                typeEnumValues={idMappingContext.typeEnumValues}
-                valueRule={idMappingContext.valueRule}
-                typeRule={idMappingContext.typeRule}
-                fixedTypeToken={idMappingContext.fixedTypeToken}
-                layout={layout}
-                onSave={(valueRule, typeRule) => {
-                  if (idMappingContext.fixedTypeToken && selectedTargetPath) {
-                    onRulesChange(upsertRule(mappingRules, {
-                      ...valueRule,
-                      targetField: selectedTargetPath,
-                    }));
-                    return;
-                  }
-                  let rules = upsertRule(mappingRules, typeRule);
-                  rules = upsertRule(rules, valueRule);
-                  onRulesChange(rules);
-                }}
-                onClear={() => {
-                  onRulesChange(
-                    removeMappingsForTarget(
-                      mappingRules,
-                      selectedTargetPath ?? idMappingContext.idPath,
-                    ),
-                  );
-                }}
-              />
-            ) : selectedTargetPath ? (
-              <TargetRuleEditor
-                targetPath={selectedTargetPath}
-                rule={selectedRule}
-                layout={layout}
-                onSave={rule => onRulesChange(upsertRule(mappingRules, rule))}
-                onClear={() => {
-                  onRulesChange(removeMappingsForTarget(mappingRules, selectedTargetPath));
-                }}
-              />
-            ) : null}
+          </div>
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+        {!useLeftDock && (
+        <MappingEditorSheet
+          open={editorOpen}
+          title={editorTitle}
+          subtitle={editorSubtitle}
+          onClose={closeMappingEditor}
+          layout={layout}
+          dock={editorDock}
+          width={editorWidth}
+          onDockLeft={() => setEditorDock('left')}
+          onDockBottom={() => setEditorDock('bottom')}
+          onWiden={cycleEditorWidth}
+          onRestoreWidth={() => setEditorWidth('normal')}
+        >
+          {idMappingContext ? (
+            <IdMappingEditor
+              idPath={idMappingContext.fixedTypeToken && selectedTargetPath
+                ? selectedTargetPath
+                : idMappingContext.idPath}
+              typeField={idMappingContext.typeField}
+              typeEnumValues={idMappingContext.typeEnumValues}
+              valueRule={idMappingContext.valueRule}
+              typeRule={idMappingContext.typeRule}
+              fixedTypeToken={idMappingContext.fixedTypeToken}
+              layout={layout}
+              onSave={(valueRule, typeRule) => {
+                if (idMappingContext.fixedTypeToken && selectedTargetPath) {
+                  onRulesChange(upsertRule(mappingRules, {
+                    ...valueRule,
+                    targetField: selectedTargetPath,
+                  }));
+                } else {
+                  let rules = upsertRule(mappingRules, typeRule);
+                  rules = upsertRule(rules, valueRule);
+                  onRulesChange(rules);
+                }
+                closeMappingEditor();
+              }}
+              onClear={() => {
+                onRulesChange(
+                  removeMappingsForTarget(
+                    mappingRules,
+                    selectedTargetPath ?? idMappingContext.idPath,
+                  ),
+                );
+              }}
+              onCancel={closeMappingEditor}
+            />
+          ) : selectedTargetPath ? (
+            <TargetRuleEditor
+              targetPath={selectedTargetPath}
+              rule={selectedRule}
+              layout={layout}
+              onSave={rule => {
+                onRulesChange(upsertRule(mappingRules, rule));
+                closeMappingEditor();
+              }}
+              onClear={() => {
+                onRulesChange(removeMappingsForTarget(mappingRules, selectedTargetPath));
+              }}
+              onCancel={closeMappingEditor}
+            />
+          ) : null}
+        </MappingEditorSheet>
+        )}
+
+        <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap', alignItems: 'center', flexShrink: 0 }}>
           <Btn variant="ghost" onClick={onAutoMap} disabled={!sourceObj || !targetMeta}>Auto-map</Btn>
           <Btn variant="ghost" onClick={onPreviewRequest} disabled={previewLoading || !sourceObj}>
             {previewLoading ? 'Preview…' : 'Preview request'}
@@ -1576,10 +2090,35 @@ export const FloActionFieldMapper: React.FC<Props> = (props) => {
           )}
         </div>
 
-        {previewText && <pre style={s.preview}>{previewText}</pre>}
-      </>
+        {previewText && <pre className={MAPPER_SCROLL_CLASS} style={s.preview}>{previewText}</pre>}
+      </div>
     );
   };
+
+  const mapperScrollbarCss = `
+    .${MAPPER_SCROLL_CLASS} {
+      overflow-y: scroll;
+      overflow-x: auto;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(148,163,184,0.6) rgba(30,41,59,0.95);
+    }
+    .${MAPPER_SCROLL_CLASS}::-webkit-scrollbar {
+      width: 11px;
+      height: 11px;
+    }
+    .${MAPPER_SCROLL_CLASS}::-webkit-scrollbar-track {
+      background: rgba(30,41,59,0.95);
+      border-radius: 6px;
+    }
+    .${MAPPER_SCROLL_CLASS}::-webkit-scrollbar-thumb {
+      background: rgba(148,163,184,0.55);
+      border-radius: 6px;
+      border: 2px solid rgba(30,41,59,0.95);
+    }
+    .${MAPPER_SCROLL_CLASS}::-webkit-scrollbar-thumb:hover {
+      background: rgba(191,219,254,0.75);
+    }
+  `;
 
   const modal = mapperOpen ? createPortal(
     <div
@@ -1589,6 +2128,7 @@ export const FloActionFieldMapper: React.FC<Props> = (props) => {
       aria-label="Field mapper"
       onClick={e => { if (e.target === e.currentTarget) setMapperOpen(false); }}
     >
+      <style>{mapperScrollbarCss}</style>
       <div style={modalShell} onClick={e => e.stopPropagation()}>
         <div style={modalHeader}>
           <div>
@@ -1599,7 +2139,16 @@ export const FloActionFieldMapper: React.FC<Props> = (props) => {
               {mappingRules.length > 0 ? ` · ${mappingRules.length} rule(s)` : ''}
             </div>
           </div>
-          <Btn variant="ghost" onClick={() => setMapperOpen(false)}>Close</Btn>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <span style={{ fontSize: 11, color: MAPPER_UI.textMuted }}>
+              Mappings apply on Apply — use designer Save to persist the flo
+            </span>
+            <Btn variant="ghost" onClick={() => {
+              closeMappingEditor();
+              setContextMenu(null);
+              setMapperOpen(false);
+            }}>Close</Btn>
+          </div>
         </div>
         <div style={modalBody}>
           {renderMapperBody('full')}
@@ -1627,7 +2176,7 @@ export const FloActionFieldMapper: React.FC<Props> = (props) => {
             </Btn>
           </div>
           <div style={{ marginTop: 6 }}><Help>
-            Map sample data to action fields in a full-screen view (Esc to close).
+            Full-screen mapper: right-click targets for Add mapping; editor panel stays visible at the bottom (Esc to cancel).
           </Help></div>
         </Field>
       </div>
@@ -1635,8 +2184,7 @@ export const FloActionFieldMapper: React.FC<Props> = (props) => {
         <MapperContextMenu
           x={contextMenu.x}
           y={contextMenu.y}
-          label={contextMenu.label}
-          onRemove={contextMenu.onRemove}
+          items={contextMenu.items}
           onClose={() => setContextMenu(null)}
         />
       )}

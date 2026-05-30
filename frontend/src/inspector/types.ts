@@ -1,6 +1,6 @@
 import type { Functions } from 'firebase/functions';
 import type { Node, Edge } from '@xyflow/react';
-import type {FloActionPaletteItem} from '@floplug/shared';
+import type { FloActionPaletteItem, HubActionNodeDoc } from '@floplug/shared';
 
 export interface FloListItem {
   id:   string;
@@ -19,6 +19,8 @@ export interface DesignerInspectorContext {
   onTestNode:    (nodeId: string) => Promise<void>;
   testingNodeId: string | null;
   floActions?: FloActionPaletteItem[];
+  /** Live hub FloAction doc by floKitId (for URL preview / kit context). */
+  getHubActionDoc?: (floKitId: string) => HubActionNodeDoc | undefined;
 }
 
 export type InspectorOnUpdate = (nodeId: string, data: Record<string, unknown>) => void;

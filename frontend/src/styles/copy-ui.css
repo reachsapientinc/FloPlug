@@ -1,0 +1,74 @@
+.copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0.5px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: #a0a0b8;
+  border-radius: 5px;
+  cursor: pointer;
+  font-family: inherit;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.copy-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #e8e8f0;
+}
+
+.copy-btn-sm {
+  width: 26px;
+  height: 24px;
+  font-size: 12px;
+}
+
+.copy-btn-md {
+  min-width: 32px;
+  height: 28px;
+  font-size: 13px;
+  padding: 0 8px;
+}
+
+.code-block-wrap {
+  margin-top: 8px;
+  border: 0.5px solid rgba(255, 255, 255, 0.08);
+  border-radius: 7px;
+  overflow: hidden;
+  background: #0a0c12;
+}
+
+.code-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 0.5px solid rgba(255, 255, 255, 0.06);
+}
+
+.code-block-title {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #6b6b80;
+}
+
+.code-block-pre {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 11px;
+  font-family: var(--mono, ui-monospace, monospace);
+  color: #22c55e;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: auto;
+  max-height: 280px;
+}
+
+.flo-hub .code-block-pre {
+  color: #7ee787;
+}

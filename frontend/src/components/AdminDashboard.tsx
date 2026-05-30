@@ -10,9 +10,10 @@
  * Wrong:    import { useAdminAuth } from '../hooks/useTenantAuth.ts'
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useAdminAuth }   from '../hooks/useTenantAuth';
 import type { FloPlugEnv } from '../types/types';
+import { ProductDocsApp, isDocsHash, enterPlatformDocs, enterProductConfigDocs } from '../docs';
 import HubProvisioner    from '../modules/HubManagement';
 import TierManager       from '../modules/TierManagement';
 import AuthManager       from '../modules/AuthManagement';
@@ -142,6 +143,20 @@ const AdminLogin: React.FC<{
 const AdminDashboard: React.FC<{ env?: FloPlugEnv }> = ({ env }) => {
   const { user, loading, error, login, logout } = useAdminAuth(env);
   const [activeModule, setActiveModule] = useState<Module>('hub');
+  const [docsMode, setDocsMode] = useState(() => isDocsHash(window.location.hash));
+
+  const exitDocs = useCallback(() => {
+    const url = `${window.location.pathname}${window.location.search}`;
+    window.history.replaceState(null, '', url);
+    setDocsMode(false);
+    window.dispatchEvent(new HashChangeEvent('hashchange'));
+  }, []);
+
+  useEffect(() => {
+    const onHash = () => setDocsMode(isDocsHash(window.location.hash));
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
 
   const meta    = env ? ENV_META[env] : null;
   const current = MODULES.find(m => m.id === activeModule)!;
@@ -149,6 +164,17 @@ const AdminDashboard: React.FC<{ env?: FloPlugEnv }> = ({ env }) => {
   // Show login screen until authenticated
   if (!user) {
     return <AdminLogin env={env} onLogin={login} error={error} loading={loading} />;
+  }
+
+  if (docsMode) {
+    return (
+      <ProductDocsApp
+        portal="platform"
+        isPlatformStaff
+        envLabel={meta?.label}
+        onClose={exitDocs}
+      />
+    );
   }
 
   return (
@@ -192,6 +218,22 @@ const AdminDashboard: React.FC<{ env?: FloPlugEnv }> = ({ env }) => {
             </div>
             {user.email}
           </div>
+
+          <button
+            type="button"
+            onClick={() => enterProductConfigDocs()}
+            style={{ padding: '5px 10px', borderRadius: 6, border: '0.5px solid var(--border-default)', background: 'var(--bg-raised)', color: 'var(--text-secondary)', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}
+          >
+            🧩 Product config
+          </button>
+
+          <button
+            type="button"
+            onClick={() => enterPlatformDocs()}
+            style={{ padding: '5px 10px', borderRadius: 6, border: '0.5px solid var(--border-default)', background: 'var(--bg-raised)', color: 'var(--text-secondary)', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}
+          >
+            🔒 Platform docs
+          </button>
 
           <button onClick={logout} style={{ padding: '5px 10px', borderRadius: 6, border: '0.5px solid var(--border-default)', background: 'transparent', color: 'var(--text-secondary)', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
             Sign out

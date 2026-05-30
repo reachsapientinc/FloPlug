@@ -19,104 +19,113 @@
  *  5. All previous behaviour retained for non-email plugs.
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import type { PlugConfig, FloActionPaletteItem } from '@floplug/shared';
+import { PALETTE_ITEMS, PALETTE_CATEGORIES, type PaletteItem } from '../catalog/nodeHelpCatalog';
 
-// ── Palette static items ──────────────────────────────────────────────────────
-interface PaletteItem {
-  type:     string;
-  label:    string;
-  icon:     string;
-  color:    string;
-  category: string;
-  help:     string;
-}
+const CATEGORIES = [...PALETTE_CATEGORIES];
 
-const PALETTE_ITEMS: PaletteItem[] = [
-  { type: 'sapNode',           label: 'SAP S/4HANA',  icon: 'S',   color: '#0052cc', category: 'ERP',       help: 'Read or post to SAP S/4HANA via BAPI / RFC calls.' },
-  { type: 'oracleNode',        label: 'Oracle EBS',   icon: 'O',   color: '#e07b39', category: 'ERP',       help: 'Query tables or call stored procedures in Oracle EBS.' },
-  { type: 'workdayNode',       label: 'Workday',      icon: 'W',   color: '#f5a623', category: 'HRIS',      help: 'Fetch worker details, timesheets, payroll or benefits.' },
-  { type: 'salesforceNode',    label: 'Salesforce',   icon: 'SF',  color: '#00a1e0', category: 'CRM',       help: 'Query, insert, update or upsert Salesforce objects.' },
-  { type: 'mapperNode',        label: 'Field Mapper', icon: 'M',   color: '#7c3aed', category: 'Transform', help: 'Rename or remap keys in cStream using source→target pairs.' },
-  { type: 'filterNode',        label: 'Filter',       icon: 'F',   color: '#0f766e', category: 'Transform', help: 'Drop records from cStream that do not match a field condition.' },
-  { type: 'variableStoreNode', label: 'Var Store',    icon: 'VS',  color: '#0891b2', category: 'Transform', help: 'Read/write named variables (global or local scope) in multi-row mode.' },
-  { type: 'fifNode',           label: 'Flow in Flow', icon: 'FiF', color: '#7e22ce', category: 'Logic',     help: 'Embed another flow as a sub-step. Recursive flos are blocked.' },
-  { type: 'functionNode',      label: 'Function',     icon: 'fn',  color: '#b45309', category: 'Logic',     help: 'Run a sandboxed JS snippet server-side; returns an object to merge into cStream.' },
-  { type: 'templateNode',      label: 'Template',     icon: 'TN',  color: '#0f766e', category: 'Logic',     help: 'Render JSON/XML/CSV using {{path}} placeholders.' },
-  { type: 'loopNode',          label: 'Loop',         icon: '↻',   color: '#ea580c', category: 'Logic',     help: 'Iterate over an array in cStream or run while a condition is true.' },
-];
-
-const CATEGORIES = ['ERP', 'HRIS', 'CRM', 'Transform', 'Logic'];
-
-// ── Palette bubble (plug-style tooltip) ───────────────────────────────────────
-const PaletteBubble: React.FC<{
+// ── Palette help popup (portal — never clipped by palette overflow) ─────────────
+interface PaletteHelpContent {
   title:       string;
   titleColor?: string;
   subtitle?:   string;
   body?:       string;
   footer?:     string;
   typeHint?:   string;
-}> = ({ title, titleColor = '#4f8ef7', subtitle, body, footer, typeHint }) => (
-  <div style={{
-    position: 'absolute', left: 'calc(100% + 8px)', top: '50%', transform: 'translateY(-50%)',
-    zIndex: 9999, pointerEvents: 'none', background: '#1e2130',
-    border: '0.5px solid rgba(255,255,255,0.12)', borderRadius: 7, padding: '8px 10px',
-    width: 200, boxShadow: '0 8px 24px rgba(0,0,0,0.5)', whiteSpace: 'normal',
-  }}>
-    <div style={{
-      position: 'absolute', left: -5, top: '50%', transform: 'translateY(-50%)',
-      width: 0, height: 0, borderTop: '5px solid transparent', borderBottom: '5px solid transparent',
-      borderRight: '5px solid rgba(255,255,255,0.12)',
-    }} />
-    <div style={{ fontSize: 11, fontWeight: 600, color: titleColor, marginBottom: subtitle || body ? 2 : 0 }}>{title}</div>
-    {subtitle && <div style={{ fontSize: 9, color: '#f59e0b', marginBottom: 4 }}>{subtitle}</div>}
-    {body && <div style={{ fontSize: 9, color: '#d0d0dc', lineHeight: 1.5, marginBottom: footer ? 5 : 0 }}>{body}</div>}
-    {footer && <div style={{ fontSize: 8, color: '#22c55e' }}>{footer}</div>}
-    {typeHint && <div style={{ marginTop: 5, fontSize: 8, color: '#3a3a50', fontFamily: 'monospace' }}>{typeHint}</div>}
-  </div>
-);
+}
+
+const PaletteHelpPortal: React.FC<{
+  anchorRect: DOMRect;
+  content:    PaletteHelpContent;
+  onClose:    () => void;
+}> = ({ anchorRect, content, onClose }) => {
+  const width = 220;
+  const margin = 8;
+  let left = anchorRect.right + margin;
+  let top  = anchorRect.top + anchorRect.height / 2 - 40;
+  if (left + width > window.innerWidth - margin) {
+    left = Math.max(margin, anchorRect.left - width - margin);
+  }
+  top = Math.max(margin, Math.min(top, window.innerHeight - 160));
+
+  return createPortal(
+    <>
+      <div
+        role="presentation"
+        onClick={onClose}
+        style={{ position: 'fixed', inset: 0, zIndex: 9998, background: 'transparent' }}
+      />
+      <div style={{
+        position: 'fixed', left, top, zIndex: 9999, width,
+        background: '#1e2130', border: '0.5px solid rgba(255,255,255,0.14)',
+        borderRadius: 8, padding: '10px 12px',
+        boxShadow: '0 12px 32px rgba(0,0,0,0.55)', whiteSpace: 'normal',
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: 6 }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: content.titleColor ?? '#e8e8f0' }}>{content.title}</div>
+          <button
+            type="button"
+            className="nodrag"
+            onClick={onClose}
+            aria-label="Close help"
+            title="Close (Esc)"
+            style={{
+              flexShrink: 0, width: 20, height: 20, borderRadius: 4,
+              border: '0.5px solid rgba(255,255,255,0.15)', background: 'rgba(255,255,255,0.06)',
+              color: '#c0c0cc', cursor: 'pointer', fontSize: 12, lineHeight: 1, padding: 0,
+            }}
+          >×</button>
+        </div>
+        {content.subtitle && <div style={{ fontSize: 9, color: '#f59e0b', marginBottom: 4 }}>{content.subtitle}</div>}
+        {content.body && <div style={{ fontSize: 9, color: '#c8c8d8', lineHeight: 1.55, marginBottom: content.footer ? 6 : 0 }}>{content.body}</div>}
+        {content.footer && <div style={{ fontSize: 8, color: '#22c55e' }}>{content.footer}</div>}
+        {content.typeHint && <div style={{ marginTop: 6, fontSize: 8, color: '#9090a8', fontFamily: 'monospace' }}>{content.typeHint}</div>}
+      </div>
+    </>,
+    document.body,
+  );
+};
 
 // ── IconWithTooltip ───────────────────────────────────────────────────────────
 const IconWithTooltip: React.FC<{
   item:        PaletteItem;
   onDragStart: (e: React.DragEvent, item: PaletteItem) => void;
-}> = ({ item, onDragStart }) => {
-  const [hovered, setHovered] = useState(false);
+  helpOpen:    boolean;
+  onToggleHelp:(rect: DOMRect) => void;
+}> = ({ item, onDragStart, helpOpen, onToggleHelp }) => {
+  const iconRef = useRef<HTMLDivElement>(null);
 
   return (
-    <div
-      style={{ position: 'relative', display: 'inline-block' }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
+    <div style={{ position: 'relative', display: 'inline-block' }}>
       <div
+        ref={iconRef}
         draggable
         onDragStart={e => onDragStart(e, item)}
+        onClick={e => {
+          e.stopPropagation();
+          const rect = iconRef.current?.getBoundingClientRect();
+          if (rect) onToggleHelp(rect);
+        }}
+        title="Click for help · drag to canvas"
         style={{
           width: 42, height: 42, borderRadius: 8,
-          background:  hovered ? item.color : `${item.color}28`,
-          border:      `0.5px solid ${hovered ? item.color : `${item.color}50`}`,
+          background:  helpOpen ? item.color : `${item.color}28`,
+          border:      `0.5px solid ${helpOpen ? item.color : `${item.color}50`}`,
           display:     'flex', flexDirection: 'column',
           alignItems:  'center', justifyContent: 'center',
           cursor:      'grab', transition: 'background 0.15s, border-color 0.15s',
           userSelect:  'none', gap: 2,
         }}
       >
-        <span style={{ fontSize: item.icon.length > 2 ? 7 : 11, fontWeight: 800, color: hovered ? '#fff' : item.color, lineHeight: 1, transition: 'color 0.15s', fontFamily: "'Inter',-apple-system,sans-serif" }}>
+        <span style={{ fontSize: item.icon.length > 2 ? 7 : 11, fontWeight: 800, color: helpOpen ? '#fff' : item.color, lineHeight: 1, transition: 'color 0.15s', fontFamily: "'Inter',-apple-system,sans-serif" }}>
           {item.icon}
         </span>
-        <span style={{ fontSize: 7, color: hovered ? '#fff' : '#f59e0b', lineHeight: 1, textAlign: 'center', maxWidth: 38, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', transition: 'color 0.15s', fontFamily: "'Inter',-apple-system,sans-serif" }}>
+        <span style={{ fontSize: 7, color: helpOpen ? '#fff' : '#f59e0b', lineHeight: 1, textAlign: 'center', maxWidth: 38, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', transition: 'color 0.15s', fontFamily: "'Inter',-apple-system,sans-serif" }}>
           {item.label}
         </span>
       </div>
-      {hovered && (
-        <div style={{ position: 'absolute', left: 'calc(100% + 8px)', top: '50%', transform: 'translateY(-50%)', zIndex: 9999, pointerEvents: 'none', background: '#1e2130', border: '0.5px solid rgba(255,255,255,0.12)', borderRadius: 7, padding: '8px 10px', width: 190, boxShadow: '0 8px 24px rgba(0,0,0,0.5)', whiteSpace: 'normal' }}>
-          <div style={{ position: 'absolute', left: -5, top: '50%', transform: 'translateY(-50%)', width: 0, height: 0, borderTop: '5px solid transparent', borderBottom: '5px solid transparent', borderRight: '5px solid rgba(255,255,255,0.12)' }} />
-          <div style={{ fontSize: 11, fontWeight: 600, color: '#d0d0dc', marginBottom: 3 }}>{item.label}</div>
-          <div style={{ fontSize: 9, color: '#f59e0b', lineHeight: 1.5 }}>{item.help}</div>
-          <div style={{ marginTop: 5, fontSize: 8, color: '#3a3a50', fontFamily: 'monospace' }}>{item.type}</div>
-        </div>
-      )}
     </div>
   );
 };
@@ -125,49 +134,42 @@ const IconWithTooltip: React.FC<{
 const PlugIcon: React.FC<{
   plug:        PlugConfig;
   onDragStart: (e: React.DragEvent, plug: PlugConfig) => void;
-}> = ({ plug, onDragStart }) => {
-  const [hovered, setHovered] = useState(false);
+  helpOpen:    boolean;
+  onToggleHelp:(rect: DOMRect) => void;
+}> = ({ plug, onDragStart, helpOpen, onToggleHelp }) => {
+  const iconRef = useRef<HTMLDivElement>(null);
   const initials = plug.name.slice(0, 2).toUpperCase();
   const color    = plug.authProtocol === 'smtp_basic' ? '#f59e0b' : '#4f8ef7';
 
   return (
-    <div
-      style={{ position: 'relative', display: 'inline-block' }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
+    <div style={{ position: 'relative', display: 'inline-block' }}>
       <div
+        ref={iconRef}
         draggable
         onDragStart={e => onDragStart(e, plug)}
+        onClick={e => {
+          e.stopPropagation();
+          const rect = iconRef.current?.getBoundingClientRect();
+          if (rect) onToggleHelp(rect);
+        }}
+        title="Click for help · drag to canvas"
         style={{
           width: 42, height: 42, borderRadius: 8,
-          background: hovered ? color : `${color}28`,
-          border:     `0.5px solid ${hovered ? color : `${color}50`}`,
+          background: helpOpen ? color : `${color}28`,
+          border:     `0.5px solid ${helpOpen ? color : `${color}50`}`,
           display:    'flex', flexDirection: 'column',
           alignItems: 'center', justifyContent: 'center',
           cursor:     'grab', transition: 'background 0.15s, border-color 0.15s',
           userSelect: 'none', gap: 2,
         }}
       >
-        <span style={{ fontSize: 10, fontWeight: 800, color: hovered ? '#fff' : color, lineHeight: 1 }}>
+        <span style={{ fontSize: 10, fontWeight: 800, color: helpOpen ? '#fff' : color, lineHeight: 1 }}>
           {plug.authProtocol === 'smtp_basic' ? '✉' : initials}
         </span>
-        <span style={{ fontSize: 7, color: hovered ? '#fff' : '#f59e0b', lineHeight: 1, textAlign: 'center', maxWidth: 38, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span style={{ fontSize: 7, color: helpOpen ? '#fff' : '#f59e0b', lineHeight: 1, textAlign: 'center', maxWidth: 38, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {plug.name}
         </span>
       </div>
-      {hovered && (
-        <div style={{ position: 'absolute', left: 'calc(100% + 8px)', top: '50%', transform: 'translateY(-50%)', zIndex: 9999, pointerEvents: 'none', background: '#1e2130', border: '0.5px solid rgba(255,255,255,0.12)', borderRadius: 7, padding: '8px 10px', width: 200, boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }}>
-          <div style={{ position: 'absolute', left: -5, top: '50%', transform: 'translateY(-50%)', width: 0, height: 0, borderTop: '5px solid transparent', borderBottom: '5px solid transparent', borderRight: '5px solid rgba(255,255,255,0.12)' }} />
-          <div style={{ fontSize: 11, fontWeight: 600, color, marginBottom: 2 }}>{plug.name}</div>
-          <div style={{ fontSize: 9, color: '#f59e0b', marginBottom: 4 }}>{plug.connectorLabel ?? plug.connectorId}</div>
-          {plug.authProtocol === 'smtp_basic'
-            ? <div style={{ fontSize: 8, color: '#22c55e' }}>✉ Email plug — configure recipients and body on canvas</div>
-            : <div style={{ fontSize: 8, color: '#3a3a50', fontFamily: 'monospace', wordBreak: 'break-all' }}>{plug.urlPattern}</div>
-          }
-          <div style={{ marginTop: 5, fontSize: 8, color: '#22c55e' }}>🔌 Drag to add to flow</div>
-        </div>
-      )}
     </div>
   );
 };
@@ -176,17 +178,24 @@ const PlugIcon: React.FC<{
 const FloActionIcon: React.FC<{
   action:      FloActionPaletteItem;
   bubbleOpen:  boolean;
-  onToggle:    () => void;
+  onToggle:    (rect: DOMRect) => void;
   onDragStart: (e: React.DragEvent, action: FloActionPaletteItem) => void;
 }> = ({ action, bubbleOpen, onToggle, onDragStart }) => {
   const color = '#10b981';
+  const iconRef = useRef<HTMLDivElement>(null);
 
   return (
     <div style={{ position: 'relative', display: 'inline-block' }}>
       <div
+        ref={iconRef}
         draggable
         onDragStart={e => onDragStart(e, action)}
-        onClick={e => { e.stopPropagation(); onToggle(); }}
+        onClick={e => {
+          e.stopPropagation();
+          const rect = iconRef.current?.getBoundingClientRect();
+          if (rect) onToggle(rect);
+        }}
+        title="Click for help · drag to canvas"
         style={{
           width: 42, height: 42, borderRadius: 8,
           background: bubbleOpen ? color : `${color}28`,
@@ -204,15 +213,6 @@ const FloActionIcon: React.FC<{
           {action.flaLabel}
         </span>
       </div>
-      {bubbleOpen && (
-        <PaletteBubble
-          title={action.floActionName}
-          titleColor={color}
-          subtitle={action.connectorId}
-          body={action.description || `${action.actionIds.length} action(s) enabled`}
-          footer="⚡ Drag to add FloAction to flow"
-        />
-      )}
     </div>
   );
 };
@@ -226,6 +226,8 @@ const FloActionIcon: React.FC<{
 interface NodePaletteProps {
   plugs?:      PlugConfig[];
   floActions?: FloActionPaletteItem[];
+  /** Reports visible palette width so inspector expand can stop at palette edge. */
+  onPaletteWidthChange?: (width: number) => void;
 }
 
 const MIN_WIDTH = 100;
@@ -235,23 +237,39 @@ const MIN_WIDTH = 100;
 
 
 
-export const NodePalette: React.FC<NodePaletteProps> = ({ plugs = [], floActions = [] }) => {
+export const NodePalette: React.FC<NodePaletteProps> = ({
+  plugs = [],
+  floActions = [],
+  onPaletteWidthChange,
+}) => {
   const [collapsed,       setCollapsed]       = useState<Record<string, boolean>>({});
   const [panelHidden,     setPanelHidden]     = useState(false);
-  const [openActionBubble, setOpenActionBubble] = useState<string | null>(null);
   const [paletteWidth, setPaletteWidth] = useState(DEFAULT_WIDTH);
+  const [paletteHelp, setPaletteHelp] = useState<{
+    key: string;
+    rect: DOMRect;
+    content: PaletteHelpContent;
+  } | null>(null);
   const isResizing = useRef(false);
   const paletteRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    const onDocClick = (e: MouseEvent) => {
-      if (!paletteRef.current?.contains(e.target as HTMLElement)) {
-        setOpenActionBubble(null);
-      }
-    };
-    document.addEventListener('mousedown', onDocClick);
-    return () => document.removeEventListener('mousedown', onDocClick);
+  const closePaletteHelp = useCallback(() => setPaletteHelp(null), []);
+
+  const toggleItemHelp = useCallback((key: string, rect: DOMRect, content: PaletteHelpContent) => {
+    setPaletteHelp(prev => (prev?.key === key ? null : { key, rect, content }));
   }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closePaletteHelp();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [closePaletteHelp]);
+
+  useEffect(() => {
+    onPaletteWidthChange?.(panelHidden ? RAIL_WIDTH : paletteWidth);
+  }, [paletteWidth, panelHidden, onPaletteWidthChange]);
 
   const toggleCat = (cat: string) =>
     setCollapsed(prev => ({ ...prev, [cat]: !prev[cat] }));
@@ -334,6 +352,7 @@ export const NodePalette: React.FC<NodePaletteProps> = ({ plugs = [], floActions
   }
 
   return (
+    <>
     <div ref={paletteRef} style={{ width: paletteWidth,
                                   minWidth: MIN_WIDTH,
                                   maxWidth: MAX_WIDTH, 
@@ -342,19 +361,18 @@ export const NodePalette: React.FC<NodePaletteProps> = ({ plugs = [], floActions
                                   display: 'flex', 
                                   flexDirection: 'column', 
                                   flexShrink: 0, 
-                                  overflowY: 'auto', 
-                                  overflowX: 'visible', 
+                                  overflow: 'hidden', 
                                   fontFamily: "'Inter',-apple-system,sans-serif", 
                                   userSelect: 'none', position: 'relative' }}>
       {/* Header */}
       <div style={{ height: 36, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 8px', borderBottom: '0.5px solid rgba(255,255,255,0.05)', flexShrink: 0 }}>
-        <span style={{ fontSize: 9, fontWeight: 700, color: '#3a3a50', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Nodes</span>
+        <span style={{ fontSize: 9, fontWeight: 700, color: '#9090a8', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Nodes</span>
         <button onClick={() => setPanelHidden(true)} title="Hide palette" style={toggleBtnStyle}>
           <svg width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6" /></svg>
         </button>
       </div>
-      
 
+      <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', minHeight: 0 }}>
       {/* Static node categories */}
       {CATEGORIES.map(cat => {
         const items  = PALETTE_ITEMS.filter(i => i.category === cat);
@@ -368,7 +386,19 @@ export const NodePalette: React.FC<NodePaletteProps> = ({ plugs = [], floActions
             {isOpen && (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 5, padding: '4px 8px 8px' }}>
                 {items.map(item => (
-                  <IconWithTooltip key={item.type} item={item} onDragStart={onDragStart} />
+                  <IconWithTooltip
+                    key={item.type}
+                    item={item}
+                    onDragStart={onDragStart}
+                    helpOpen={paletteHelp?.key === `item:${item.type}`}
+                    onToggleHelp={rect => toggleItemHelp(`item:${item.type}`, rect, {
+                      title: item.label,
+                      titleColor: item.color,
+                      body: item.help,
+                      footer: 'Drag onto canvas to add',
+                      typeHint: item.type,
+                    })}
+                  />
                 ))}
               </div>
             )}
@@ -393,7 +423,21 @@ export const NodePalette: React.FC<NodePaletteProps> = ({ plugs = [], floActions
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 5, padding: '4px 8px 8px' }}>
               {plugs.map(plug => (
-                <PlugIcon key={plug.id} plug={plug} onDragStart={onPlugDragStart} />
+                <PlugIcon
+                  key={plug.id}
+                  plug={plug}
+                  onDragStart={onPlugDragStart}
+                  helpOpen={paletteHelp?.key === `plug:${plug.id}`}
+                  onToggleHelp={rect => toggleItemHelp(`plug:${plug.id}`, rect, {
+                    title: plug.name,
+                    titleColor: plug.authProtocol === 'smtp_basic' ? '#f59e0b' : '#4f8ef7',
+                    subtitle: plug.connectorLabel ?? plug.connectorId,
+                    body: plug.authProtocol === 'smtp_basic'
+                      ? 'Email plug — configure recipients and body on canvas.'
+                      : plug.urlPattern,
+                    footer: '🔌 Drag to add to flow',
+                  })}
+                />
               ))}
             </div>
           )
@@ -419,8 +463,14 @@ export const NodePalette: React.FC<NodePaletteProps> = ({ plugs = [], floActions
                 <FloActionIcon
                   key={action.id}
                   action={action}
-                  bubbleOpen={openActionBubble === action.id}
-                  onToggle={() => setOpenActionBubble(prev => prev === action.id ? null : action.id)}
+                  bubbleOpen={paletteHelp?.key === `action:${action.id}`}
+                  onToggle={rect => toggleItemHelp(`action:${action.id}`, rect, {
+                    title: action.floActionName,
+                    titleColor: '#10b981',
+                    subtitle: action.connectorId,
+                    body: action.description || `${action.actionIds.length} action(s) enabled`,
+                    footer: '⚡ Drag to add FloAction to flow',
+                  })}
                   onDragStart={onFloActionDragStart}
                 />
               ))}
@@ -429,23 +479,33 @@ export const NodePalette: React.FC<NodePaletteProps> = ({ plugs = [], floActions
         )}
       </div>
 
-      <div style={{ marginTop: 'auto', padding: '8px', borderTop: '0.5px solid rgba(255,255,255,0.04)', fontSize: 8, color: '#2a2a38', lineHeight: 1.5, flexShrink: 0 }}>
-        Drag onto canvas · click FloAction for details
-      </div>   
+      </div>
+
+      <div style={{ marginTop: 'auto', padding: '8px', borderTop: '0.5px solid rgba(255,255,255,0.04)', fontSize: 8, color: '#9090a8', lineHeight: 1.5, flexShrink: 0 }}>
+        Drag onto canvas · click icon for help (Esc to close)
+      </div>
       {/* Drag-resize handle — right edge */}
       <div
         onMouseDown={onResizeMouseDown}
+        title="Drag to resize palette"
         style={{
           position: 'absolute', right: 0, top: 0, bottom: 0,
-          width: 4, cursor: 'col-resize',
-          background: 'transparent',
-          transition: 'background 0.15s',
+          width: 8, cursor: 'col-resize', zIndex: 5,
+          background: 'rgba(255,255,255,0.03)',
+          borderLeft: '0.5px solid rgba(255,255,255,0.08)',
         }}
-        onMouseEnter={e => (e.currentTarget.style.background = 'rgba(16,185,129,0.3)')}
-        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-      />   
+        onMouseEnter={e => { e.currentTarget.style.background = 'rgba(79,142,247,0.25)'; }}
+        onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.03)'; }}
+      />
     </div>
-    
+    {paletteHelp && (
+      <PaletteHelpPortal
+        anchorRect={paletteHelp.rect}
+        content={paletteHelp.content}
+        onClose={closePaletteHelp}
+      />
+    )}
+    </>
   );
 };
 

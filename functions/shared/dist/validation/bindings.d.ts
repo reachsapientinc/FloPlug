@@ -2,7 +2,7 @@
  * Shared binding / placeholder validation helpers.
  */
 import type { FloValidationIssue } from '../types/floValidation.js';
-export type BindingSource = 'static' | 'cStream' | 'local' | 'global' | 'literal';
+export type BindingSource = 'static' | 'cStream' | 'local' | 'global' | 'literal' | 'expression';
 export interface VariableBinding {
     source?: BindingSource | string;
     value?: string;
@@ -19,3 +19,5 @@ export declare function extractMustachePlaceholders(text: string): string[];
 /** Extract {{word}} URL variables (plug urlPattern style). */
 export declare function extractUrlVariables(urlPattern: string): string[];
 export declare function nodeLabel(data: Record<string, unknown>, fallback: string): string;
+/** Canvas card title — custom display name overrides palette label. */
+export declare function nodeDisplayTitle(data: Record<string, unknown>, defaultTitle: string): string;

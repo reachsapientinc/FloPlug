@@ -9,6 +9,18 @@ import { getValue, setValue } from '../utils/pathUtils.js';
 const WORKDAY_NS     = 'urn:com.workday/bsvc';
 const WORKDAY_PREFIX = 'wd';
 
+/** Mapped source value is empty — Workday rejects reference/ID elements with no body. */
+export function isBlankMappedValue(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (typeof value === 'string') return sanitizeXmlTextContent(value) === '';
+  if (typeof value === 'number' && Number.isNaN(value)) return true;
+  return false;
+}
+
+function isWorkdayReferenceElementName(name: string): boolean {
+  return /_Reference$/i.test(name) || (/Reference$/i.test(name) && name.length > 'Reference'.length);
+}
+
 /** Collapse newlines/tabs in element text — sample data often has wrapped strings. */
 function sanitizeXmlTextContent(raw: string): string {
   return raw
@@ -73,19 +85,54 @@ function normalizeWorkdayVersion(raw?: string): string | undefined {
   return /^v/i.test(t) ? t : `v${t}`;
 }
 
-/** Infer Workday root attributes (version, Add_Only on Put_*). */
-function workdayRootAttributes(actionDoc: ActionDoc): Record<string, string> {
+function isPutOperation(actionDoc: ActionDoc): boolean {
+  const op = (actionDoc.operationName ?? actionDoc.id ?? '').toLowerCase();
+  return op.startsWith('put_') || /^put[A-Z]/.test(actionDoc.operationName ?? '');
+}
+
+/** Default root attrs when not overridden by mapper (version, Add_Only on Put_*). */
+function workdayRootAttributeDefaults(actionDoc: ActionDoc): Record<string, string> {
   const attrs: Record<string, string> = {};
   const version = normalizeWorkdayVersion(
     actionDoc.requestBinding?.servicesSchemaVersion,
   );
   if (version) attrs.version = version;
-
-  const op = (actionDoc.operationName ?? actionDoc.id ?? '').toLowerCase();
-  if (op.startsWith('put_') || /^put[A-Z]/.test(actionDoc.operationName ?? '')) {
+  if (isPutOperation(actionDoc)) {
     attrs.Add_Only = 'true';
   }
   return attrs;
+}
+
+/** Read `Put_*_Request.@Add_Only` (and other root `@attr`) from resolved mappings. */
+export function extractMappedWorkdayRootAttributes(
+  resolved: Record<string, unknown>,
+  rootTag: string,
+  fields: ParsedField[],
+): Record<string, string> {
+  const fieldMap = Object.fromEntries(fields.map(f => [f.path, f]));
+  const attrs: Record<string, string> = {};
+  const rootAttrPrefix = `${rootTag}.@`;
+
+  for (const [path, value] of Object.entries(resolved)) {
+    if (isBlankMappedValue(value)) continue;
+    if (!path.startsWith(rootAttrPrefix)) continue;
+    const attrName = path.slice(rootAttrPrefix.length);
+    if (!attrName || attrName.includes('.')) continue;
+    const field = fieldMap[path];
+    attrs[attrName] = formatXsdValue(value, field?.xsdType);
+  }
+  return attrs;
+}
+
+function mergeWorkdayRootAttributes(
+  actionDoc: ActionDoc,
+  resolved: Record<string, unknown>,
+  rootTag: string,
+  fields: ParsedField[],
+): Record<string, string> {
+  const defaults = workdayRootAttributeDefaults(actionDoc);
+  const mapped   = extractMappedWorkdayRootAttributes(resolved, rootTag, fields);
+  return { ...defaults, ...mapped };
 }
 
 function stripRootFromPath(path: string, rootTag: string): string {
@@ -203,7 +250,7 @@ function partitionWorkdayIdComposites(
   const composites = new Map<string, IdCompositeEntry[]>();
 
   for (const [path, value] of Object.entries(resolved)) {
-    if (value === undefined || value === null) continue;
+    if (isBlankMappedValue(value)) continue;
 
     const parsed = parseWorkdayIdCompositePath(path);
     if (parsed) {
@@ -238,12 +285,113 @@ function partitionWorkdayIdComposites(
   return { plain: plainOut, composites };
 }
 
-function idCompositeToXmlValue(entries: IdCompositeEntry[]): unknown {
-  const objects = entries.map(e => ({
+function idCompositeToXmlValue(entries: IdCompositeEntry[]): unknown | undefined {
+  const valid = entries.filter(e => !isBlankMappedValue(e.value));
+  if (valid.length === 0) return undefined;
+  const objects = valid.map(e => ({
     '@type': e.typeToken,
     '$':     formatXsdValue(e.value, e.xsdType),
   }));
   return objects.length === 1 ? objects[0] : objects;
+}
+
+/** True when wd:ID (or array of IDs) has non-empty text content. */
+function hasWorkdayIdTextContent(idVal: unknown): boolean {
+  if (isBlankMappedValue(idVal)) return false;
+  if (Array.isArray(idVal)) return idVal.some(hasWorkdayIdTextContent);
+  if (typeof idVal !== 'object' || idVal === null) {
+    return !isBlankMappedValue(idVal);
+  }
+  const rec = idVal as Record<string, unknown>;
+  const text = rec.$ ?? rec._value;
+  return text !== undefined && !isBlankMappedValue(text);
+}
+
+/**
+ * Remove empty Workday *Reference wrappers and type-only wd:ID nodes before XML emission.
+ */
+export function pruneEmptyWorkdayReferences(
+  obj: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+
+  for (const [key, val] of Object.entries(obj)) {
+    if (val === undefined || val === null) continue;
+
+    if (key === 'ID') {
+      if (!hasWorkdayIdTextContent(val)) continue;
+      if (Array.isArray(val)) {
+        const kept = val.filter(item => hasWorkdayIdTextContent(item));
+        if (kept.length === 0) continue;
+        out[key] = kept.length === 1 ? kept[0] : kept;
+      } else if (typeof val === 'object') {
+        out[key] = pruneEmptyWorkdayReferences(val as Record<string, unknown>);
+      } else {
+        out[key] = val;
+      }
+      continue;
+    }
+
+    if (isWorkdayReferenceElementName(key) && typeof val === 'object' && !Array.isArray(val)) {
+      const pruned = pruneEmptyWorkdayReferences(val as Record<string, unknown>);
+      if (pruned.ID !== undefined && !hasWorkdayIdTextContent(pruned.ID)) {
+        delete pruned.ID;
+      }
+      const refText = pruned.$ ?? pruned._value;
+      const hasRefText = refText !== undefined && !isBlankMappedValue(refText);
+      const hasId      = pruned.ID !== undefined && hasWorkdayIdTextContent(pruned.ID);
+      const onlyAttrs  = Object.keys(pruned).length > 0
+        && Object.keys(pruned).every(k => k.startsWith('@'));
+      if (!hasRefText && !hasId) continue;
+      if (onlyAttrs) continue;
+      if (Object.keys(pruned).length === 0) continue;
+      out[key] = pruned;
+      continue;
+    }
+
+    if (Array.isArray(val)) {
+      const kept: unknown[] = [];
+      for (const item of val) {
+        if (item && typeof item === 'object' && !Array.isArray(item)) {
+          const p = pruneEmptyWorkdayReferences(item as Record<string, unknown>);
+          if (Object.keys(p).length > 0) kept.push(p);
+        } else if (!isBlankMappedValue(item)) {
+          kept.push(item);
+        }
+      }
+      if (kept.length > 0) out[key] = kept;
+      continue;
+    }
+
+    if (typeof val === 'object') {
+      const pruned = pruneEmptyWorkdayReferences(val as Record<string, unknown>);
+      if (Object.keys(pruned).length > 0) out[key] = pruned;
+      continue;
+    }
+
+    if (!isBlankMappedValue(val)) out[key] = val;
+  }
+
+  return out;
+}
+
+function resolvedHasNonBlankIdValue(
+  idRel: string,
+  rootTag: string,
+  plain: Record<string, unknown>,
+  composites: Map<string, IdCompositeEntry[]>,
+): boolean {
+  const fullPrefix = rootTag ? `${rootTag}.` : '';
+  for (const [path, value] of Object.entries(plain)) {
+    const rel = stripRootFromPath(path, rootTag);
+    if (rel === idRel || rel === `${idRel}.@type`) {
+      if (!isBlankMappedValue(value)) return true;
+    }
+    if (path === `${fullPrefix}${idRel}` && !isBlankMappedValue(value)) return true;
+  }
+  const entries = composites.get(idRel);
+  if (entries?.some(e => !isBlankMappedValue(e.value))) return true;
+  return false;
 }
 
 function buildNestedFromResolved(
@@ -260,21 +408,27 @@ function buildNestedFromResolved(
   const valuePaths: Array<[string, unknown]> = [];
 
   for (const [path, value] of Object.entries(plain)) {
-    if (value === undefined || value === null) continue;
+    if (isBlankMappedValue(value)) continue;
+    if (path.startsWith(`${rootTag}.@`)) continue;
     const rel = stripRootFromPath(path, rootTag);
     if (!rel) continue;
+    if (rel.startsWith('@')) continue;
     if (composites.has(rel)) continue;
 
     const field     = fieldMap[path];
     const formatted = formatXsdValue(value, field?.xsdType);
+    if (isBlankMappedValue(formatted)) continue;
+
     if (rel.endsWith('.ID.@type') || (rel.includes('.@') && !rel.endsWith('.ID'))) {
+      const idRel = rel.replace(/\.@type$/, '');
+      if (!resolvedHasNonBlankIdValue(idRel, rootTag, plain, composites)) continue;
       attrPaths.push([rel, formatted]);
     } else if (rel.endsWith('.ID')) {
-      const typePath = `${path}.@type`;
-      const typeVal  = plain[typePath];
-      if (typeVal !== undefined && typeVal !== null && !composites.has(rel)) {
+      if (!composites.has(rel)) {
         valuePaths.push([rel, formatted]);
-      } else if (!composites.has(rel)) {
+      }
+    } else if (isWorkdayReferenceElementName(rel.split('.').pop() ?? '')) {
+      if (!isBlankMappedValue(value)) {
         valuePaths.push([rel, formatted]);
       }
     } else {
@@ -286,10 +440,13 @@ function buildNestedFromResolved(
   for (const [rel, val] of valuePaths) applyResolvedPath(nested, rel, val);
 
   for (const [idRel, entries] of composites) {
-    applyResolvedPath(nested, idRel, idCompositeToXmlValue(entries));
+    const xmlVal = idCompositeToXmlValue(entries);
+    if (xmlVal === undefined) continue;
+    applyResolvedPath(nested, idRel, xmlVal);
   }
 
-  return unwrapDuplicateRoot(nested, rootTag);
+  const pruned = pruneEmptyWorkdayReferences(nested);
+  return unwrapDuplicateRoot(pruned, rootTag);
 }
 
 function unwrapDuplicateRoot(
@@ -327,6 +484,8 @@ function qName(localName: string, prefix?: string): string {
 function elementXml(key: string, val: unknown, indent: string, attrPrefix?: string): string {
   const tag = qName(key, attrPrefix);
   if (typeof val !== 'object' || val === null || Array.isArray(val)) {
+    if (isBlankMappedValue(val)) return '';
+    if (key === 'ID' || isWorkdayReferenceElementName(key)) return '';
     return `${indent}<${tag}>${escapeXml(String(val))}</${tag}>`;
   }
   const rec = val as Record<string, unknown>;
@@ -341,7 +500,10 @@ function elementXml(key: string, val: unknown, indent: string, attrPrefix?: stri
   const attrStr  = formatAttrs(attrs, attrPrefix);
   const childXml = objectToXml(children, indent, attrPrefix);
   if (childXml) return `${indent}<${tag}${attrStr}>${childXml}</${tag}>`;
-  if (text) return `${indent}<${tag}${attrStr}>${escapeXml(text)}</${tag}>`;
+  if (text && !isBlankMappedValue(text)) {
+    return `${indent}<${tag}${attrStr}>${escapeXml(text)}</${tag}>`;
+  }
+  if (key === 'ID' || isWorkdayReferenceElementName(key)) return '';
   if (attrStr) return `${indent}<${tag}${attrStr}/>`;
   return `${indent}<${tag}/>`;
 }
@@ -380,7 +542,7 @@ function buildWorkdayXmlFromResolved(
   actionDoc: ActionDoc,
 ): string {
   const nested     = buildNestedFromResolved(resolved, rootTag, fields);
-  const rootAttrs  = workdayRootAttributes(actionDoc);
+  const rootAttrs  = mergeWorkdayRootAttributes(actionDoc, resolved, rootTag, fields);
   const rootAttrStr = formatAttrs(rootAttrs, WORKDAY_PREFIX);
   const inner      = objectToXml(nested, '', WORKDAY_PREFIX);
   const openTag    = qName(rootTag, WORKDAY_PREFIX);

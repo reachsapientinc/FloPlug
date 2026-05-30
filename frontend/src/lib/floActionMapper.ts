@@ -3,6 +3,7 @@
  */
 
 import type { ParsedField } from '@floplug/shared';
+import { isFieldEffectivelyRequired } from '@floplug/shared';
 import {
   isWorkdayIdCompositePath,
   parseWorkdayIdCompositePath,
@@ -10,7 +11,7 @@ import {
 
 export interface MappingRuleClient {
   targetField:  string;
-  sourceType:   'cStream' | 'local' | 'global' | 'literal';
+  sourceType:   'cStream' | 'local' | 'global' | 'literal' | 'expression';
   sourceField?: string;
   literalValue?: string;
 }
@@ -370,6 +371,10 @@ export function formatRuleSource(rule: MappingRuleClient): string {
   if (rule.sourceType === 'literal') {
     return `"${rule.literalValue ?? ''}"`;
   }
+  if (rule.sourceType === 'expression') {
+    const e = rule.sourceField?.trim() ?? '';
+    return e.length > 48 ? `${e.slice(0, 45)}…` : e || '(expression)';
+  }
   const p = rule.sourceField ?? '';
   if (rule.sourceType === 'cStream') return p ? `cStream.${p}` : 'cStream';
   return `${rule.sourceType}.${p}`;
@@ -411,7 +416,14 @@ export function countMappedRequired(
   targetFields: ParsedField[],
   rules:        MappingRuleClient[],
 ): { mapped: number; required: number } {
-  const required = targetFields.filter(f => f.required);
-  const mapped   = required.filter(f => rules.some(r => r.targetField === f.path));
-  return { mapped: mapped.length, required: required.length };
+  const resolved: Record<string, unknown> = {};
+  for (const r of rules) {
+    if (!r.targetField) continue;
+    resolved[r.targetField] = r.literalValue ?? r.sourceField ?? true;
+  }
+  const requiredFields = targetFields.filter(f =>
+    isFieldEffectivelyRequired(f, targetFields, resolved, rules),
+  );
+  const mapped = requiredFields.filter(f => rules.some(r => r.targetField === f.path));
+  return { mapped: mapped.length, required: requiredFields.length };
 }

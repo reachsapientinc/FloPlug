@@ -211,7 +211,10 @@
 }
 
 .flo-hub .status-dot.success { background: var(--green); }
+.flo-hub .status-dot.warning { background: var(--amber); }
 .flo-hub .status-dot.error { background: var(--red); }
+.flo-hub .status-dot.killed { background: var(--amber); }
+.flo-hub .status-dot.fatal { background: #c084fc; box-shadow: 0 0 8px rgba(192, 132, 252, 0.45); }
 .flo-hub .status-dot.unknown { background: var(--t4); }
 
 .flo-hub .pill {
@@ -226,11 +229,15 @@
 
 .flo-hub .pill.running { color: var(--cyan); background: var(--cyan-dim); border: 1px solid var(--cyan-border); }
 .flo-hub .pill.success { color: var(--green); background: var(--green-dim); border: 1px solid var(--green-border); }
+.flo-hub .pill.warning { color: var(--amber); background: var(--amber-dim); border: 1px solid rgba(251, 191, 36, 0.32); }
 .flo-hub .pill.error { color: var(--red); background: var(--red-dim); border: 1px solid var(--red-border); }
+.flo-hub .pill.killed { color: var(--amber); background: var(--amber-dim); border: 1px solid rgba(251, 191, 36, 0.32); }
+.flo-hub .pill.fatal { color: #e9d5ff; background: rgba(192, 132, 252, 0.12); border: 1px solid rgba(192, 132, 252, 0.35); }
 .flo-hub .pill.unknown { color: var(--slate); background: rgba(148, 163, 184, 0.1); border: 1px solid var(--border-md); }
 
 .flo-hub .pulse-layout {
   display: flex;
+  flex-direction: row;
   flex: 1;
   overflow: hidden;
   min-height: 0;
@@ -521,9 +528,15 @@
 /* ── Live Monitor layout (mockup-aligned) ───────────────────────────────── */
 .flo-hub .live-monitor-layout {
   display: flex;
+  flex-direction: row;
   flex: 1;
   overflow: hidden;
   min-height: 0;
+}
+
+.flo-hub .view.on.live-monitor-layout,
+.flo-hub .view.on.pulse-shell {
+  flex-direction: row;
 }
 
 .flo-hub .hub-sidebar {
@@ -606,8 +619,142 @@
 }
 
 .flo-hub .live-monitor-detail {
-  width: min(520px, 42vw);
+  position: relative;
+  flex: 0 0 auto;
   flex-shrink: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  min-width: 0;
+}
+
+.flo-hub .live-monitor-detail.detail-panel {
+  flex: 0 0 auto;
+  padding: 0;
+}
+
+.flo-hub .live-monitor-detail.resizing {
+  transition: none;
+}
+
+.flo-hub .live-monitor-detail:not(.resizing):not(.closed) {
+  transition: width 0.15s ease;
+}
+
+.flo-hub .live-monitor-detail.closed {
+  width: 0 !important;
+  min-width: 0;
+  border: none;
+  padding: 0;
+}
+
+.flo-hub .live-monitor-detail.expanded {
+  transition: width 0.2s ease;
+}
+
+.flo-hub .detail-resizer {
+  position: absolute;
+  left: -5px;
+  top: 0;
+  bottom: 0;
+  width: 12px;
+  cursor: col-resize;
+  z-index: 20;
+  background: transparent;
+  touch-action: none;
+}
+
+.flo-hub .detail-resizer::after {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: transparent;
+  transition: background 0.14s;
+}
+
+.flo-hub .detail-resizer:hover::after,
+.flo-hub .live-monitor-detail.resizing .detail-resizer::after {
+  background: var(--cyan);
+}
+
+.flo-hub .detail-panel-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px 8px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+.flo-hub .detail-panel-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.flo-hub .detail-panel-icon-btn {
+  border: 1px solid var(--border-md);
+  background: transparent;
+  color: var(--t2);
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.flo-hub .detail-panel-icon-btn:hover {
+  color: var(--t1);
+  border-color: var(--cyan-border);
+}
+
+.flo-hub .detail-panel-icon-btn.on {
+  color: var(--cyan);
+  border-color: var(--cyan-border);
+  background: var(--cyan-dim);
+}
+
+.flo-hub .detail-panel-toolbar-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--t3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.flo-hub .detail-panel-close {
+  border: 1px solid var(--border-md);
+  background: transparent;
+  color: var(--t2);
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.flo-hub .detail-panel-close:hover {
+  color: var(--t1);
+  border-color: var(--cyan-border);
+}
+
+.flo-hub .detail-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 16px 20px;
 }
 
 .flo-hub .live-monitor-header {
@@ -616,6 +763,13 @@
   justify-content: space-between;
   padding: 14px 18px 10px;
   flex-shrink: 0;
+}
+
+.flo-hub .live-monitor-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .flo-hub .live-monitor-title {
@@ -655,6 +809,8 @@
 .flo-hub .live-monitor-runs {
   flex: 1;
   padding: 0 18px 16px;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .flo-hub .run-card-progress {
@@ -980,16 +1136,494 @@
   background: var(--card2);
   border-radius: 6px;
   display: flex;
+  align-items: flex-start;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   align-items: center;
 }
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -22px;
-  font-size: 9px;
-  color: var(--red);
-  text-align: center;
-  pointer-events: none;
+
+/* ── View toggle (Dashboard | Pulse) ─────────────────────────────────────── */
+.flo-hub .hub-view-toggle {
+  display: flex;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px;
+  gap: 2px;
 }
+
+.flo-hub .hub-view-toggle-btn {
+  border: none;
+  background: transparent;
+  color: var(--t3);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.14s;
+}
+
+.flo-hub .hub-view-toggle-btn.on {
+  background: var(--cyan-dim);
+  color: var(--cyan);
+  border: 1px solid var(--cyan-border);
+}
+
+.flo-hub .hub-view-toggle-btn:hover:not(.on) {
+  color: var(--t2);
+  background: rgba(255,255,255,0.04);
+}
+
+/* ── Pulse execution history ─────────────────────────────────────────────── */
+.flo-hub .pulse-shell {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.flo-hub .pulse-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.flo-hub .pulse-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  padding: 14px 18px 10px;
+  flex-shrink: 0;
+}
+
+.flo-hub .pulse-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.flo-hub .pulse-sub {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: var(--t3);
+}
+
+.flo-hub .pulse-header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.flo-hub .pulse-action-btn {
+  border: 1px solid var(--border-md);
+  background: var(--card);
+  color: var(--t2);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.flo-hub .pulse-action-btn:hover {
+  color: var(--t1);
+  border-color: var(--cyan-border);
+}
+
+.flo-hub .pulse-status-tabs {
+  display: flex;
+  gap: 0;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+
+.flo-hub .pulse-status-tab {
+  border: none;
+  background: transparent;
+  color: var(--t3);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 10px 14px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+}
+
+.flo-hub .pulse-status-tab.on {
+  color: var(--cyan);
+  border-bottom-color: var(--cyan);
+}
+
+.flo-hub .pulse-status-tab .tab-count {
+  opacity: 0.7;
+  margin-left: 4px;
+}
+
+.flo-hub .pulse-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.flo-hub .pulse-filter-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.flo-hub .pulse-filter-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--t4);
+  margin-right: 4px;
+}
+
+.flo-hub .pulse-chip {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--t3);
+  font-size: 10px;
+  font-family: inherit;
+  padding: 4px 10px;
+  border-radius: 14px;
+  cursor: pointer;
+}
+
+.flo-hub .pulse-chip.on {
+  background: var(--cyan-dim);
+  border-color: var(--cyan-border);
+  color: var(--cyan);
+}
+
+.flo-hub .pulse-search {
+  flex: 1;
+  min-width: 180px;
+  margin-left: auto;
+}
+
+.flo-hub .pulse-search input {
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--t1);
+  font-size: 11px;
+  font-family: inherit;
+}
+
+.flo-hub .pulse-funnel-btn {
+  border: 1px solid var(--border-md);
+  background: var(--card);
+  color: var(--t2);
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.flo-hub .pulse-funnel-btn.on {
+  border-color: var(--cyan-border);
+  color: var(--cyan);
+  background: var(--cyan-dim);
+}
+
+.flo-hub .pulse-kpis {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
+  padding: 12px 18px;
+  flex-shrink: 0;
+}
+
+.flo-hub .pulse-kpi {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.flo-hub .pulse-kpi.accent-green { border-left: 3px solid var(--green); }
+.flo-hub .pulse-kpi.accent-amber { border-left: 3px solid var(--amber); }
+.flo-hub .pulse-kpi.accent-red { border-left: 3px solid var(--red); }
+
+.flo-hub .pulse-kpi-lbl {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--t4);
+  margin-bottom: 4px;
+}
+
+.flo-hub .pulse-kpi-val {
+  font-size: 20px;
+  font-weight: 600;
+  font-family: var(--mono);
+}
+
+.flo-hub .pulse-kpi-sub {
+  font-size: 10px;
+  color: var(--t3);
+  margin-top: 2px;
+}
+
+.flo-hub .pulse-table-wrap {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  padding: 0 18px;
+}
+
+.flo-hub .pulse-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.flo-hub .pulse-table th {
+  text-align: left;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--t4);
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 1;
+}
+
+.flo-hub .pulse-table td {
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.flo-hub .pulse-table tr:hover td {
+  background: rgba(255,255,255,0.02);
+}
+
+.flo-hub .pulse-flo-cell-name {
+  font-weight: 600;
+  color: var(--t1);
+}
+
+.flo-hub .pulse-flo-cell-runid {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--t3);
+}
+
+.flo-hub .pulse-flo-cell-date {
+  font-size: 10px;
+  color: var(--t3);
+}
+
+.flo-hub .pulse-duration-bar {
+  height: 4px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 2px;
+  margin-top: 4px;
+  overflow: hidden;
+}
+
+.flo-hub .pulse-duration-fill {
+  height: 100%;
+  border-radius: 2px;
+}
+
+.flo-hub .pulse-node-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.flo-hub .pulse-node-pill {
+  font-size: 9px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.06);
+  color: var(--t2);
+}
+
+.flo-hub .pulse-view-link {
+  border: none;
+  background: transparent;
+  color: var(--cyan);
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.flo-hub .pulse-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 18px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--t3);
+}
+
+.flo-hub .pulse-pagination {
+  display: flex;
+  gap: 4px;
+}
+
+.flo-hub .pulse-page-btn {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--t3);
+  font-size: 11px;
+  font-family: inherit;
+  min-width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.flo-hub .pulse-page-btn.on {
+  background: var(--cyan-dim);
+  border-color: var(--cyan-border);
+  color: var(--cyan);
+}
+
+.flo-hub .pulse-advanced-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: min(420px, 90vw);
+  background: var(--panel);
+  border: 1px solid var(--border-md);
+  border-radius: 10px;
+  padding: 14px;
+  z-index: 20;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+}
+
+.flo-hub .pulse-advanced-wrap {
+  position: relative;
+}
+
+.flo-hub .pulse-advanced-title {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.flo-hub .pulse-advanced-field {
+  margin-bottom: 12px;
+}
+
+.flo-hub .pulse-advanced-field label {
+  display: block;
+  font-size: 10px;
+  color: var(--t3);
+  margin-bottom: 4px;
+}
+
+.flo-hub .pulse-advanced-field input,
+.flo-hub .pulse-advanced-field select {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--t1);
+  font-size: 11px;
+  font-family: inherit;
+}
+
+.flo-hub .pulse-multi-select {
+  position: relative;
+}
+
+.flo-hub .pulse-multi-dropdown {
+  max-height: 160px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  margin-top: 4px;
+}
+
+.flo-hub .pulse-multi-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.flo-hub .pulse-multi-option:hover {
+  background: rgba(255,255,255,0.04);
+}
+
+.flo-hub .pulse-multi-subfilter {
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+  color: var(--t1);
+  font-size: 11px;
+  font-family: inherit;
+}
+
+.flo-hub .pulse-advanced-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.flo-hub .pulse-detail-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  z-index: 100;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.flo-hub .pulse-detail-drawer {
+  width: min(520px, 92vw);
+  height: 100%;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+  padding: 16px 20px;
+}
+
+.flo-hub .pulse-detail-close {
+  border: 1px solid var(--border-md);
+  background: transparent;
+  color: var(--t2);
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  margin-bottom: 12px;
+}
+

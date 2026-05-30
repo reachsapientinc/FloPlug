@@ -1,0 +1,91 @@
+/* Scoped React Flow chrome for FloPlug designer (dark canvas). */
+
+.fp-designer-canvas .react-flow__controls {
+  background: #181b24;
+  border: 0.5px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.fp-designer-canvas .react-flow__controls-button {
+  background: #181b24 !important;
+  border: none !important;
+  border-bottom: 0.5px solid rgba(255, 255, 255, 0.1) !important;
+  color: #c8c8d8 !important;
+  fill: #c8c8d8 !important;
+  width: 28px !important;
+  height: 28px !important;
+}
+
+.fp-designer-canvas .react-flow__controls-button:last-child {
+  border-bottom: none !important;
+}
+
+.fp-designer-canvas .react-flow__controls-button:hover {
+  background: #252a38 !important;
+  color: #ffffff !important;
+  fill: #ffffff !important;
+}
+
+.fp-designer-canvas .react-flow__controls-button svg {
+  fill: currentColor !important;
+  max-width: 14px;
+  max-height: 14px;
+}
+
+.fp-designer-canvas .react-flow__minimap {
+  background: #141720;
+  border: 0.5px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+
+.fp-designer-canvas .react-flow__minimap-mask {
+  fill: rgba(15, 17, 23, 0.75);
+}
+
+.fp-designer-canvas .react-flow__minimap-node {
+  fill: #4f8ef7;
+  stroke: none;
+}
+
+.fp-designer-canvas .react-flow__attribution {
+  background: rgba(20, 23, 32, 0.92);
+  color: #6b6b80;
+  font-size: 9px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin: 4px;
+}
+
+.fp-designer-canvas .fp-canvas-fit-btn {
+  position: absolute;
+  left: 12px;
+  bottom: 108px;
+  z-index: 6;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 0.5px solid rgba(255, 255, 255, 0.18);
+  background: #181b24;
+  color: #c8c8d8;
+  font-size: 10px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+
+.fp-designer-canvas .fp-canvas-fit-btn:hover {
+  background: #252a38;
+  color: #fff;
+}
+
+/* Keep resize handles and delete button visible outside node bounds */
+.fp-designer-canvas .react-flow__node {
+  overflow: visible !important;
+}
+
+.fp-designer-canvas .react-flow__resize-control {
+  z-index: 11 !important;
+}

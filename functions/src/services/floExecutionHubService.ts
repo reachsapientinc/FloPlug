@@ -74,15 +74,24 @@ export async function persistNodeExecutionRecord(
 ): Promise<void> {
   const now = new Date().toISOString();
 
-  const { storagePath, bucket } = await writeNodeExecutionToStorage(input);
+  let storagePath: string | undefined;
+  let bucket: string | undefined;
 
-  await appendRunManifestEntry(input.hubId, input.tenantId, input.runId, input.floId, {
-    nodeId:      input.nodeId,
-    nodeType:    input.nodeType,
-    nodeLabel:   input.nodeLabel,
-    status:      input.status,
-    storagePath,
-  });
+  try {
+    const written = await writeNodeExecutionToStorage(input);
+    storagePath = written.storagePath;
+    bucket = written.bucket;
+
+    await appendRunManifestEntry(input.hubId, input.tenantId, input.runId, input.floId, {
+      nodeId:      input.nodeId,
+      nodeType:    input.nodeType,
+      nodeLabel:   input.nodeLabel,
+      status:      input.status,
+      storagePath,
+    });
+  } catch (err) {
+    console.error('[persistNodeExecutionRecord] Storage write failed — Firestore index only', err);
+  }
 
   const doc = omitUndefinedFields({
     runId:       input.runId,
@@ -100,7 +109,7 @@ export async function persistNodeExecutionRecord(
     httpTrace:   slimHttpTraceForIndex(input.httpTrace),
     storagePath,
     storageBucket: bucket,
-    hasFullPayload: true,
+    hasFullPayload: Boolean(storagePath),
   });
 
   await nodeRecordRef(input.hubId, input.tenantId, input.runId, input.nodeId).set({
@@ -108,10 +117,12 @@ export async function persistNodeExecutionRecord(
     updatedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
 
-  await execRunRef(input.hubId, input.tenantId, input.runId).set({
-    storageRoot: executionRunStorageRoot(input.hubId, input.tenantId, input.runId),
-    hasStoragePayload: true,
-  }, { merge: true });
+  if (storagePath) {
+    await execRunRef(input.hubId, input.tenantId, input.runId).set({
+      storageRoot: executionRunStorageRoot(input.hubId, input.tenantId, input.runId),
+      hasStoragePayload: true,
+    }, { merge: true });
+  }
 }
 
 export async function persistValidationEvent(

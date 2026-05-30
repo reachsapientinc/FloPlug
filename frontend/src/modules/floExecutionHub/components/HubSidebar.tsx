@@ -2,10 +2,13 @@ import React, { useMemo } from 'react';
 import type { FloExecutionRunSummary } from '@floplug/shared';
 
 const STATUS_LEGEND = [
-  { key: 'running', color: 'var(--cyan)', label: 'Running', hint: 'Actively processing' },
+  { key: 'running', color: 'var(--cyan)', label: 'Running', hint: 'Actively processing records' },
   { key: 'success', color: 'var(--green)', label: 'Success', hint: 'Completed without errors' },
-  { key: 'error', color: 'var(--red)', label: 'Failed', hint: 'Stopped on node error' },
-  { key: 'unknown', color: 'var(--slate)', label: 'Queued / unknown', hint: 'Waiting or legacy status' },
+  { key: 'warning', color: 'var(--amber)', label: 'Warning', hint: 'Partial failures / retries' },
+  { key: 'error', color: 'var(--red)', label: 'Failed', hint: 'Stopped on node error or timeout' },
+  { key: 'killed', color: 'var(--amber)', label: 'Killed', hint: 'Cancelled by user' },
+  { key: 'fatal', color: '#c084fc', label: 'Fatal', hint: 'Firebase memory/CPU/timeout — worker died before finalize' },
+  { key: 'unknown', color: 'var(--slate)', label: 'Queued', hint: 'Waiting for worker / dependency' },
 ];
 
 const NODE_LEGEND = [
@@ -44,7 +47,7 @@ export const HubSidebar: React.FC<HubSidebarProps> = ({ runs, floFilter, onFloFi
           className={`sidebar-item${floFilter === null ? ' on' : ''}`}
           onClick={() => onFloFilter(null)}
         >
-          <span style={{ flex: 1 }}>All flos</span>
+          <span style={{ flex: 1 }}>All pipelines</span>
           <span className="hub-sidebar-count">{runs.length}</span>
         </button>
         {floList.map(f => (

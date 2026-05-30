@@ -35,6 +35,7 @@ import { FloConnectionManager } from './FloConnectionManager';
 import { FloActionManager } from './FloActionManager';
 import { FloAlertsSection } from './FloAlertsSection';
 import { useHubEntitledCatalog } from './../hooks/useHubEntitledCatalog';
+import { enterProductDocs, enterHubConfigDocs } from '../docs';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type TabId = 'plugs' | 'users' | 'scheduler' | 'keys' | 'alerts' | 'connections' | 'actions';
@@ -48,6 +49,7 @@ export interface HubAdminDashboardProps {
   hubName?:    string;
   hubLogoUrl?: string;
   initialTab?: TabId;
+  onTabChange?: (tab: TabId) => void;
   onBack:      () => void;
 }
 
@@ -216,9 +218,14 @@ const KeysSection: React.FC = () => (
 // ── Main dashboard ────────────────────────────────────────────────────────────
 const HubAdminDashboard: React.FC<HubAdminDashboardProps> = ({
   hubId, tenantId, userId, permissions, isHubAdmin,
-  hubName = 'FloPlug', hubLogoUrl, initialTab, onBack,
+  hubName = 'FloPlug', hubLogoUrl, initialTab, onTabChange, onBack,
 }) => {
   const [activeTab, setActiveTab] = useState<TabId>(initialTab ?? 'plugs');
+
+  const selectTab = (tab: TabId) => {
+    setActiveTab(tab);
+    onTabChange?.(tab);
+  };
   const [_plugs, setPlugs] = useState<PlugSummary[]>([]);
   const [_users, setUsers] = useState<TenantUser[]>([]);
   const [_flos, setFlos] = useState<FloMeta[]>([]);
@@ -273,6 +280,7 @@ const HubAdminDashboard: React.FC<HubAdminDashboardProps> = ({
       floActionName:        n.floActionName,
       flaLabel:             n.flaLabel,
       description:          n.description,
+      floActionUrlValuesByConnection: n.floActionUrlValuesByConnection,
     })),
     [actionNodes],
   );
@@ -335,11 +343,39 @@ const HubAdminDashboard: React.FC<HubAdminDashboardProps> = ({
           )}
           <div>
             <div style={{ fontSize: 15, fontWeight: 700, color: '#111827', lineHeight: 1.2 }}>{hubName}</div>
-            <div style={{ fontSize: 11, color: '#6B7280', lineHeight: 1 }}>Admin Dashboard</div>
+            <div style={{ fontSize: 11, color: '#6B7280', lineHeight: 1 }}>Hub Admin portal</div>
           </div>
         </div>
 
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <button
+            type="button"
+            onClick={() => enterHubConfigDocs('overview')}
+            title="Live hub configuration catalog"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '6px 12px', borderRadius: 8,
+              border: '1px solid #A7F3D0', background: '#ECFDF5',
+              color: '#059669', fontSize: 12, fontWeight: 600,
+              cursor: 'pointer', fontFamily: 'inherit',
+            }}
+          >
+            🏢 Hub configuration
+          </button>
+          <button
+            type="button"
+            onClick={() => enterProductDocs({ category: 'product' })}
+            title="Product help (opens in new tab)"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '6px 12px', borderRadius: 8,
+              border: '1px solid #BFDBFE', background: '#EBF2FF',
+              color: '#1a56db', fontSize: 12, fontWeight: 600,
+              cursor: 'pointer', fontFamily: 'inherit',
+            }}
+          >
+            📘 Product help
+          </button>
           {isHubAdmin && (
             <span style={{
               fontSize: 10, fontWeight: 700, color: '#1a56db',
@@ -383,7 +419,7 @@ const HubAdminDashboard: React.FC<HubAdminDashboardProps> = ({
             return (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => selectTab(tab.id)}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 10,
                   padding: '10px 12px', borderRadius: 8,

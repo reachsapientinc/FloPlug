@@ -77,7 +77,22 @@ export function flattenRowsToParsedFields(
         xsdType:  'Reference',
         required: row.required,
         repeating: row.maxOccurs === 'unbounded',
+        minOccurs: row.minOccurs,
         helpText: 'Map ID value and wd:type in mapper panel',
+      });
+      continue;
+    }
+
+    if (row.dataType === 'object') {
+      push({
+        path:      row.mapperPath,
+        label:     toLabel(row.name),
+        xsdType:   'object',
+        required:  row.required,
+        repeating: row.maxOccurs === 'unbounded' || (row.maxOccurs != null && row.maxOccurs !== '1'),
+        minOccurs: row.minOccurs,
+        optionalAncestorPaths: row.optionalAncestorPaths,
+        helpText:  row.required ? undefined : 'Optional section — map inner fields only when needed',
       });
       continue;
     }
@@ -91,6 +106,8 @@ export function flattenRowsToParsedFields(
       xsdType:   row.dataType,
       required:  row.required,
       repeating,
+      minOccurs: row.minOccurs,
+      optionalAncestorPaths: row.optionalAncestorPaths,
       helpText:  row.notes,
     });
   }

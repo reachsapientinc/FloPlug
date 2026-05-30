@@ -11,24 +11,43 @@
 import { getFirestore }              from 'firebase-admin/firestore';
 import { executeMapper }             from '../nodes/mapperNode.js';
 import { executeFilterNode }         from '../nodes/filterNode.js';
+import { executeSwitchNode }         from '../nodes/switchNode.js';
 import { executeFunctionNode }       from '../nodes/functionNode.js';
 import { executeVariableStoreNode }  from '../nodes/variableStoreNode.js';
 import { executeTemplateNode }       from '../nodes/templateNode.js';
 import { executeFifNode }            from '../nodes/fifNode.js';
-import { executeLoopNode }           from '../nodes/loopNode.js';
+import { executeLoopNode } from '../nodes/loopNode.js';
+import {
+  executeInvokeSubFloNode,
+  executeSubFloReturnNode,
+} from '../nodes/subFloRunner.js';
 import { executePlugNode }           from '../nodes/plugNode.js';
 import { executeEmailNode }          from '../nodes/emailNode.js';
 import { executeFloActionNode }      from './executeFloActionNode.js';
+import { floActionErrorToHubDiagnostics } from './floActionHubDiagnostics.js';
+import type { HubFloActionDocCache } from './resolveFloActionNodeHub.js';
 import {
   executeWorkdayNode, executeSalesforceNode,
   executeSapNode, executeOracleNode,
 }                                    from '../nodes/connectorNodes.js';
-import { unwrapWithMeta }            from '../nodes/cStreamMeta.js';
+import { unwrapWithMeta, isEnvelope } from '../nodes/cStreamMeta.js';
 import { wrapMessage }               from '../nodes/cStreamMeta.js';
 import { getValue, setValue }        from '../utils/pathUtils.js';
 import type { RunContext, NodeExecutionHubPayload, NodeHttpTrace } from '@floplug/shared';
+import { isReservedStoreKey } from '@floplug/shared';
 import { NODE_TYPES, COLLECTIONS, HUB_COLLECTIONS, getPublishedGraph } from '@floplug/shared';
-import { nodeLabel } from '@floplug/shared';
+import {
+  filterExecutableMainNodes,
+  filterExecutableMainEdges,
+} from '@floplug/shared';
+import {
+  nodeLabel,
+  parseNodeDataPersistence,
+  buildPersistedInputSnapshot,
+  buildPersistedOutputSnapshot,
+  shouldPersistNodeExecution,
+} from '@floplug/shared';
+import { RunKilledError, touchRunHeartbeat } from './runLifecycle.js';
 
 const db = getFirestore();
 
@@ -45,7 +64,12 @@ function cloneForHubRecord(value: unknown): Record<string, unknown> | undefined 
 }
 
 interface FloNode { id: string; type: string; data: Record<string, unknown>; }
-interface FloEdge { source: string; target: string; }
+interface FloEdge {
+  source:       string;
+  target:       string;
+  sourceHandle?: string | null;
+  targetHandle?: string | null;
+}
 
 const MAX_DEPTH = 5;
 
@@ -55,10 +79,13 @@ const MAX_DEPTH = 5;
  */
 function safeCs(val: unknown): Record<string, unknown> {
   if (val === null || val === undefined) return wrapMessage(null) as Record<string, unknown>;
-  if (typeof val === 'object' && 'message' in (val as any)) {
-    return val as Record<string, unknown>;   // already canonical
+  if (typeof val === 'object' && val !== null && 'message' in (val as object)) {
+    return val as Record<string, unknown>;
   }
-  // Legacy — wrap the whole value as message
+  if (isEnvelope(val)) {
+    const { value, contentType } = unwrapWithMeta(val);
+    return wrapMessage(value, { contentType }) as Record<string, unknown>;
+  }
   return wrapMessage(val) as Record<string, unknown>;
 }
 
@@ -120,8 +147,47 @@ export async function executeFloNodes(
     return initialCStream;
   }
 
+  const allNodes = (ctx.graphNodes as FloNode[] | undefined) ?? nodes;
+  const allEdges = (ctx.graphEdges as FloEdge[] | undefined) ?? edges;
+  ctx.graphNodes = allNodes;
+  ctx.graphEdges = allEdges;
+
+  const runningFullGraph = nodes.length === allNodes.length;
+  const execNodes = runningFullGraph
+    ? filterExecutableMainNodes(allNodes, allEdges) as FloNode[]
+    : nodes;
+  const execEdges = runningFullGraph
+    ? filterExecutableMainEdges(allNodes, allEdges) as FloEdge[]
+    : edges;
+
+  return executeFloNodesInner(execNodes, execEdges, initialCStream, ctx, allNodes, allEdges);
+}
+
+async function executeFloNodesInner(
+  nodes:          FloNode[],
+  edges:          FloEdge[],
+  initialCStream: unknown,
+  ctx:            RunContext,
+  allNodes:       FloNode[],
+  allEdges:       FloEdge[],
+): Promise<unknown> {
+  if (ctx.depth > MAX_DEPTH) {
+    ctx.log.push(`⚠ Max nesting depth (${MAX_DEPTH}) reached — aborting sub-flo`);
+    return initialCStream;
+  }
+
   const { hubId, tenantId, store, log } = ctx;
+  const dryRun = ctx.dryRun === true;
+  if (dryRun) {
+    log.push(`${'  '.repeat(ctx.depth)}[DRY RUN] Simulated execution — no outbound I/O`);
+  }
+  const hubFloActionCache: HubFloActionDocCache = ctx.hubFloActionCache ?? new Map();
+  if (!ctx.hubFloActionCache) ctx.hubFloActionCache = hubFloActionCache;
   const outputs: Record<string, unknown> = {};
+  /** floSwitchNode id → winning sourceHandle (branch id or __default__). */
+  const switchRoutes: Record<string, string> = {};
+  /** loopNode id → exit handle after loop completes. */
+  const loopRoutes: Record<string, string> = {};
   const ordered = topoSort(nodes, edges);
 
   // Wrap the initial input as canonical cStream on entry
@@ -129,17 +195,48 @@ export async function executeFloNodes(
   let lastCStream: unknown = canonicalInitial;
 
   for (const node of ordered) {
+    if (ctx.shouldAbort && await ctx.shouldAbort()) {
+      log.push(`${'  '.repeat(ctx.depth)}Run killed by user`);
+      throw new RunKilledError();
+    }
+
+    if (ctx.runId && ctx.hubId && ctx.tenantId) {
+      await touchRunHeartbeat(ctx.hubId, ctx.tenantId, ctx.runId);
+    }
+
     log.push(`  ${'  '.repeat(ctx.depth)}↳ ${node.type} (${node.id})`);
     const nodeStarted = Date.now();
     const logIndexAtStart = log.length;
     let hubBeforeRaw: Record<string, unknown> | undefined;
     let nodeHttpTrace: NodeHttpTrace | undefined;
+    const persistCfg = parseNodeDataPersistence(node.data as Record<string, unknown>);
+    const willPersist = Boolean(ctx.onNodeComplete && shouldPersistNodeExecution(persistCfg));
     try {
       const incoming = edges.filter(e => e.target === node.id);
+      const activeIncoming = incoming.filter(e => {
+        const route = switchRoutes[e.source];
+        if (route !== undefined) {
+          const handle = e.sourceHandle ?? '__default__';
+          return handle === route;
+        }
+        const loopRoute = loopRoutes[e.source];
+        if (loopRoute !== undefined) {
+          const handle = e.sourceHandle ?? '';
+          return handle === loopRoute;
+        }
+        return true;
+      });
+
+      if (incoming.length > 0 && activeIncoming.length === 0) {
+        outputs[node.id] = null;
+        log.push(`  ${'  '.repeat(ctx.depth)}  → skipped (FloSwitch path inactive)`);
+        continue;
+      }
+
       let rawCStream: unknown;
-      if (incoming.length === 0)      rawCStream = canonicalInitial;
-      else if (incoming.length === 1) rawCStream = outputs[incoming[0].source];
-      else rawCStream = incoming.reduce(
+      if (activeIncoming.length === 0)      rawCStream = canonicalInitial;
+      else if (activeIncoming.length === 1) rawCStream = outputs[activeIncoming[0].source];
+      else rawCStream = activeIncoming.reduce(
         (acc: Record<string, unknown>, e) => {
           const src = outputs[e.source];
           if (typeof src === 'object' && src !== null) return { ...acc, ...(src as object) };
@@ -155,11 +252,10 @@ export async function executeFloNodes(
       }
 
       const cStream = safeCs(rawCStream);
-      let hubBeforeRaw: Record<string, unknown> | undefined;
-      if (ctx.onNodeComplete) {
+      if (willPersist) {
         hubBeforeRaw = cloneForHubRecord(cStream);
       }
-      const nd: Record<string, any> = { ...node.data, hubId, tenantId, id: node.id };
+      const nd: Record<string, any> = { ...node.data, hubId, tenantId, id: node.id, dryRun };
       let result: unknown;
 
       switch (node.type) {
@@ -167,7 +263,7 @@ export async function executeFloNodes(
         // ── Start ─────────────────────────────────────────────────────────────
         case NODE_TYPES.START: {
           for (const v of (nd.initVars as { key: string; value: string }[]) ?? []) {
-            if (v.key) store.global[v.key] = v.value;
+            if (v.key && !isReservedStoreKey(v.key)) store.global[v.key] = v.value;
           }
           result = canonicalInitial;
           break;
@@ -205,7 +301,7 @@ export async function executeFloNodes(
           const effectiveNodeType = nd.nodeType as string | undefined;
           console.log(`[executeFloNodes] effectiveNodeType: ${effectiveNodeType}`);
           if (effectiveNodeType === NODE_TYPES.EMAIL || nd.authProtocol === 'smtp_basic') {
-            const { cStream: next, logLine } = await executeEmailNode(cStream, nd, store);
+            const { cStream: next, logLine } = await executeEmailNode(cStream, nd, store, ctx.floRunMeta);
             result = next;
             log.push(`${'  '.repeat(ctx.depth)}  ${logLine}`);
           } else if (effectiveNodeType === NODE_TYPES.WORKDAY) {
@@ -225,7 +321,7 @@ export async function executeFloNodes(
             result = next;
             log.push(`${'  '.repeat(ctx.depth)}  ${logLine}`);
           } else {
-            const plugOut = await executePlugNode(cStream, nd, store);
+            const plugOut = await executePlugNode(cStream, nd, store, ctx.floRunMeta);
             result = plugOut.cStream;
             nodeHttpTrace = plugOut.httpTrace;
             log.push(`${'  '.repeat(ctx.depth)}  ${plugOut.logLine}`);
@@ -235,7 +331,7 @@ export async function executeFloNodes(
 
         // ── Dedicated email node type (future canvas node) ────────────────────
         case NODE_TYPES.EMAIL: {
-          const { cStream: next, logLine } = await executeEmailNode(cStream, nd, store);
+          const { cStream: next, logLine } = await executeEmailNode(cStream, nd, store, ctx.floRunMeta);
           result = next;
           log.push(`${'  '.repeat(ctx.depth)}  ${logLine}`);
           break;
@@ -267,16 +363,23 @@ export async function executeFloNodes(
         case NODE_TYPES.MAPPER: {
           // Pass cStream.message to mapper so it operates on the payload
           const { value: msg } = unwrapWithMeta(cStream);
-          const mapped = executeMapper(msg, nd);
+          const mapped = executeMapper(msg, nd, store, ctx.floRunMeta);
           result = wrapMessage(mapped, { source: node.id });
           log.push(`${'  '.repeat(ctx.depth)}  ✓ Mapper: ${nd.mappings?.length ?? 0} rules (${nd.mapMode ?? 'pure'})`);
           break;
         }
         case NODE_TYPES.FILTER: {
           const { value: msg } = unwrapWithMeta(cStream);
-          const { cStream: next, logLine } = executeFilterNode(msg, nd, store);
+          const { cStream: next, logLine } = executeFilterNode(msg, nd, store, ctx.floRunMeta);
           // If filter kills (null), propagate null; otherwise wrap result
           result = next === null ? null : wrapMessage(next, { source: node.id });
+          log.push(`${'  '.repeat(ctx.depth)}  ${logLine}`); break;
+        }
+        case NODE_TYPES.SWITCH: {
+          const { value: msg } = unwrapWithMeta(cStream);
+          const { cStream: next, logLine, activeHandle } = executeSwitchNode(msg, nd, store, ctx.floRunMeta);
+          switchRoutes[node.id] = activeHandle;
+          result = wrapMessage(next, { source: node.id });
           log.push(`${'  '.repeat(ctx.depth)}  ${logLine}`); break;
         }
         case NODE_TYPES.VAR_STORE: {
@@ -300,18 +403,40 @@ export async function executeFloNodes(
           result = next; log.push(`${'  '.repeat(ctx.depth)}  ${logLine}`); break;
         }
         case NODE_TYPES.LOOP: {
-          const { cStream: next, logLine } = await executeLoopNode(
-            cStream, nd, ctx, executeFloNodes
+          const { cStream: next, logLine, activeHandle } = await executeLoopNode(
+            cStream, nd, ctx, allNodes, allEdges, executeFloNodes, node.id,
           );
+          loopRoutes[node.id] = activeHandle;
           result = next;
           for (const line of logLine.split(' | '))
             log.push(`${'  '.repeat(ctx.depth)}  ${line}`);
           break;
         }
 
+        case NODE_TYPES.SUB_FLO: {
+          result = cStream;
+          log.push(`${'  '.repeat(ctx.depth)}  ✓ SubFlo entry`);
+          break;
+        }
+
+        case NODE_TYPES.SUB_FLO_RETURN: {
+          throw executeSubFloReturnNode(cStream, nd, store, ctx.floRunMeta);
+        }
+
+        case NODE_TYPES.INVOKE_SUB_FLO: {
+          const { cStream: next, logLine } = await executeInvokeSubFloNode(
+            cStream, nd, ctx, allNodes, allEdges, executeFloNodes,
+          );
+          result = next;
+          log.push(`${'  '.repeat(ctx.depth)}  ${logLine}`);
+          break;
+        }
+
         // ── FloAction (connector API call with semantic field mapping) ─────────
         case 'floActionNode': {
           const floResult = await executeFloActionNode({
+            dryRun,
+            floRunMeta: ctx.floRunMeta,
             node: {
               actionId:      String(nd.actionId ?? ''),
               floKitId:      String(nd.floKitId ?? ''),
@@ -330,6 +455,7 @@ export async function executeFloNodes(
             hubId,
             tenantId,
             nodeId:      node.id,
+            hubFloActionCache,
           });
           store.local  = floResult.localStore;
           store.global = floResult.globalStore;
@@ -347,42 +473,63 @@ export async function executeFloNodes(
       outputs[node.id] = result;
       lastCStream = result;
 
-      if (ctx.onNodeComplete) {
+      if (willPersist) {
         const nodeLogLines = log
           .slice(logIndexAtStart)
           .filter(l => !l.includes('↳'));
         const lastLine = nodeLogLines.length
           ? nodeLogLines[nodeLogLines.length - 1].trim()
           : undefined;
+        const afterCs = cloneForHubRecord(result);
         const payload: NodeExecutionHubPayload = {
           nodeId:     node.id,
           nodeType:   node.type,
           nodeLabel:  nodeLabel(node.data as Record<string, unknown>, node.id),
           status:     'ok',
-          before:     hubBeforeRaw,
-          after:      cloneForHubRecord(result),
+          before:     buildPersistedInputSnapshot({
+            config: persistCfg,
+            cStream: hubBeforeRaw,
+            local:   { ...store.local },
+            global:  { ...store.global },
+          }),
+          after:      buildPersistedOutputSnapshot({
+            config: persistCfg,
+            cStream: afterCs,
+            local:   { ...store.local },
+            global:  { ...store.global },
+            httpTrace: nodeHttpTrace,
+            stripRemoteTrace: dryRun,
+          }),
           ...(lastLine ? { logLine: lastLine } : {}),
-          ...(nodeHttpTrace ? { httpTrace: nodeHttpTrace } : {}),
           durationMs: Date.now() - nodeStarted,
         };
-        await Promise.resolve(ctx.onNodeComplete(payload));
+        if (ctx.onNodeComplete) {
+          await Promise.resolve(ctx.onNodeComplete(payload));
+        }
       }
 
     } catch (err: any) {
-      log.push(`${'  '.repeat(ctx.depth)}  Error in ${node.id}: ${err.message}`);
+      const hubDiag = floActionErrorToHubDiagnostics(err);
+      log.push(`${'  '.repeat(ctx.depth)}  Error in ${node.id}: ${hubDiag.error}`);
       outputs[node.id] = null;
-      if (ctx.onNodeComplete) {
+      if (willPersist) {
         const payload: NodeExecutionHubPayload = {
           nodeId:     node.id,
           nodeType:   node.type,
           nodeLabel:  nodeLabel(node.data as Record<string, unknown>, node.id),
           status:     'error',
-          before:     hubBeforeRaw,
-          error:      err.message,
-          ...(err.httpTrace ? { httpTrace: err.httpTrace as NodeHttpTrace } : {}),
+          before:     buildPersistedInputSnapshot({
+            config: persistCfg,
+            cStream: hubBeforeRaw,
+            local:   { ...store.local },
+            global:  { ...store.global },
+          }),
+          error:      hubDiag.error,
           durationMs: Date.now() - nodeStarted,
         };
-        await Promise.resolve(ctx.onNodeComplete(payload));
+        if (ctx.onNodeComplete) {
+          await Promise.resolve(ctx.onNodeComplete(payload));
+        }
       }
     }
   }

@@ -8,15 +8,22 @@ import {
   executionNodeStoragePath,
   executionRunManifestPath,
   executionRunStorageRoot,
+  omitUndefinedFields,
   type FloExecutionNodeStorageRecord,
   type PersistNodeExecutionInput,
   type NodeHttpTrace,
 } from '@floplug/shared';
+import { CURRENT_SCHEMA_BUCKET } from '../constants.js';
 
 const STORAGE_VERSION = 1;
 
+function resolveBucketName(raw: string): string {
+  return raw.replace(/^gs:\/\//, '');
+}
+
 function getBucket() {
-  return getStorage().bucket();
+  const bucketName = resolveBucketName(CURRENT_SCHEMA_BUCKET);
+  return getStorage().bucket(bucketName);
 }
 
 function cloneJson<T>(value: T): T {
@@ -28,12 +35,12 @@ function previewBody(body: string, max = 800): string {
   return `${body.slice(0, max)}\n… [${body.length} chars total — see Storage for full body]`;
 }
 
-/** Slim httpTrace for Firestore index (previews only). */
+/** Slim httpTrace for Firestore index (previews only). Omits undefined fields — Firestore rejects them. */
 export function slimHttpTraceForIndex(trace?: NodeHttpTrace): NodeHttpTrace | undefined {
   if (!trace) return undefined;
   const req = trace.requestBody ?? trace.requestBodyPreview ?? '';
   const res = trace.responseBody ?? trace.responseBodyPreview ?? '';
-  return {
+  const slim = omitUndefinedFields({
     method:               trace.method,
     url:                  trace.url,
     requestHeaders:       trace.requestHeaders,
@@ -42,7 +49,8 @@ export function slimHttpTraceForIndex(trace?: NodeHttpTrace): NodeHttpTrace | un
     statusText:           trace.statusText,
     responseBodyPreview:  previewBody(res, 800),
     responseContentType:  trace.responseContentType,
-  };
+  }) as NodeHttpTrace;
+  return Object.keys(slim).length > 0 ? slim : undefined;
 }
 
 export async function writeNodeExecutionToStorage(
@@ -157,7 +165,13 @@ export async function appendRunManifestEntry(
 
 export async function getSignedDownloadUrl(storagePath: string, hours = 1): Promise<string> {
   const bucket = getBucket();
-  const [url] = await bucket.file(storagePath).getSignedUrl({
+  const file = bucket.file(storagePath);
+  const [exists] = await file.exists();
+  if (!exists) {
+    throw new Error(`Storage object not found: ${storagePath}`);
+  }
+  const [url] = await file.getSignedUrl({
+    version: 'v4',
     action: 'read',
     expires: Date.now() + hours * 60 * 60 * 1000,
   });

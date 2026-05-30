@@ -3,6 +3,7 @@
  */
 
 import type { FloNode, FloEdge } from './nodeTypes.js';
+import type { ConnectionUrlFields } from '../utils/connectorUrlTokens.js';
 
 export type ValidationSeverity = 'error' | 'warning' | 'info';
 
@@ -19,7 +20,18 @@ export type FloValidationCode =
   | 'ACTION_NOT_CONFIGURED'
   | 'MAPPING_INCOMPLETE'
   | 'EMPTY_TEMPLATE'
-  | 'SUB_FLO_NOT_SELECTED';
+  | 'SUB_FLO_NOT_SELECTED'
+  | 'EXPRESSION_INVALID'
+  | 'PAREN_MISMATCH'
+  | 'DUPLICATE_NAME'
+  | 'INVALID_VALUE'
+  | 'SUBFLO_NO_RETURN'
+  | 'SUBFLO_CYCLE'
+  | 'SUBFLO_NOT_FOUND'
+  | 'SUBFLO_CROSS_EDGE'
+  | 'LOOP_NO_BODY'
+  | 'LOOP_NO_EXIT'
+  | 'LOOP_EMPTY_BODY';
 
 export interface FloValidationIssue {
   nodeId:     string;
@@ -76,6 +88,8 @@ export interface FloValidationResourceContext {
   hubActionNodeIds?:  Set<string>;
   /** plugId → allowed connections + default (hub admin plug definition) */
   plugConnectionPolicy?: Record<string, PlugConnectionPolicy>;
+  /** connectionId → URL fields for design-time resolved-URL validation */
+  connectionsById?: Record<string, ConnectionUrlFields>;
 }
 
 export interface ValidateFloGraphInput {

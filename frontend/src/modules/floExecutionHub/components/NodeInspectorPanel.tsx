@@ -1,7 +1,10 @@
-import React, { useState } from 'react';
+import React from 'react';
 import type { FloExecutionNodeRecord, NodeHttpTrace } from '@floplug/shared';
+import { CodeBlockWithCopy } from '../../../components/CodeBlockWithCopy';
+import { CopyButton } from '../../../components/CopyButton';
 import { formatDuration, jsonPreview } from '../utils/formatters';
 import { StatusDot } from './StatusBadge';
+import '../../../styles/copy-ui.css';
 
 export interface NodeInspectorPanelProps {
   record: FloExecutionNodeRecord | null;
@@ -9,18 +12,28 @@ export interface NodeInspectorPanelProps {
 }
 
 function HttpTraceSection({ trace }: { trace: NodeHttpTrace }) {
-  const reqBody = trace.requestBody ?? trace.requestBodyPreview;
-  const resBody = trace.responseBody ?? trace.responseBodyPreview;
+  const reqBody = trace.requestBody ?? trace.requestBodyPreview ?? '';
+  const resBody = trace.responseBody ?? trace.responseBodyPreview ?? '';
+  const headersText = trace.requestHeaders
+    ? jsonPreview(trace.requestHeaders, 8000)
+    : '';
+
   return (
     <div className="hub-inspector-section">
       <div className="hub-inspector-section-title">HTTP request</div>
       <div className="hub-inspector-kv">
         <span className="hub-inspector-k">Method</span>
-        <span className="hub-inspector-v mono">{trace.method}</span>
+        <span className="hub-inspector-v mono" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {trace.method}
+          <CopyButton text={trace.method} label="Copy method" />
+        </span>
       </div>
       <div className="hub-inspector-kv">
         <span className="hub-inspector-k">URL</span>
-        <span className="hub-inspector-v mono" style={{ wordBreak: 'break-all' }}>{trace.url}</span>
+        <span className="hub-inspector-v mono" style={{ wordBreak: 'break-all', display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+          <span style={{ flex: 1 }}>{trace.url}</span>
+          <CopyButton text={trace.url} label="Copy URL" />
+        </span>
       </div>
       {trace.status != null && (
         <div className="hub-inspector-kv">
@@ -28,30 +41,20 @@ function HttpTraceSection({ trace }: { trace: NodeHttpTrace }) {
           <span className="hub-inspector-v mono">{trace.status} {trace.statusText ?? ''}</span>
         </div>
       )}
-      {trace.requestHeaders && Object.keys(trace.requestHeaders).length > 0 && (
-        <div style={{ marginTop: 8 }}>
-          <div className="hub-inspector-subtitle">Headers (secrets redacted)</div>
-          <pre className="json-block">{jsonPreview(trace.requestHeaders, 4000)}</pre>
-        </div>
+      {headersText && (
+        <CodeBlockWithCopy title="Headers (redacted)" content={headersText} maxHeight={200} />
       )}
       {reqBody && (
-        <div style={{ marginTop: 8 }}>
-          <div className="hub-inspector-subtitle">Request body</div>
-          <pre className="json-block hub-json-full">{reqBody}</pre>
-        </div>
+        <CodeBlockWithCopy title="Request body" content={reqBody} maxHeight={360} />
       )}
       {resBody && (
-        <div style={{ marginTop: 8 }}>
-          <div className="hub-inspector-subtitle">Response body</div>
-          <pre className="json-block hub-json-full">{resBody}</pre>
-        </div>
+        <CodeBlockWithCopy title="Response body" content={resBody} maxHeight={360} />
       )}
     </div>
   );
 }
 
 export const NodeInspectorPanel: React.FC<NodeInspectorPanelProps> = ({ record, onClose }) => {
-  const [showFullJson, setShowFullJson] = useState(true);
 
   if (!record) {
     return (
@@ -66,7 +69,13 @@ export const NodeInspectorPanel: React.FC<NodeInspectorPanelProps> = ({ record, 
     : record.status === 'error' ? 'error'
     : record.status;
 
-  const jsonMax = showFullJson ? 500000 : 4000;
+  const jsonMax = 500000;
+  const beforeText = record.before && Object.keys(record.before).length > 0
+    ? jsonPreview(record.before, jsonMax)
+    : '';
+  const afterText = record.after && Object.keys(record.after).length > 0
+    ? jsonPreview(record.after, jsonMax)
+    : '';
 
   return (
     <div className="hub-node-inspector">
@@ -90,11 +99,12 @@ export const NodeInspectorPanel: React.FC<NodeInspectorPanelProps> = ({ record, 
       {record.storagePath && (
         <div className="hub-inspector-storage">
           <span className="hub-inspector-k">Storage JSON</span>
-          <code className="hub-inspector-v mono" style={{ fontSize: 10, wordBreak: 'break-all' }}>
+          <code className="hub-inspector-v mono" style={{ fontSize: 10, wordBreak: 'break-all', flex: 1 }}>
             {record.storagePath}
           </code>
+          <CopyButton text={record.storagePath} label="Copy storage path" />
           {record.hasFullPayload && (
-            <span style={{ fontSize: 10, color: 'var(--green)', marginLeft: 8 }}>full payload</span>
+            <span style={{ fontSize: 10, color: 'var(--green)', marginLeft: 4 }}>full payload</span>
           )}
         </div>
       )}
@@ -115,30 +125,47 @@ export const NodeInspectorPanel: React.FC<NodeInspectorPanelProps> = ({ record, 
       </div>
 
       {record.logLine && (
-        <div className="hub-inspector-logline">{record.logLine}</div>
+        <div className="hub-inspector-logline" style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+          <span style={{ flex: 1 }}>{record.logLine}</span>
+          <CopyButton text={record.logLine} label="Copy log line" />
+        </div>
       )}
 
       {record.error && (
-        <div className="hub-inspector-error">{record.error}</div>
+        <div className="hub-inspector-error" style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+          <span style={{ flex: 1 }}>{record.error}</span>
+          <CopyButton text={record.error} label="Copy error" />
+        </div>
+      )}
+
+      {record.error && !record.httpTrace && record.nodeType === 'floActionNode' && (
+        <div className="hub-inspector-muted" style={{ marginBottom: 8, fontSize: 12 }}>
+          No HTTP trace was stored for this failure. Redeploy functions after the latest hub
+          diagnostics update, then re-run. Older runs may only show the generic connector error.
+        </div>
       )}
 
       {record.httpTrace && <HttpTraceSection trace={record.httpTrace} />}
 
       <div className="hub-inspector-io">
         <div className="hub-inspector-io-col">
-          <div className="hub-inspector-section-title">Input (before)</div>
-          {record.before && Object.keys(record.before).length > 0 ? (
-            <pre className="json-block hub-json-full">{jsonPreview(record.before, jsonMax)}</pre>
+          {beforeText ? (
+            <CodeBlockWithCopy title="Input (before)" content={beforeText} maxHeight={320} />
           ) : (
-            <div className="hub-inspector-muted">No input snapshot</div>
+            <>
+              <div className="hub-inspector-section-title">Input (before)</div>
+              <div className="hub-inspector-muted">No input snapshot</div>
+            </>
           )}
         </div>
         <div className="hub-inspector-io-col">
-          <div className="hub-inspector-section-title">Output (after)</div>
-          {record.after && Object.keys(record.after).length > 0 ? (
-            <pre className="json-block hub-json-full">{jsonPreview(record.after, jsonMax)}</pre>
+          {afterText ? (
+            <CodeBlockWithCopy title="Output (after)" content={afterText} maxHeight={320} />
           ) : (
-            <div className="hub-inspector-muted">No output snapshot</div>
+            <>
+              <div className="hub-inspector-section-title">Output (after)</div>
+              <div className="hub-inspector-muted">No output snapshot</div>
+            </>
           )}
         </div>
       </div>

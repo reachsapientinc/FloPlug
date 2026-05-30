@@ -169,6 +169,7 @@ export const NODE_TYPES = {
   END:           'endNode',
   MAPPER:        'mapperNode',
   FILTER:        'filterNode',
+  SWITCH:        'floSwitchNode',
   TEMPLATE:      'templateNode',
   FUNCTION:      'functionNode',
   VAR_STORE:     'variableStoreNode',
@@ -179,6 +180,9 @@ export const NODE_TYPES = {
   ORACLE:        'oracleNode',
   FIF:           'fifNode',
   LOOP:          'loopNode',
+  SUB_FLO:       'subFloNode',
+  SUB_FLO_RETURN:'subFloReturnNode',
+  INVOKE_SUB_FLO:'invokeSubFloNode',
   EMAIL:          'emailNode',
 } as const;
 

@@ -64,8 +64,41 @@ checks.push([
     '<wd:Item_Description>Annual premium support package for enterprise customers</wd:Item_Description>',
   ),
 ]);
+const resolvedAddOnlyFalse = {
+  ...resolvedLegacy,
+  'Put_Sales_Item_Request.@Add_Only': 'false',
+};
+
+const xmlAddOnlyFalse = buildRequestBody(actionDoc, resolvedAddOnlyFalse);
+checks.push(
+  ['mapped Add_Only false', xmlAddOnlyFalse.includes('wd:Add_Only="false"')],
+  ['no forced Add_Only true when mapped', !xmlAddOnlyFalse.includes('wd:Add_Only="true"')],
+);
+
+const resolvedBlankRef = {
+  'Put_Sales_Item_Request.Sales_Item_Data.Sales_Item_ID': 'SI-100245',
+  'Put_Sales_Item_Request.Sales_Item_Data.Item_Name': 'Premium Support Add-on',
+  'Put_Sales_Item_Request.Sales_Item_Data.Revenue_Category_Reference.ID': '',
+  'Put_Sales_Item_Request.Sales_Item_Data.Revenue_Category_Reference.ID.@type': 'Revenue_Category_ID',
+};
+
+const resolvedTypeOnly = {
+  ...resolvedBlankRef,
+  'Put_Sales_Item_Request.Sales_Item_Data.Revenue_Category_Reference.ID': undefined,
+};
+
+const xmlBlank = buildRequestBody(actionDoc, resolvedBlankRef);
+const xmlTypeOnly = buildRequestBody(actionDoc, resolvedTypeOnly);
+
+checks.push(
+  ['omit blank Revenue_Category_Reference', !xmlBlank.includes('Revenue_Category_Reference')],
+  ['omit type-only ID', !xmlTypeOnly.includes('Revenue_Category_Reference')],
+  ['omit empty wd:ID', !/<wd:ID[^>]*\/>/.test(xmlBlank) && !/<wd:ID[^>]*><\/wd:ID>/.test(xmlBlank)],
+);
+
 for (const [name, ok] of checks) {
   console.log(ok ? '✓' : '✗', name);
 }
 console.log('\n--- legacy body ---\n', xmlLegacy);
 console.log('\n--- multi-ID body ---\n', xmlMulti);
+console.log('\n--- blank ref body ---\n', xmlBlank);

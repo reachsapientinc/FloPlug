@@ -9,6 +9,7 @@ import {
   COLLECTIONS, SUB_COLLECTIONS,
   resolveKitDataModelSchemaId,
   buildWorkdayIdCompositePath,
+  isFieldEffectivelyRequired,
 } from '@floplug/shared';
 import { CURRENT_SCHEMA_BUCKET } from '../constants.js';
 import { loadActionDocWithSchema } from './resolveActionSchema.js';
@@ -17,6 +18,8 @@ import { XMLParser } from 'fast-xml-parser';
 
 const db = getFirestore();
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/** Bump when mapping field semantics change — forces mapper cache refresh. */
+const MAPPING_TARGET_CACHE_VERSION = 2;
 const storageBucket = getStorage().bucket(CURRENT_SCHEMA_BUCKET);
 
 export type MappingTargetSchemaSource = 'dataModel' | 'services' | 'manual';
@@ -51,7 +54,8 @@ export interface ResolveFloActionMappingTargetResult {
 function countRequired(fields: ParsedField[]): number {
   return fields.filter(f => {
     if (/\.@type\.[^.]+$/.test(f.path)) return false;
-    return f.required;
+    if (f.xsdType === 'object') return false;
+    return isFieldEffectivelyRequired(f, fields, {}, []);
   }).length;
 }
 
@@ -315,7 +319,8 @@ export async function resolveFloActionMappingTarget(
       if (cached.exists) {
         const data  = cached.data()!;
         const ageMs = Date.now() - (data.cachedAt?.toMillis?.() ?? 0);
-        if (ageMs < CACHE_TTL_MS && Array.isArray(data.fields) && data.fields.length > 0) {
+        if (ageMs < CACHE_TTL_MS && Array.isArray(data.fields) && data.fields.length > 0
+          && (data.cacheVersion as number | undefined) === MAPPING_TARGET_CACHE_VERSION) {
           const fields = expandIdTypeOptionFields(data.fields as ParsedField[]);
           return {
             fields,
@@ -466,6 +471,7 @@ export async function resolveFloActionMappingTarget(
       schemaSource,
       dataModelSchemaId,
       operationName,
+      cacheVersion: MAPPING_TARGET_CACHE_VERSION,
       cachedAt: new Date(),
     });
   } catch {

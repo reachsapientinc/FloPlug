@@ -19,7 +19,11 @@ import type {
 import {
   validateFloKitIdentity, validateFloKitConfiguration,
   isFloKitConfigured, resolveKitServicesSchemaId,
+  kitTokensForConnector, buildKitUrlValues, deriveWorkdayModuleName, normalizeWorkdayVersion,
+  resolveConnectorUrlPreview, missingConnectorUrlValues,
+  resolveKitUrlValues, getUrlTokenHintForToken, resolveUrlTokenVendorProfile,
 } from '@floplug/shared';
+import ConnectorUrlPreviewBox from '../components/ConnectorUrlPreviewBox';
 import { loadConnectors } from '../types/AuthConnectorTypes';
 import { COLLECTIONS, SUB_COLLECTIONS } from '@floplug/shared';
 import { fetchSchemaOperations } from '../lib/schemaOperations';
@@ -288,9 +292,23 @@ const FloKitManagement: React.FC = () => {
 
   const handleServicesSchemaChange = (schemaId: string) => {
     const schema = schemas.find(s => s.id === schemaId);
+    const connDoc = connectors.find(c => c.id === selectedConn);
+    const kitTokens = kitTokensForConnector(connDoc);
+    const derived = buildKitUrlValues({
+      schemaLabel:   schema?.label ?? schema?.id,
+      schemaVersion: schema?.version,
+    }, kitTokens);
+    const urlTokenValues: Record<string, string> = {};
+    for (const token of kitTokens) {
+      const key = token.key;
+      urlTokenValues[key] = derived[key] ?? derived[token.field ?? ''] ?? '';
+    }
     patch({
       servicesSchemaId: schemaId,
       servicesSchemaVersion: schema?.version ?? '',
+      urlTokenValues,
+      serviceModule:  derived.serviceModule ?? derived.module ?? '',
+      serviceVersion: derived.serviceVersion ?? derived.version ?? '',
       actionIds: [],
     });
     setSelectedOperations([]);
@@ -465,6 +483,24 @@ const FloKitManagement: React.FC = () => {
     );
     if (validationError) { flash(validationError, true); return; }
 
+    const kitTokens = kitTokensForConnector(conn);
+    const kitCtx = {
+      urlTokenValues: form.urlTokenValues,
+      serviceModule:  form.serviceModule,
+      serviceVersion: form.serviceVersion,
+      schemaLabel:    selectedServicesSchema?.label,
+      schemaVersion:  selectedServicesSchema?.version ?? form.servicesSchemaVersion,
+    };
+    const missingKit = missingConnectorUrlValues({
+      urlTokens: conn?.urlTokens ?? [],
+      kit: kitCtx,
+      sources: ['kit'],
+    });
+    if (missingKit.length > 0) {
+      flash(`Fill kit URL segments: ${missingKit.map(t => t.label ?? t.key).join(', ')}`, true);
+      return;
+    }
+
     const actionIds = selectedOperations.map(operationDocId);
     const servicesVer = selectedServicesSchema?.version ?? form.servicesSchemaVersion;
     const payload: FloKitDoc = {
@@ -490,6 +526,27 @@ const FloKitManagement: React.FC = () => {
   };
 
   const conn = connectors.find(c => c.id === selectedConn);
+  const kitUrlTokens = kitTokensForConnector(conn);
+  const kitUrlProfile = resolveUrlTokenVendorProfile(conn);
+  const kitUrlPreviewValues = selectedServicesSchema
+    ? resolveKitUrlValues({
+        urlTokenValues: form.urlTokenValues,
+        serviceModule:  form.serviceModule,
+        serviceVersion: form.serviceVersion,
+        schemaLabel:    selectedServicesSchema.label,
+        schemaVersion:  selectedServicesSchema.version ?? form.servicesSchemaVersion,
+      }, kitUrlTokens)
+    : {};
+  const kitUrlPreviewUrl = resolveConnectorUrlPreview({
+    connector: conn,
+    kit: {
+      urlTokenValues: form.urlTokenValues,
+      serviceModule:  form.serviceModule,
+      serviceVersion: form.serviceVersion,
+      schemaLabel:    selectedServicesSchema?.label,
+      schemaVersion:  selectedServicesSchema?.version ?? form.servicesSchemaVersion,
+    },
+  });
   const showEditor = (isNew || selectedKit) && selectedConn;
 
   return (
@@ -743,6 +800,52 @@ const FloKitManagement: React.FC = () => {
                       )}
                     </div>
                   )}
+
+                {kitUrlTokens.length > 0 && (
+                  <div style={s.section}>
+                    <div style={s.secTitle}>URL segments — kit values</div>
+                    <ConnectorUrlPreviewBox
+                      preview={kitUrlPreviewUrl}
+                      urlTokens={conn?.urlTokens ?? []}
+                      captureSources={['kit']}
+                      kit={{
+                        urlTokenValues: form.urlTokenValues,
+                        serviceModule:  form.serviceModule,
+                        serviceVersion: form.serviceVersion,
+                        schemaLabel:    selectedServicesSchema?.label,
+                        schemaVersion:  selectedServicesSchema?.version ?? form.servicesSchemaVersion,
+                      }}
+                      theme="dark"
+                    />
+                    <div style={{ fontSize: 11, color: '#45455a', margin: '10px 0' }}>
+                      Connection segments resolve from FloConnections at runtime. Defaults derive from the services schema; override if needed.
+                    </div>
+                    {kitUrlTokens.map(token => {
+                      const key = token.key;
+                      const hint = getUrlTokenHintForToken(kitUrlProfile, token, conn?.urlTokens ?? kitUrlTokens);
+                      const value = form.urlTokenValues?.[key]
+                        ?? kitUrlPreviewValues[key]
+                        ?? '';
+                      return (
+                        <div key={key} style={{ marginBottom: 10 }}>
+                          <label style={s.fl}>{token.label ?? key}</label>
+                          <input
+                            style={s.input}
+                            value={value}
+                            onChange={e => patch({
+                              urlTokenValues: { ...(form.urlTokenValues ?? {}), [key]: e.target.value },
+                            })}
+                            placeholder={hint.placeholderSuggestion}
+                          />
+                          {token.description && (
+                            <div style={{ fontSize: 10, color: '#6b6b80', marginTop: 4 }}>{token.description}</div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
                 </div>
 
                 <div style={s.section}>

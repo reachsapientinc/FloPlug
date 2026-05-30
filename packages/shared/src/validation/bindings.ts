@@ -3,8 +3,9 @@
  */
 
 import type { FloValidationIssue } from '../types/floValidation.js';
+import { validateFloExpression, structuralExpressionCheck } from '../utils/floExpression.js';
 
-export type BindingSource = 'static' | 'cStream' | 'local' | 'global' | 'literal';
+export type BindingSource = 'static' | 'cStream' | 'local' | 'global' | 'literal' | 'expression';
 
 export interface VariableBinding {
   source?: BindingSource | string;
@@ -61,9 +62,33 @@ export function validateBinding(
       nodeId, nodeType, nodeLabel, field,
       code:     'REQUIRED_BINDING_MISSING',
       severity: 'error',
-      message:  `${label} is required — set a ${source} path.`,
+      message:  source === 'expression'
+        ? `${label} is required — enter a FloExpression.`
+        : `${label} is required — set a ${source} path.`,
     });
+    return issues;
   }
+
+  if (source === 'expression') {
+    const structural = structuralExpressionCheck(val);
+    if (structural) {
+      issues.push({
+        nodeId, nodeType, nodeLabel, field,
+        code: 'EXPRESSION_INVALID', severity: 'error',
+        message: `${label}: ${structural}`,
+      });
+      return issues;
+    }
+    const parsed = validateFloExpression(val);
+    if (!parsed.ok) {
+      issues.push({
+        nodeId, nodeType, nodeLabel, field,
+        code: 'EXPRESSION_INVALID', severity: 'error',
+        message: `${label}: ${parsed.message}`,
+      });
+    }
+  }
+
   return issues;
 }
 
@@ -107,6 +132,16 @@ export function extractUrlVariables(urlPattern: string): string[] {
 
 export function nodeLabel(data: Record<string, unknown>, fallback: string): string {
   return String(
-    data.flaLabel ?? data.floActionName ?? data.plugName ?? data.label ?? fallback,
+    data.displayName ?? data.flaLabel ?? data.floActionName ?? data.plugName ?? data.label ?? fallback,
   );
+}
+
+/** Canvas card title — custom display name overrides palette label. */
+export function nodeDisplayTitle(
+  data: Record<string, unknown>,
+  defaultTitle: string,
+): string {
+  const custom = data.displayName;
+  if (typeof custom === 'string' && custom.trim()) return custom.trim();
+  return defaultTitle;
 }

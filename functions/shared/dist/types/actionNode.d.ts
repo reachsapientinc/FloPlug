@@ -1,5 +1,7 @@
 /** Where a FloAction node reads / writes flow data (canvas + engine). */
 export type StreamSource = 'cStream' | 'local' | 'global';
+import type { ConnectorUrlToken } from '../utils/connectorUrlTokens.js';
+import type { KitUrlContext } from '../utils/connectorUrlTokens.js';
 /** MIME types supported when parsing non-cStream input (phase-2 engine). */
 export declare const ACTION_INPUT_CONTENT_TYPES: readonly [{
     readonly value: "application/json";
@@ -26,6 +28,11 @@ export interface FloActionCanvasData {
     inputContentType?: string;
     outputTarget?: StreamSource;
     outputVarName?: string;
+    /** Developer-filled URL segment bindings (floActionNode-classified tokens) */
+    urlVariables?: Record<string, {
+        source: string;
+        value: string;
+    }>;
 }
 /**
  * Product-level action node template — materialized when a FloKit is saved.
@@ -81,6 +88,19 @@ export interface HubActionNodeDoc {
     displayName?: string;
     allowedConnectionIds?: string[];
     defaultConnectionId?: string;
+    /** Hub-admin FloAction token values per allowed connection */
+    floActionUrlValuesByConnection?: Record<string, Record<string, string>>;
+    /** Snapshot of FloAction-node URL tokens from connector (for designer inspector) */
+    floActionNodeUrlTokens?: {
+        key: string;
+        label?: string;
+        description?: string;
+        field?: string;
+    }[];
+    /** Snapshot of connector urlTokens for designer URL preview */
+    urlTokensSnapshot?: ConnectorUrlToken[];
+    /** Kit URL segment values from FloKit at save time */
+    kitUrlContext?: KitUrlContext;
     outputTarget?: 'cStream' | 'local' | 'global';
     varName?: string;
     enabledForDevelopers?: boolean;
@@ -121,6 +141,13 @@ export interface AddActionNodeParams {
     floActionName: string;
     flaLabel: string;
     description?: string;
+    floActionUrlValuesByConnection?: Record<string, Record<string, string>>;
+    floActionNodeUrlTokens?: {
+        key: string;
+        label?: string;
+        description?: string;
+        field?: string;
+    }[];
     /** @deprecated Use floActionName */
     displayName?: string;
 }

@@ -27,11 +27,27 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { getFunctions, httpsCallable }              from 'firebase/functions';
 import type {
   AuthProtocol, AuthProtocolField,
-  ConnectorDoc, PlugConfig, PlugCredentialValues, PlugVariableHint,
+  ConnectorDoc, PlugConfig, PlugCredentialValues,
   TenantUser, FloMeta, PlugSummary, FloConnectionSafe, HubActionNodeDoc,
 } from '@floplug/shared';
 import { usePlugManagerActions }  from './../handlers/hubActionHandler';
-import { NODE_TYPES }             from '@floplug/shared';
+import {
+  NODE_TYPES,
+  resolveConnectorUrlMode,
+  connectorUrlModeRequiresTokens,
+  plugNodeTokensForConnector,
+  resolveConnectorUrlPreview,
+} from '@floplug/shared';
+import PlugUrlConfigSection from './PlugUrlConfigSection';
+
+function emptyPlugUrlDefaults(c: ConnectorDoc | undefined) {
+  return {
+    plugUrlValuesByConnection: {} as Record<string, Record<string, string>>,
+    plugNodeUrlTokens: plugNodeTokensForConnector(c).map(t => ({
+      key: t.key, label: t.label, description: t.description, field: t.field,
+    })),
+  };
+}
 
 // ── Cloud Function caller helper ──────────────────────────────────────────────
 const fn = <Req, Res>(name: string) =>
@@ -315,35 +331,6 @@ const Toggle: React.FC<{ value: boolean; onChange: (v: boolean) => void; color: 
     }} />
   </button>
 );
-
-// ── Placeholder helpers ───────────────────────────────────────────────────────
-function defaultPlaceholder(varName: string): string {
-  const v = varName.toLowerCase();
-  if (v.includes('version') || v === 'ver') return 'Optional default e.g. v44.1';
-  if (v.includes('port'))                   return 'Optional default e.g. 443';
-  if (v.includes('region'))                 return 'Optional default e.g. us-east-1';
-  if (v.includes('path'))                   return 'Optional default e.g. /api/v1';
-  if (v.includes('fileName'))               return 'Attachment File Name. e.g Process_log.csv';
-  return 'Optional default value';
-}
-
-function hintPlaceholder(connectorLabel: string, varName: string): string {
-  const lbl = connectorLabel.toLowerCase();
-  const v   = varName.toLowerCase();
-  if (lbl.includes('email') || lbl.includes('smtp') || lbl.includes('mail')) {
-    if (v.includes('fromemail') || v === 'from')   return 'e.g. noreply@yourcompany.com';
-    if (v.includes('fromname')  || v === 'name')   return 'e.g. Company Notifications';
-    if (v.includes('replyto'))                     return 'e.g. support@yourcompany.com';
-    return 'e.g. your-email@company.com';
-  }
-  if (v.includes('host') || v.includes('url') || v.includes('base')) return `e.g. your-${lbl.split(' ')[0]}-host.com`;
-  if (v.includes('tenant') || v.includes('instance') || v.includes('org')) return `e.g. your-${lbl.split(' ')[0]}-tenant-id`;
-  if (v.includes('version') || v === 'ver' || v === 'api_version') return 'e.g. v44.1';
-  if (v.includes('region') || v.includes('datacenter') || v.includes('dc')) return 'e.g. us-east-1';
-  if (v.includes('port')) return 'e.g. 443';
-  if (v.includes('path') || v.includes('endpoint') || v.includes('prefix')) return 'e.g. /api/v1';
-  return `Describe this variable for ${connectorLabel || 'connector'} developers`;
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PlugTile — square card for the plug grid
@@ -635,8 +622,8 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
   const [authProtocol,  setAuthProtocol]  = useState('');
   const [nodeType,      setNodeType]      = useState('');
   const [name,          setName]          = useState('');
-  const [urlPattern,    setUrlPattern]    = useState('');
-  const [variableHints, setVariableHints] = useState<PlugVariableHint[]>([]);
+  const [plugUrlValuesByConnection, setPlugUrlValuesByConnection] = useState<Record<string, Record<string, string>>>({});
+  const [plugNodeUrlTokens, setPlugNodeUrlTokens] = useState<{ key: string; label?: string; description?: string; field?: string }[]>([]);
   const [credentials,   setCredentials]   = useState<PlugCredentialValues>({});
   const [allowedConnectionIds, setAllowedConnectionIds] = useState<string[]>([]);
   const [defaultConnectionId,  setDefaultConnectionId]  = useState('');
@@ -649,8 +636,14 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
     setAuthProtocol(plug?.authProtocol ?? '');
     setNodeType((plug as any)?.nodeType ?? '');
     setName(plug?.name                  ?? '');
-    setUrlPattern(plug?.urlPattern       ?? '');
-    setVariableHints(plug?.variableHints ?? []);
+    setPlugUrlValuesByConnection(plug?.plugUrlValuesByConnection ?? {});
+    setPlugNodeUrlTokens(
+      plug?.plugNodeUrlTokens?.length
+        ? plug.plugNodeUrlTokens
+        : plugNodeTokensForConnector(connectors.find(c => c.id === plug?.connectorId)).map(t => ({
+            key: t.key, label: t.label, description: t.description, field: t.field,
+          })),
+    );
     const allowed = plug?.allowedConnectionIds?.length
       ? plug.allowedConnectionIds
       : (plug?.connectionId ? [plug.connectionId] : []);
@@ -689,6 +682,8 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
   };
 
   const connector       = connectors.find(c => c.id === connectorId) ?? null;
+  const connectorUrlMode = resolveConnectorUrlMode(connector ?? {});
+  const usesConnectorUrl = connectorUrlModeRequiresTokens(connectorUrlMode);
   const supportedProtos = protocols.filter(p => connector?.supportedAuthTypes?.includes(p.name) && p.isActive);
   const selectedProto   = protocols.find(p => p.name === authProtocol) ?? null;
   const NODE_TYPE_OPTIONS = Object.entries(NODE_TYPES).map(([key, value]) => ({ key, value }));
@@ -709,10 +704,45 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
     const first = protocols.find(p => c?.supportedAuthTypes?.includes(p.name) && p.isActive);
     setAuthProtocol(first?.name ?? '');
     setNodeType(suggestNodeType(c?.label ?? '', first?.name ?? ''));
+    const urlDefaults = emptyPlugUrlDefaults(c);
+    setPlugUrlValuesByConnection(urlDefaults.plugUrlValuesByConnection);
+    setPlugNodeUrlTokens(urlDefaults.plugNodeUrlTokens);
     setCredentials({});
     setAllowedConnectionIds([]);
     setDefaultConnectionId('');
   };
+
+  const patchPlugUrlValue = (connectionId: string, tokenKey: string, value: string) => {
+    setPlugUrlValuesByConnection(prev => ({
+      ...prev,
+      [connectionId]: { ...(prev[connectionId] ?? {}), [tokenKey]: value },
+    }));
+  };
+
+  const computedUrlPattern = useMemo(() => {
+    if (!connector || !defaultConnectionId) return '';
+    const conn = connections.find(c => c.id === defaultConnectionId);
+    if (!conn) return '';
+    return resolveConnectorUrlPreview({
+      connector,
+      connection: {
+        urlTokenValues: conn.urlTokenValues,
+        hostname: conn.hostname,
+        tenantKey: conn.tenantKey,
+        baseUrl: conn.baseUrl,
+      },
+      plugValues: plugUrlValuesByConnection[defaultConnectionId] ?? {},
+    });
+  }, [connector, defaultConnectionId, connections, plugUrlValuesByConnection]);
+
+  const variableHints = useMemo(
+    () => plugNodeUrlTokens.map(t => ({
+      name: t.key,
+      hint: t.description ?? t.label ?? '',
+      defaultValue: '',
+    })),
+    [plugNodeUrlTokens],
+  );
 
   const patchCred = (key: string, value: string) =>
     setCredentials(prev => ({ ...prev, [key]: value }));
@@ -721,7 +751,9 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
     if (!connectorId)  return 'Select a connector';
     if (!authProtocol) return 'Select an authentication protocol';
     if (!name.trim())  return 'Plug name is required';
-    if (authProtocol !== 'smtp_basic' && !urlPattern.trim()) return 'URL Pattern is required';
+    if (authProtocol !== 'smtp_basic' && connectorUrlMode !== 'none' && !computedUrlPattern.trim()) {
+      return 'Select allowed connections to preview the service URL';
+    }
     if (authProtocol && authProtocol !== 'smtp_basic') {
       if (allowedConnectionIds.length === 0) return 'Select at least one allowed connection.';
       if (!defaultConnectionId) return 'Mark one connection as default (★).';
@@ -763,8 +795,11 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
         authProtocol,
         nodeType,
         name:           name.trim(),
-        urlPattern:     urlPattern.trim(),
+        urlPattern:     computedUrlPattern.trim(),
         variableHints,
+        plugUrlValuesByConnection,
+        plugNodeUrlTokens,
+        urlTokensSnapshot: connector?.urlTokens ?? [],
         credentials,
         allowedConnectionIds,
         defaultConnectionId,
@@ -780,8 +815,11 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
         authProtocol,
         nodeType,
         name:           name.trim(),
-        urlPattern:     urlPattern.trim(),
+        urlPattern:     computedUrlPattern.trim(),
         variableHints,
+        plugUrlValuesByConnection,
+        plugNodeUrlTokens,
+        urlTokensSnapshot: connector?.urlTokens ?? [],
         allowedConnectionIds,
         defaultConnectionId,
         connectionId:   defaultConnectionId,
@@ -898,18 +936,6 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
                 </select>
               </div>
 
-              {authProtocol !== 'smtp_basic' && (
-                <div style={css.fg}>
-                  <label style={css.fl}>URL Pattern *</label>
-                  <input style={css.fi} value={urlPattern}
-                    placeholder="https://{{hostname}}/ccx/service/{{tenant}}/{{module}}/{{version}}"
-                    onChange={e => setUrlPattern(e.target.value)} />
-                  <div style={{ fontSize: 9, color: '#3a3a50', marginTop: 3 }}>
-                    Use {'{{variableName}}'} for values the developer fills at design time.
-                  </div>
-                </div>
-              )}
-
               {authProtocol && authProtocol !== 'smtp_basic' && (
                 <div style={css.fg}>
                   <label style={css.fl}>
@@ -965,7 +991,19 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
                 </div>
               )}
 
-              {authProtocol === 'smtp_basic' ? (
+              {authProtocol !== 'smtp_basic' && connectorUrlMode !== 'none' && usesConnectorUrl && (
+                <PlugUrlConfigSection
+                  connector={connector}
+                  connections={connectionsForPlug}
+                  allowedIds={allowedConnectionIds}
+                  defaultId={defaultConnectionId}
+                  plugUrlValues={plugUrlValuesByConnection}
+                  onPlugUrlChange={patchPlugUrlValue}
+                  css={css}
+                />
+              )}
+
+              {authProtocol === 'smtp_basic' && (
                 <div style={{ background: 'rgba(245,158,11,0.06)', border: '0.5px solid rgba(245,158,11,0.2)', borderRadius: 8, padding: '12px 14px' }}>
                   <div style={{ fontSize: 10, fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 6 }}>
                     ✉ Email Plug — Credentials Only
@@ -976,38 +1014,6 @@ const PlugFormModal: React.FC<PlugFormModalProps> = ({
                     they drag this plug onto the designer canvas — not here.
                   </div>
                 </div>
-              ) : (
-                (() => {
-                  const vars = [...(urlPattern.matchAll(/\{\{(\w+)\}\}/g))].map(m => m[1]);
-                  if (!vars.length) return null;
-                  return (
-                    <div style={{ background: 'rgba(255,255,255,0.02)', border: '0.5px solid rgba(255,255,255,0.07)', borderRadius: 8, padding: '12px 14px' }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: '#4f8ef7', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 10 }}>
-                        URL Variable Hints
-                      </div>
-                      {vars.map(varName => {
-                        const existing = variableHints.find(h => h.name === varName) ?? { name: varName, hint: '', defaultValue: '' };
-                        const upd = (patch: Partial<PlugVariableHint>) =>
-                          setVariableHints(prev => {
-                            const idx = prev.findIndex(h => h.name === varName);
-                            const u   = { ...existing, ...patch };
-                            return idx >= 0 ? prev.map((h, i) => i === idx ? u : h) : [...prev, u];
-                          });
-                        return (
-                          <div key={varName} style={{ marginBottom: 10, paddingBottom: 10, borderBottom: '0.5px solid rgba(255,255,255,0.05)' }}>
-                            <div style={{ fontSize: 10, color: '#4f8ef7', fontFamily: 'monospace', marginBottom: 6 }}>{`{{${varName}}}`}</div>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                              <input style={css.fi} placeholder={hintPlaceholder(connector?.label ?? '', varName)}
-                                value={existing.hint ?? ''} onChange={e => upd({ hint: e.target.value })} />
-                              <input style={css.fi} placeholder={defaultPlaceholder(varName)}
-                                value={existing.defaultValue ?? ''} onChange={e => upd({ defaultValue: e.target.value })} />
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  );
-                })()
               )}
             </>
           )}

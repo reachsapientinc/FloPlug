@@ -20,10 +20,19 @@
  * On edit, leaving a field blank keeps the existing encrypted value server-side.
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import type { AuthProtocol, ConnectorDoc }          from '@floplug/shared';
 import type { FloConnectionSafe }                   from '@floplug/shared';
 import type { SaveFloConnectionPayload }            from '../handlers/hubActionHandler';
+import {
+  connectionTokensForConnector,
+  resolveConnectorUrlMode,
+  resolveConnectorUrlPreview,
+  resolveConnectionUrlValues,
+  getUrlTokenHintForToken,
+  resolveUrlTokenVendorProfile,
+} from '@floplug/shared';
+import ConnectorUrlPreviewBox from './ConnectorUrlPreviewBox';
 
 // ── Slug helper ───────────────────────────────────────────────────────────────
 // "Production Gmail SMTP" → "production-gmail-smtp"
@@ -131,8 +140,7 @@ export const FloConnectionFormModal: React.FC<FloConnectionFormModalProps> = ({
   const [connectionId,      setConnectionId]      = useState('');
   const [idOverridden,      setIdOverridden]      = useState(false);  // true once admin manually edits the id
   const [envLabel,          setEnvLabel]          = useState('');
-  const [hostname,          setHostname]          = useState('');
-  const [tenantKey,         setTenantKey]         = useState('');
+  const [urlTokenValues,    setUrlTokenValues]    = useState<Record<string, string>>({});
   const [credentials,       setCredentials]       = useState<Record<string, string>>({});
   const [saving,            setSaving]            = useState(false);
   const [error,             setError]             = useState('');
@@ -144,25 +152,24 @@ export const FloConnectionFormModal: React.FC<FloConnectionFormModalProps> = ({
       setConnectorId(connection.connectorId   ?? '');
       setAuthProtocol(connection.authProtocol ?? '');
       setName(connection.name                 ?? '');
-      setConnectionId(connection.id           ?? '');  // ← always set on edit
-      setIdOverridden(true);                           // lock slug recomputation
+      setConnectionId(connection.id           ?? '');
+      setIdOverridden(true);
       setEnvLabel(connection.environmentLabel ?? '');
-      setHostname(connection.hostname         ?? '');
-      setTenantKey(connection.tenantKey       ?? '');
+      const conn = connectors.find(c => c.id === connection.connectorId);
+      const tokens = connectionTokensForConnector(conn);
+      setUrlTokenValues(resolveConnectionUrlValues(connection, tokens));
     } else {
-      // create mode — start blank
       setConnectorId('');
       setAuthProtocol('');
       setName('');
       setConnectionId('');
       setIdOverridden(false);
       setEnvLabel('');
-      setHostname('');
-      setTenantKey('');
+      setUrlTokenValues({});
     }
     setCredentials({});
     setError('');
-  }, [connection?.id, isEdit]);
+  }, [connection?.id, isEdit, connectors]);
 
   // ── Auto-slug: keep connectionId in sync with name unless admin overrode it ─
   const handleNameChange = (val: string) => {
@@ -203,11 +210,31 @@ export const FloConnectionFormModal: React.FC<FloConnectionFormModalProps> = ({
 
   // ── Derived ────────────────────────────────────────────────────────────────
   const selectedConnector  = connectors.find(c => c.id === connectorId) ?? null;
+  const connectionUrlMode  = resolveConnectorUrlMode(selectedConnector ?? {});
+  const connectionUrlFields = connectionTokensForConnector(selectedConnector);
+  const urlProfile = resolveUrlTokenVendorProfile(selectedConnector);
+
+  const patchUrlToken = (key: string, val: string) => {
+    setUrlTokenValues(prev => ({ ...prev, [key]: val }));
+  };
+
+  const connectionContext = useMemo(() => ({
+    urlTokenValues,
+    hostname: connection?.hostname,
+    tenantKey: connection?.tenantKey,
+    baseUrl: connection?.baseUrl,
+  }), [urlTokenValues, connection?.hostname, connection?.tenantKey, connection?.baseUrl]);
+
+  const connectionPreview = useMemo(() => resolveConnectorUrlPreview({
+    connector: selectedConnector,
+    connection: connectionContext,
+  }), [selectedConnector, connectionContext]);
+
   const availableProtocols = protocols.filter(
     p => p.isActive && (!selectedConnector || selectedConnector.supportedAuthTypes.includes(p.name))
   );
   const selectedProtocol   = protocols.find(p => p.name === authProtocol) ?? null;
-  const accent             = protoColor(authProtocol || 'bearerToken');
+  const accentColor        = protoColor(authProtocol || 'bearerToken');
   const registryPreview    = connectionId ? `flc_${connectionId}` : '';
 
   // ── Validate ───────────────────────────────────────────────────────────────
@@ -223,6 +250,14 @@ export const FloConnectionFormModal: React.FC<FloConnectionFormModalProps> = ({
       for (const f of selectedProtocol.fields) {
         if (f.required && !credentials[f.name]?.trim()) {
           return `"${f.label}" is required.`;
+        }
+      }
+    }
+    if (connectionUrlMode !== 'none' && connectionUrlFields.length > 0) {
+      for (const token of connectionUrlFields) {
+        const key = token.key;
+        if (!urlTokenValues[key]?.trim()) {
+          return `"${token.label ?? key}" is required for this connector's URL segments.`;
         }
       }
     }
@@ -249,8 +284,7 @@ export const FloConnectionFormModal: React.FC<FloConnectionFormModalProps> = ({
         authProtocol,
         name:             name.trim(),
         environmentLabel: envLabel.trim(),
-        hostname:         hostname.trim(),
-        tenantKey:        tenantKey.trim(),
+        urlTokenValues,
         credentials,
       });
       onClose();
@@ -402,12 +436,12 @@ export const FloConnectionFormModal: React.FC<FloConnectionFormModalProps> = ({
             {/* ── Connection ID — THE KEY FIELD ── */}
             {authProtocol && (
               <div style={{
-                background: isEdit ? C.locked : `${accent}0a`,
-                border: `1px solid ${isEdit ? C.border : accent + '33'}`,
+                background: isEdit ? C.locked : `${accentColor}0a`,
+                border: `1px solid ${isEdit ? C.border : accentColor + '33'}`,
                 borderRadius: 9, padding: '12px 14px',
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <div style={{ ...sLabel, marginBottom: 0, color: isEdit ? C.textMuted : accent }}>
+                  <div style={{ ...sLabel, marginBottom: 0, color: isEdit ? C.textMuted : accentColor }}>
                     Connection ID {isEdit ? '(locked)' : '*'}
                   </div>
                   {!isEdit && idOverridden && (
@@ -428,8 +462,8 @@ export const FloConnectionFormModal: React.FC<FloConnectionFormModalProps> = ({
                   style={{
                     ...(isEdit ? lockedInput : {
                       ...monoInput,
-                      borderColor: idFocused ? accent : C.border,
-                      boxShadow: idFocused ? `0 0 0 2px ${accent}22` : 'none',
+                      borderColor: idFocused ? accentColor : C.border,
+                      boxShadow: idFocused ? `0 0 0 2px ${accentColor}22` : 'none',
                     }),
                   }}
                   value={connectionId}
@@ -449,8 +483,8 @@ export const FloConnectionFormModal: React.FC<FloConnectionFormModalProps> = ({
                   }}>
                     <span>Registry key:</span>
                     <span style={{
-                      fontFamily: 'monospace', color: accent,
-                      background: `${accent}14`, borderRadius: 4,
+                      fontFamily: 'monospace', color: accentColor,
+                      background: `${accentColor}14`, borderRadius: 4,
                       padding: '1px 6px', fontSize: 10,
                     }}>
                       flc_{connectionId}
@@ -473,37 +507,63 @@ export const FloConnectionFormModal: React.FC<FloConnectionFormModalProps> = ({
               </div>
             )}
 
-            {/* ── Environment + Hostname + Tenant Key ── */}
-            {authProtocol && (
-              <>
-                <div style={{ display: 'flex', gap: 12 }}>
-                  <div style={{ ...fg, flex: 1 }}>
-                    <div style={sLabel}>Environment</div>
-                    <input
-                      style={baseInput} value={envLabel}
-                      onChange={e => setEnvLabel(e.target.value)}
-                      placeholder="Production / Sandbox / Dev"
-                    />
-                  </div>
-                  <div style={{ ...fg, flex: 1 }}>
-                    <div style={sLabel}>Tenant Key</div>
-                    <input
-                      style={baseInput} value={tenantKey}
-                      onChange={e => setTenantKey(e.target.value)}
-                      placeholder="target-system tenant id"
-                    />
-                  </div>
+            {authProtocol && connectionUrlMode !== 'none' && connectionUrlFields.length > 0 && (
+              <div style={{
+                borderTop: `1px solid ${C.border}`, paddingTop: 14,
+                display: 'flex', flexDirection: 'column', gap: 11,
+              }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+                  Service URL — connection values
                 </div>
+                <ConnectorUrlPreviewBox
+                  preview={connectionPreview}
+                  urlTokens={selectedConnector?.urlTokens ?? []}
+                  captureSources={['connection']}
+                  connection={connectionContext}
+                  theme="dark"
+                />
+                {connectionUrlFields.map(token => {
+                  const key = token.key;
+                  const hint = getUrlTokenHintForToken(
+                    urlProfile,
+                    token,
+                    selectedConnector?.urlTokens ?? connectionUrlFields,
+                  );
+                  return (
+                    <div key={key} style={fg}>
+                      <div style={sLabel}>{token.label ?? key}</div>
+                      <input
+                        style={baseInput}
+                        value={urlTokenValues[key] ?? ''}
+                        onChange={e => patchUrlToken(key, e.target.value)}
+                        placeholder={hint.placeholderSuggestion}
+                      />
+                      {token.description && (
+                        <div style={{ fontSize: 10, color: C.textMuted, marginTop: 3, lineHeight: 1.4 }}>
+                          {token.description}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
-                <div style={fg}>
-                  <div style={sLabel}>Hostname / Base URL</div>
-                  <input
-                    style={baseInput} value={hostname}
-                    onChange={e => setHostname(e.target.value)}
-                    placeholder="https://api.example.com"
-                  />
-                </div>
-              </>
+            {authProtocol && connectionUrlMode === 'none' && (
+              <div style={{ fontSize: 10, color: C.textMuted, lineHeight: 1.5 }}>
+                This connector does not use HTTP service URLs — no hostname or base URL is required.
+              </div>
+            )}
+
+            {authProtocol && (
+              <div style={fg}>
+                <div style={sLabel}>Environment</div>
+                <input
+                  style={baseInput} value={envLabel}
+                  onChange={e => setEnvLabel(e.target.value)}
+                  placeholder="Production / Sandbox / Dev"
+                />
+              </div>
             )}
 
             {/* ── Dynamic credential fields ── */}
@@ -521,8 +581,8 @@ export const FloConnectionFormModal: React.FC<FloConnectionFormModalProps> = ({
                   </div>
                   <div style={{
                     fontSize: 9, padding: '1px 7px', borderRadius: 10,
-                    background: `${accent}18`, color: accent,
-                    border: `0.5px solid ${accent}44`, fontWeight: 600,
+                    background: `${accentColor}18`, color: accentColor,
+                    border: `0.5px solid ${accentColor}44`, fontWeight: 600,
                   }}>
                     {selectedProtocol.fields.filter(f => f.requiresMasking).length > 0 ? '🔒 encrypted' : 'stored server-side'}
                   </div>
@@ -607,7 +667,7 @@ export const FloConnectionFormModal: React.FC<FloConnectionFormModalProps> = ({
           <div style={{ fontSize: 10, color: C.textMuted, flex: 1, paddingRight: 12 }}>
             {!isEdit && connectionId && (
               <>
-                ID: <span style={{ fontFamily: 'monospace', color: accent }}>{connectionId}</span>
+                ID: <span style={{ fontFamily: 'monospace', color: accentColor }}>{connectionId}</span>
                 <span style={{ marginLeft: 5 }}>· Registry: </span>
                 <span style={{ fontFamily: 'monospace', color: C.textMuted }}>flc_{connectionId}</span>
               </>
@@ -635,7 +695,7 @@ export const FloConnectionFormModal: React.FC<FloConnectionFormModalProps> = ({
               disabled={saving}
               style={{
                 padding: '7px 20px', borderRadius: 7, fontSize: 12, cursor: saving ? 'not-allowed' : 'pointer',
-                background: saving ? C.textMuted : accent,
+                background: saving ? C.textMuted : accentColor,
                 border: 'none', color: '#fff', fontWeight: 700,
                 opacity: saving ? 0.65 : 1, transition: 'background 0.15s',
                 fontFamily: 'inherit',

@@ -3,11 +3,18 @@
  */
 
 import type { ParsedField } from '@floplug/shared';
+import {
+  isFieldEffectivelyRequired,
+  looksLikeExpression,
+  safeEvalExpression,
+  buildEvalContext,
+  type FloRunMeta,
+} from '@floplug/shared';
 import { getValue } from '../utils/pathUtils.js';
 
 export interface MappingRule {
   targetField:   string;
-  sourceType:    'cStream' | 'local' | 'global' | 'literal';
+  sourceType:    'cStream' | 'local' | 'global' | 'literal' | 'expression';
   sourceField?:  string;
   literalValue?: string;
   transform?:    'toString' | 'toNumber' | 'toDate' | 'toBoolean' | 'uppercase' | 'lowercase';
@@ -21,6 +28,7 @@ export interface ResolveFieldMappingsInput {
   mappingRules?: MappingRule[];
   /** When true, only explicit mappingRules are applied (no server-side auto-guess). */
   explicitRulesOnly?: boolean;
+  floRunMeta?:    Readonly<FloRunMeta>;
 }
 
 export interface ResolveFieldMappingsResult {
@@ -166,20 +174,39 @@ function resolveRuleValue(
   cStream: Record<string, unknown>,
   localStore: Record<string, unknown>,
   globalStore: Record<string, unknown>,
+  floRunMeta?: Readonly<FloRunMeta>,
 ): unknown {
+  const src = rule.sourceField?.trim() ?? '';
+  const exprCtx = buildEvalContext(cStream, { local: localStore, global: globalStore }, floRunMeta);
+
   let raw: unknown;
   switch (rule.sourceType) {
     case 'literal':
       raw = rule.literalValue ?? '';
       break;
+    case 'expression':
+      raw = src ? safeEvalExpression(src, exprCtx) : undefined;
+      break;
     case 'cStream':
-      raw = rule.sourceField ? getValue(cStream, rule.sourceField) : cStream;
+      raw = src
+        ? (looksLikeExpression(src)
+          ? safeEvalExpression(src, exprCtx)
+          : getValue(cStream, src))
+        : cStream;
       break;
     case 'local':
-      raw = rule.sourceField ? getValue(localStore, rule.sourceField) : localStore;
+      raw = src
+        ? (looksLikeExpression(src)
+          ? safeEvalExpression(src, exprCtx)
+          : getValue(localStore, src))
+        : localStore;
       break;
     case 'global':
-      raw = rule.sourceField ? getValue(globalStore, rule.sourceField) : globalStore;
+      raw = src
+        ? (looksLikeExpression(src)
+          ? safeEvalExpression(src, exprCtx)
+          : getValue(globalStore, src))
+        : globalStore;
       break;
     default:
       raw = undefined;
@@ -247,6 +274,7 @@ export function resolveFieldMappings(input: ResolveFieldMappingsInput): ResolveF
     globalStore,
     mappingRules = [],
     explicitRulesOnly = false,
+    floRunMeta,
   } = input;
 
   const resolved: Record<string, unknown> = {};
@@ -255,7 +283,7 @@ export function resolveFieldMappings(input: ResolveFieldMappingsInput): ResolveF
   // 1. Explicit rules always win
   for (const rule of mappingRules) {
     if (!rule.targetField) continue;
-    const value = resolveRuleValue(rule, cStream, localStore, globalStore);
+    const value = resolveRuleValue(rule, cStream, localStore, globalStore, floRunMeta);
     if (value !== undefined) resolved[rule.targetField] = value;
   }
 
@@ -275,7 +303,9 @@ export function resolveFieldMappings(input: ResolveFieldMappingsInput): ResolveF
     const hasValue = field.path in resolved && resolved[field.path] !== undefined && resolved[field.path] !== null;
     if (!hasValue) {
       unmappedFields.push(field.path);
-      if (field.required) unmappedRequired.push(field.path);
+      if (isFieldEffectivelyRequired(field, inputSchema, resolved, mappingRules)) {
+        unmappedRequired.push(field.path);
+      }
     }
   }
 

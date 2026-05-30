@@ -13,6 +13,7 @@ const BY_TYPE: Record<string, HubNodeVisual> = {
   floActionNode:     { color: '#8b5cf6', icon: 'FA' },
   templateNode:      { color: '#06b6d4', icon: 'TM' },
   filterNode:        { color: '#a855f7', icon: 'FL' },
+  floSwitchNode:     { color: '#6366f1', icon: 'SW' },
   loopNode:          { color: '#f59e0b', icon: 'LP' },
   variableStoreNode: { color: '#14b8a6', icon: 'VS' },
   fifNode:           { color: '#ec4899', icon: 'IF' },
