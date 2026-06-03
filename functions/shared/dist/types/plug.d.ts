@@ -101,4 +101,8 @@ export interface RunContext {
         sourceHandle?: string | null;
         targetHandle?: string | null;
     }[];
+    /** Success-path parent + cStream snapshots for error propagation. */
+    executionPath?: import('./errorHandling.js').ExecutionPathState;
+    /** When executing a compartment/loop body, parent for entry nodes with no incoming edge. */
+    entryParentNodeId?: string;
 }

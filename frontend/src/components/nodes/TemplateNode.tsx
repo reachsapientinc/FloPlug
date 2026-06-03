@@ -410,6 +410,7 @@ export const TemplateNode: React.FC<NodeProps> = ({ id, data, selected, ...dimPr
       subtitle={`${typeBadge} · ${lineCount > 0 ? `${lineCount} lines` : 'empty'}`}
       badge={otBadge ?? storeHint}
       status={deriveNodeStatus(d)}
+      showErrorHandle={!!d._showErrorHandle}
       width={dims.width}
       height={dims.height}
       onDelete={() => (d.onDelete as (nid: string) => void)?.(id)}

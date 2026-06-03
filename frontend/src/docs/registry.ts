@@ -1,4 +1,23 @@
-import type { DocCategory, DocCategoryMeta, DocPage, DocPortal } from './types';
+import type { DocCategory, DocCategoryMeta, DocGroup, DocPage, DocPortal } from './types';
+
+export interface DocGroupMeta {
+  id:    DocGroup;
+  label: string;
+  icon:  string;
+  order: number;
+}
+
+/** Ordered list of sidebar groups for the tenant/product portal */
+export const PRODUCT_GROUPS: DocGroupMeta[] = [
+  { id: 'getting-started',   label: 'Getting Started',     icon: '🚀', order: 1 },
+  { id: 'workspaces-and-flos', label: 'Workspaces & Flos', icon: '🗂️', order: 2 },
+  { id: 'designer-nodes',    label: 'Designer — Nodes',    icon: '🧩', order: 3 },
+  { id: 'error-handling',    label: 'Error Handling',       icon: '⚡', order: 4 },
+  { id: 'sample-flows',      label: 'Sample Flos',          icon: '📐', order: 5 },
+  { id: 'run-and-test',      label: 'Run & Test',           icon: '▶', order: 6 },
+  { id: 'hub-admin',         label: 'Hub Admin',            icon: '🏢', order: 7 },
+  { id: 'platform-ops',      label: 'Platform Ops',         icon: '🔒', order: 8 },
+];
 import { DEVELOPER_PAGES } from './pages/developerPages';
 import { HUB_ADMIN_PAGES } from './pages/hubAdminPages';
 import { PRODUCT_META_PAGES } from './pages/metaPages';
@@ -88,6 +107,25 @@ export function findDocPage(
   isPlatformStaff: boolean,
 ): DocPage | undefined {
   return pagesInCategory(category, portal, isHubAdmin, isPlatformStaff).find(p => p.slug === slug);
+}
+
+/** Returns pages organised into group buckets, preserving intra-group order. */
+export function groupedPages(
+  pages: DocPage[],
+  groups: DocGroupMeta[],
+): { group: DocGroupMeta; pages: DocPage[] }[] {
+  const byGroup = new Map<DocGroup, DocPage[]>();
+  for (const p of pages) {
+    const key = p.group ?? 'getting-started';
+    if (!byGroup.has(key)) byGroup.set(key, []);
+    byGroup.get(key)!.push(p);
+  }
+  const result: { group: DocGroupMeta; pages: DocPage[] }[] = [];
+  for (const g of groups.slice().sort((a, b) => a.order - b.order)) {
+    const gPages = (byGroup.get(g.id) ?? []).sort((a, b) => (a.groupOrder ?? 99) - (b.groupOrder ?? 99));
+    if (gPages.length > 0) result.push({ group: g, pages: gPages });
+  }
+  return result;
 }
 
 export function defaultPageForCategory(

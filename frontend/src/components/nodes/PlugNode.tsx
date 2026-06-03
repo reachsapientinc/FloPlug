@@ -46,6 +46,7 @@ const PlugNode: React.FC<NodeProps> = ({ id, data, selected, ...dimProps }) => {
       subtitle={subtitle}
       badge={outputTargetBadge(d as Record<string, unknown>)}
       status={deriveNodeStatus(d as Record<string, unknown>)}
+      showErrorHandle={!!d._showErrorHandle}
       width={dims.width}
       height={dims.height}
       onDelete={() => d.onDelete?.(id)}

@@ -25,17 +25,37 @@ export interface DocSection {
   bullets?:    string[];
   callout?:    DocCallout;
   code?:       string;
+  /** ASCII flow diagram shown in a dark monospace panel with neon teal styling */
+  flowDiagram?: string;
 }
 
+/**
+ * Sidebar group label for a doc page.
+ * Designer pages use fine-grained groups; Hub Admin pages all share one group.
+ */
+export type DocGroup =
+  | 'getting-started'
+  | 'workspaces-and-flos'
+  | 'designer-nodes'
+  | 'error-handling'
+  | 'sample-flows'
+  | 'run-and-test'
+  | 'hub-admin'
+  | 'platform-ops';
+
 export interface DocPage {
-  id:        string;
-  slug:      string;
-  title:     string;
-  category:  DocCategory;
-  audience:  DocAudience;
-  summary:   string;
-  updatedAt: string;
-  sections:  DocSection[];
+  id:         string;
+  slug:       string;
+  title:      string;
+  category:   DocCategory;
+  audience:   DocAudience;
+  summary:    string;
+  updatedAt:  string;
+  sections:   DocSection[];
+  /** Sidebar group this page belongs to */
+  group?:     DocGroup;
+  /** Sort order within the group (lower = higher in list) */
+  groupOrder?: number;
 }
 
 export interface DocCategoryMeta {

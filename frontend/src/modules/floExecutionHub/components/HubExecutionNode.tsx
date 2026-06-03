@@ -11,6 +11,8 @@ export interface HubExecutionNodeData {
   error?:      string;
   logLine?:    string;
   durationMs?: number;
+  caughtCount?: number;
+  isGlobalCatcher?: boolean;
 }
 
 const STATUS_STYLES: Record<HubNodeExecStatus, { border: string; glow: string; badge: string }> = {
@@ -67,7 +69,9 @@ export const HubExecutionNode = memo(({ data, selected }: NodeProps) => {
       {d.stepIndex != null && (
         <div className="hub-exec-step">STEP {d.stepIndex}</div>
       )}
-      <div className="hub-exec-title">{d.label}</div>
+      <div className="hub-exec-title">
+        {d.isGlobalCatcher ? 'Flo Error Handler (Global Catch)' : d.label}
+      </div>
       <div className="hub-exec-type">{d.nodeType}</div>
       <div className="hub-exec-footer">
         <span className="hub-exec-badge" style={{ color: st.badge, borderColor: st.border }}>
@@ -80,6 +84,11 @@ export const HubExecutionNode = memo(({ data, selected }: NodeProps) => {
       {d.status === 'error' && d.error && (
         <div className="hub-exec-error" title={d.error}>
           {d.error.length > 72 ? `${d.error.slice(0, 72)}…` : d.error}
+        </div>
+      )}
+      {!!d.caughtCount && (
+        <div className="hub-exec-error" title="Caught propagated error">
+          {d.isGlobalCatcher ? `Global catch handled ${d.caughtCount}` : `Caught ${d.caughtCount} propagated error(s)`}
         </div>
       )}
       <Handle type="source" position={Position.Right} className="hub-exec-handle" />

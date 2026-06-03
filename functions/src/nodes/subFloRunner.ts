@@ -130,6 +130,7 @@ export async function executeInvokeSubFloNode(
   allNodes:  FloNode[],
   allEdges:  FloEdge[],
   runFlow:   FloRunner,
+  invokeNodeId: string,
 ): Promise<NodeResult & { returnValues?: Record<string, unknown> }> {
   const targetId = String(nd.targetSubFloId ?? '');
   if (!targetId) {
@@ -157,13 +158,15 @@ export async function executeInvokeSubFloNode(
     subLocal = bindSubFloInputs(anchor, bindings, ctx.store, cStream, ctx.floRunMeta);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    return { cStream, logLine: `⚠ InvokeSubFlo: ${msg}` };
+    throw new Error(`InvokeSubFlo: ${msg}`);
   }
 
   const subCtx: RunContext = {
     ...ctx,
     depth: ctx.depth + 1,
     store: { global: ctx.store.global, local: { ...subLocal } },
+    entryParentNodeId: invokeNodeId,
+    executionPath: ctx.executionPath,
   };
 
   let resultCStream = cStream;

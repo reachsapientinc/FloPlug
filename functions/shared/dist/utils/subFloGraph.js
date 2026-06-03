@@ -2,6 +2,7 @@
  * SubFlo compartments, loop regions, and cycle detection on a single flo graph.
  */
 import { NODE_TYPES } from '../constants/constants.js';
+import { ERROR_HANDLE } from '../types/errorHandling.js';
 import { LOOP_LOOP_HANDLE, LOOP_EXIT_HANDLE } from '../types/subFloNode.js';
 export function nodeSubFloId(node) {
     const id = node.data?.subFloId;
@@ -92,7 +93,7 @@ export function filterExecutableMainNodes(nodes, edges) {
 }
 export function filterExecutableMainEdges(nodes, edges) {
     const mainIds = new Set(filterExecutableMainNodes(nodes, edges).map(n => n.id));
-    return edges.filter(e => mainIds.has(e.source) && mainIds.has(e.target));
+    return edges.filter(e => mainIds.has(e.source) && mainIds.has(e.target) && (e.sourceHandle ?? '') !== ERROR_HANDLE);
 }
 /** Static cycle detection via DFS (for validation). */
 export function findGraphCycles(nodes, edges) {

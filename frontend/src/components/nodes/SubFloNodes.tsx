@@ -2,6 +2,7 @@ import React from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { nodeDisplayTitle } from '@floplug/shared';
 import { FlowNodeShell, nodeDeleteHandler, nodeDimensions } from './FlowNodeShell';
+import { ErrorSourceHandle } from './CompactNode';
 
 const SUB_COLOR = '#0d9488';
 const INVOKE_COLOR = '#2563eb';
@@ -67,6 +68,7 @@ export const SubFloReturnNode: React.FC<NodeProps> = ({ id, data, selected, widt
 export const InvokeSubFloNode: React.FC<NodeProps> = ({ id, data, selected, width, height, measured }) => {
   const d = data as Record<string, unknown>;
   const target = String(d.targetSubFloId ?? '');
+  const showError = !!d._showErrorHandle;
   const dims = nodeDimensions({ width, height, measured });
 
   return (
@@ -83,7 +85,9 @@ export const InvokeSubFloNode: React.FC<NodeProps> = ({ id, data, selected, widt
           }} />
           <Handle type="source" position={Position.Right} style={{
             width: 10, height: 10, background: INVOKE_COLOR, border: '2px solid #0f1117', borderRadius: '50%',
+            ...(showError ? { top: '38%' } : {}),
           }} />
+          {showError && <ErrorSourceHandle top="72%" />}
         </>
       }
     >

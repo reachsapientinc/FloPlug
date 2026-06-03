@@ -75,6 +75,8 @@ export async function executeLoopNode(
     const loopCtx: RunContext = {
       ...ctx,
       store: { global: ctx.store.global, local: { ...preLoopLocal } },
+      entryParentNodeId: loopNodeId,
+      executionPath: ctx.executionPath,
     };
     iterCStream = await runFlow(regionNodes, regionEdges, iterCStream, loopCtx);
     ctx.store.local = { ...loopCtx.store.local };

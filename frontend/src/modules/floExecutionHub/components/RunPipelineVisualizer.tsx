@@ -29,6 +29,7 @@ export interface CanvasGraphEdge {
   id?:     string;
   source:  string;
   target:  string;
+  sourceHandle?: string | null;
 }
 
 export interface RunPipelineVisualizerProps {
@@ -75,6 +76,8 @@ const DesignerInner: React.FC<RunPipelineVisualizerProps> = ({
             status:     info.status,
             error:      info.error,
             durationMs: info.durationMs,
+            caughtCount: info.caughtCount,
+            isGlobalCatcher: info.isGlobalCatcher,
           } satisfies HubDesignerNodeData,
           selected: n.id === selectedNodeId,
         };
@@ -93,6 +96,8 @@ const DesignerInner: React.FC<RunPipelineVisualizerProps> = ({
           error:      info.error,
           logLine:    info.logLine,
           durationMs: info.durationMs,
+          caughtCount: info.caughtCount,
+          isGlobalCatcher: info.isGlobalCatcher,
         } satisfies HubExecutionNodeData,
         selected: n.id === selectedNodeId,
       };

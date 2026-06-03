@@ -35,6 +35,7 @@ const FloActionNode: React.FC<NodeProps> = ({ id, data, selected, ...dimProps })
       subtitle={subtitle}
       badge={floActionIoBadge(d as Record<string, unknown>)}
       status={deriveNodeStatus(d as Record<string, unknown>)}
+      showErrorHandle={!!d._showErrorHandle}
       width={dims.width}
       height={dims.height}
       onDelete={() => d.onDelete?.(id)}

@@ -20,8 +20,8 @@ export const PALETTE_ITEMS: PaletteItem[] = [
   { type: 'workdayNode',       label: 'Workday',      icon: 'W',   color: '#f5a623', category: 'HRIS',      help: 'Fetch worker details, timesheets, payroll or benefits.' },
   { type: 'salesforceNode',    label: 'Salesforce',   icon: 'SF',  color: '#00a1e0', category: 'CRM',       help: 'Query, insert, update or upsert Salesforce objects.' },
   { type: 'mapperNode',        label: 'Field Mapper', icon: 'M',   color: '#7c3aed', category: 'Transform', help: 'Rename or remap keys in cStream using source→target pairs.' },
-  { type: 'filterNode',        label: 'Filter',       icon: 'F',   color: '#0f766e', category: 'Transform', help: 'Drop records from cStream that do not match a field condition.' },
-  { type: 'floSwitchNode',     label: 'FloSwitch',    icon: 'SW',  color: '#6366f1', category: 'Logic',     help: 'Route cStream to the first matching branch, else defaultFlo.' },
+  { type: 'filterNode',        label: 'Filter',       icon: 'F',   color: '#0f766e', category: 'Transform', help: 'Drop records from cStream that do not match a field condition. Enable "Catch error" to wire the ⚡ error path for evaluation failures.' },
+  { type: 'floSwitchNode',     label: 'FloSwitch',    icon: 'SW',  color: '#6366f1', category: 'Logic',     help: 'Route cStream to the first matching branch, else defaultFlo. ⚡ error handle available when catch is enabled.' },
   { type: 'variableStoreNode', label: 'Var Store',    icon: 'VS',  color: '#0891b2', category: 'Transform', help: 'Read/write named variables (global or local scope) in multi-row mode.' },
   { type: 'fifNode',           label: 'Flow in Flow', icon: 'FiF', color: '#7e22ce', category: 'Logic',     help: 'Embed another flow as a sub-step. Recursive flos are blocked.' },
   { type: 'functionNode',      label: 'Function',     icon: 'fn',  color: '#b45309', category: 'Logic',     help: 'Run a sandboxed JS snippet server-side; returns an object to merge into cStream.' },
@@ -45,16 +45,46 @@ const PALETTE_BY_TYPE = new Map(PALETTE_ITEMS.map(i => [i.type, i]));
 
 const FIXED_HELP: Record<string, NodeQuickHelpContent> = {
   startNode: {
-    title: 'Start',
+    title: 'Start — entry & global error handler',
     titleColor: '#22c55e',
-    body: 'Single entry point for the flow. Test runs and webhooks inject cStream here.',
+    body: [
+      'Single entry point for the flow. Test runs and webhooks inject cStream here.',
+      '',
+      '🛡️ Global Error Handler: Open the inspector → set "Default catch" to "This node and below". Wire the ⚡ error handle (red shield, right side) to an error handler node.',
+      '',
+      'When set, ANY unhandled error in the entire flo bubbles up to Start\'s error wire — making it a flo-level catch-all. store.local.exception holds the error details.',
+    ].join('\n'),
     typeHint: 'startNode',
   },
   endNode: {
     title: 'End',
-    titleColor: '#ef4444',
+    titleColor: '#f59e0b',
     body: 'Marks flow completion. Wire the last processing step into End.',
     typeHint: 'endNode',
+  },
+  filterNode: {
+    title: 'Value Filter',
+    titleColor: '#0f766e',
+    body: 'Drop records that do not match the condition. Non-matching paths terminate (null cStream).\n\n⚡ Error path: if "Catch error" is enabled on this node, a failed condition evaluation routes to the ⚡ error handle instead of terminating.',
+    typeHint: 'filterNode',
+  },
+  floSwitchNode: {
+    title: 'FloSwitch',
+    titleColor: '#6366f1',
+    body: 'Routes cStream to the first matching branch; falls through to defaultFlo if none match.\n\n⚡ Error path: enable "Catch error" in inspector to wire the ⚡ error handle for expression-evaluation failures.',
+    typeHint: 'floSwitchNode',
+  },
+  loopNode: {
+    title: 'Loop',
+    titleColor: '#ea580c',
+    body: 'loop path — repeating branch (wire Invoke SubFlo here).\nexit path — continues after loop completes.\n\n⚡ Error path: the ⚡ handle fires if the loop body throws and no inner catcher handles it.',
+    typeHint: 'loopNode',
+  },
+  invokeSubFloNode: {
+    title: 'Invoke SubFlo',
+    titleColor: '#2563eb',
+    body: 'Runs a SubFlo compartment. Return args become local.* on the main flow.\n\n⚡ Error path: errors inside the SubFlo propagate upward through the Invoke node. Enable "Catch error" here to intercept them.',
+    typeHint: 'invokeSubFloNode',
   },
 };
 

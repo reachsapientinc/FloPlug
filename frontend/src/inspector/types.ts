@@ -1,6 +1,6 @@
 import type { Functions } from 'firebase/functions';
 import type { Node, Edge } from '@xyflow/react';
-import type { FloActionPaletteItem, HubActionNodeDoc } from '@floplug/shared';
+import type { FloActionPaletteItem, HubActionNodeDoc, FloErrorDefaults } from '@floplug/shared';
 
 export interface FloListItem {
   id:   string;
@@ -18,6 +18,8 @@ export interface DesignerInspectorContext {
   lastRunInput:  Record<string, unknown> | null;
   onTestNode:    (nodeId: string) => Promise<void>;
   testingNodeId: string | null;
+  /** Start node flo-wide error catch defaults (for inherit resolution). */
+  floErrorDefaults?: FloErrorDefaults;
   floActions?: FloActionPaletteItem[];
   /** Live hub FloAction doc by floKitId (for URL preview / kit context). */
   getHubActionDoc?: (floKitId: string) => HubActionNodeDoc | undefined;

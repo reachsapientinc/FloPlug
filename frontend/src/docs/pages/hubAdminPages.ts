@@ -4,11 +4,13 @@ export const HUB_ADMIN_PAGES: DocPage[] = [
   {
     id: 'admin-overview',
     slug: 'hub-overview',
-    title: 'Using the Hub Admin portal',
+    title: 'Hub Admin portal overview',
     category: 'product',
     audience: 'all',
+    group: 'hub-admin',
+    groupOrder: 1,
     summary: 'Product guide — how hub admins configure plugs, connections, and FloActions (not your live catalog).',
-    updatedAt: '2026-05-22',
+    updatedAt: '2026-06-01',
     sections: [
       {
         paragraphs: [
@@ -43,8 +45,10 @@ export const HUB_ADMIN_PAGES: DocPage[] = [
     title: 'Managing plugs',
     category: 'product',
     audience: 'all',
+    group: 'hub-admin',
+    groupOrder: 2,
     summary: 'Create plugs, URL patterns, variable hints, and email plugs.',
-    updatedAt: '2026-05-22',
+    updatedAt: '2026-06-01',
     sections: [
       {
         bullets: [
@@ -62,8 +66,10 @@ export const HUB_ADMIN_PAGES: DocPage[] = [
     title: 'Connections',
     category: 'product',
     audience: 'all',
+    group: 'hub-admin',
+    groupOrder: 3,
     summary: 'FloConnections, credentials, and plug/FloAction binding.',
-    updatedAt: '2026-05-22',
+    updatedAt: '2026-06-01',
     sections: [
       {
         bullets: [
@@ -80,8 +86,10 @@ export const HUB_ADMIN_PAGES: DocPage[] = [
     title: 'FloActions, FloKits & connectors',
     category: 'product',
     audience: 'all',
+    group: 'hub-admin',
+    groupOrder: 4,
     summary: 'Enable connector actions for developers as FloAction palette items.',
-    updatedAt: '2026-05-22',
+    updatedAt: '2026-06-01',
     sections: [
       {
         paragraphs: [
@@ -102,8 +110,10 @@ export const HUB_ADMIN_PAGES: DocPage[] = [
     title: 'Hub users & permissions',
     category: 'product',
     audience: 'all',
+    group: 'hub-admin',
+    groupOrder: 5,
     summary: 'Invite users, roles, and workspace access.',
-    updatedAt: '2026-05-22',
+    updatedAt: '2026-06-01',
     sections: [
       {
         bullets: [
@@ -120,8 +130,10 @@ export const HUB_ADMIN_PAGES: DocPage[] = [
     title: 'Scheduler',
     category: 'product',
     audience: 'all',
+    group: 'hub-admin',
+    groupOrder: 6,
     summary: 'Cron and interval schedules for published flos.',
-    updatedAt: '2026-05-22',
+    updatedAt: '2026-06-01',
     sections: [
       {
         bullets: [
@@ -138,8 +150,10 @@ export const HUB_ADMIN_PAGES: DocPage[] = [
     title: 'Key vault',
     category: 'product',
     audience: 'all',
+    group: 'hub-admin',
+    groupOrder: 7,
     summary: 'SSH, PGP, and API secrets for advanced connectors.',
-    updatedAt: '2026-05-22',
+    updatedAt: '2026-06-01',
     sections: [
       {
         paragraphs: ['Store secrets referenced by connections and plugs without embedding them in flo graphs.'],
@@ -152,8 +166,10 @@ export const HUB_ADMIN_PAGES: DocPage[] = [
     title: 'Alerts',
     category: 'product',
     audience: 'all',
+    group: 'hub-admin',
+    groupOrder: 8,
     summary: 'Failure notifications and monitoring hooks.',
-    updatedAt: '2026-05-22',
+    updatedAt: '2026-06-01',
     sections: [
       {
         bullets: [

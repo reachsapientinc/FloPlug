@@ -101,7 +101,11 @@ import {
   isPlatformFailureMessage,
   compartmentsCompatible,
   nodeCompartmentId,
+  ERROR_HANDLE,
+  showErrorHandleOnCanvas,
+  type FloErrorDefaults,
 } from '@floplug/shared';
+import { stripErrorEdgesForNode } from '../inspector/ErrorCatchSection';
 import PlugNodeComponent from './nodes/PlugNode';
 import FloActionNodeComponent from './nodes/FloActionNode';
 import DeletableEdge from './edges/DeletableEdge';
@@ -288,6 +292,7 @@ const makeDefaultNodes = (): Node[] => [
 // ── Node sanitiser ────────────────────────────────────────────────────────────
 const STRIP_KEYS = new Set([
   'functions', 'onLogEntry', 'onUpdate', 'onDelete', '__rf', 'measured', 'availablePlugs', 'availableFlos',
+  '_showErrorHandle',
   // floActionNode UI-only fields — kept in memory for inspector, never persisted.
   // connectorId is hub-managed; runtime resolves it from FloActionNodes via floKitId.
   'actionIds', 'allowedConnectionIds', 'templateActionId', 'defaultConnectionId', 'floActionName', 'connectorId', 'flaLabel',
@@ -332,13 +337,171 @@ function sanitizeEdges(edges: Edge[]): Record<string, unknown>[] { return edges.
 
 /** Ensure loaded/saved edges work with the deletable type and drag-to-rewire handles. */
 function normalizeFlowEdge(e: Edge): Edge {
+  const isError = (e.sourceHandle ?? '') === ERROR_HANDLE;
   return {
     ...e,
     type:          e.type ?? 'deletable',
     animated:      e.animated ?? true,
     reconnectable: e.reconnectable ?? true,
-    style:         e.style ?? { stroke: '#4f8ef7', strokeWidth: 1.5 },
+    style:         e.style ?? { stroke: isError ? '#ef4444' : '#4f8ef7', strokeWidth: 1.5 },
   };
+}
+
+const ANCHOR_POSITIONS: Record<string, { x: number; y: number }> = {
+  'start-node': { x: 80,  y: 180 },
+  'end-node':   { x: 560, y: 180 },
+};
+
+/** Repair anchor nodes + dedupe ids so React Flow always renders Start/End. */
+function normalizeLoadedNodes(nodes: Node[]): Node[] {
+  const byId = new Map<string, Node>();
+
+  for (const raw of nodes) {
+    const id = String(raw.id ?? '').trim();
+    if (!id) continue;
+
+    let type = String(raw.type ?? '');
+    if (id === 'start-node') type = 'startNode';
+    if (id === 'end-node')   type = 'endNode';
+
+    const pos = raw.position;
+    const position = (
+      pos
+      && typeof pos.x === 'number' && Number.isFinite(pos.x)
+      && typeof pos.y === 'number' && Number.isFinite(pos.y)
+    )
+      ? pos
+      : (ANCHOR_POSITIONS[id] ?? { x: 0, y: 0 });
+
+    const prev = byId.get(id);
+    const data = { ...(prev?.data ?? {}), ...(raw.data ?? {}) } as Record<string, unknown>;
+
+    // Start only stores flo-wide error defaults — not per-node catch fields.
+    if (type === 'startNode') {
+      delete data.catchErrorScope;
+      delete data.errorDataSource;
+      delete data.errorDataRef;
+      delete data._showErrorHandle;
+      if (data.floErrorDefaults && typeof data.floErrorDefaults === 'object') {
+        const defs = { ...(data.floErrorDefaults as Record<string, unknown>) };
+        const scope = defs.catchScope;
+        if (scope === 'inherit' || (scope !== 'none' && scope !== 'self' && scope !== 'subtree')) {
+          defs.catchScope = 'none';
+        }
+        data.floErrorDefaults = defs;
+      }
+    }
+    if (type === 'endNode') {
+      delete data.catchErrorScope;
+      delete data._showErrorHandle;
+    }
+
+    const widthNum = typeof raw.width === 'number' && Number.isFinite(raw.width) && raw.width > 20
+      ? raw.width
+      : undefined;
+    const heightNum = typeof raw.height === 'number' && Number.isFinite(raw.height) && raw.height > 20
+      ? raw.height
+      : undefined;
+
+    byId.set(id, {
+      ...(prev ?? raw),
+      id,
+      type,
+      position,
+      data,
+      ...(widthNum  != null ? { width:  widthNum  } : {}),
+      ...(heightNum != null ? { height: heightNum } : {}),
+    });
+  }
+
+  if (!byId.has('start-node')) {
+    byId.set('start-node', {
+      id: 'start-node',
+      type: 'startNode',
+      position: ANCHOR_POSITIONS['start-node'],
+      data: { label: 'Start' },
+      width: 172,
+      height: 64,
+    });
+  }
+  if (!byId.has('end-node')) {
+    byId.set('end-node', {
+      id: 'end-node',
+      type: 'endNode',
+      position: ANCHOR_POSITIONS['end-node'],
+      data: { label: 'End', output: null },
+      width: 172,
+      height: 64,
+    });
+  }
+
+  const start = byId.get('start-node');
+  if (start) {
+    byId.set('start-node', {
+      ...start,
+      id: 'start-node',
+      type: 'startNode',
+      position: (
+        start.position
+        && Number.isFinite(start.position.x)
+        && Number.isFinite(start.position.y)
+      ) ? start.position : ANCHOR_POSITIONS['start-node'],
+      parentId: undefined,
+      hidden: false,
+      draggable: true,
+      selectable: true,
+      width: (typeof start.width === 'number' && start.width > 20) ? start.width : 172,
+      height: (typeof start.height === 'number' && start.height > 20) ? start.height : 64,
+      data: { ...(start.data as Record<string, unknown>), label: 'Start' },
+    });
+  }
+
+  const end = byId.get('end-node');
+  if (end) {
+    byId.set('end-node', {
+      ...end,
+      id: 'end-node',
+      type: 'endNode',
+      position: (
+        end.position
+        && Number.isFinite(end.position.x)
+        && Number.isFinite(end.position.y)
+      ) ? end.position : ANCHOR_POSITIONS['end-node'],
+      parentId: undefined,
+      hidden: false,
+      draggable: true,
+      selectable: true,
+      width: (typeof end.width === 'number' && end.width > 20) ? end.width : 172,
+      height: (typeof end.height === 'number' && end.height > 20) ? end.height : 64,
+      data: { ...(end.data as Record<string, unknown>), label: 'End' },
+    });
+  }
+
+  return Array.from(byId.values());
+}
+
+function startFloErrorDefaults(nodes: Node[]): FloErrorDefaults | undefined {
+  const start = nodes.find(n => n.type === 'startNode' || n.id === 'start-node');
+  return start?.data?.floErrorDefaults as FloErrorDefaults | undefined;
+}
+
+function attachErrorHandleFlags(nodes: Node[], floDefaults?: FloErrorDefaults): Node[] {
+  const defs = floDefaults ?? startFloErrorDefaults(nodes);
+  return nodes.map(n => {
+    if (n.type === 'startNode' || n.type === 'endNode') return n;
+    const show = showErrorHandleOnCanvas(n.data as Record<string, unknown>, defs);
+    return { ...n, data: { ...n.data, _showErrorHandle: show } };
+  });
+}
+
+function stripDisabledErrorEdges(nodes: Node[], edges: Edge[]): Edge[] {
+  const defs = startFloErrorDefaults(nodes);
+  return nodes.reduce(
+    (eds, n) => (n.type === 'startNode' || n.type === 'endNode')
+      ? eds
+      : stripErrorEdgesForNode(n.id, n.data as Record<string, unknown>, eds, defs),
+    edges,
+  );
 }
 
 /** Shared wiring rules for new connections and reconnecting an existing edge. */
@@ -368,6 +531,10 @@ function isValidFlowConnection(
     { id: tgtNode.id, type: tgtNode.type ?? '', data: tgtNode.data as Record<string, unknown> },
   )) {
     return false;
+  }
+
+  if ((sourceHandle ?? '') === ERROR_HANDLE) {
+    if (!(srcNode.data as Record<string, unknown>)._showErrorHandle) return false;
   }
 
   return true;
@@ -926,13 +1093,37 @@ const DesignerInner: React.FC<DesignerProps> = ({
 
   // ── updateNodeData / deleteNode ────────────────────────────────────────────
   const updateNodeData = useCallback((nodeId: string, patch: Record<string, unknown>) => {
-    setNodes(prev => prev.map(n =>
+    const prev = nodesRef.current;
+    const isStart = prev.find(n => n.id === nodeId)?.type === 'startNode';
+    const touchesCatch = 'catchErrorScope' in patch || ('floErrorDefaults' in patch && isStart);
+
+    let nextNodes = prev.map(n =>
       n.id === nodeId ? { ...n, data: { ...n.data, ...patch } } : n
-    ));
-    setSelectedNode(prev =>
-      prev?.id === nodeId ? { ...prev, data: { ...prev.data, ...patch } } : prev
     );
-  }, []);
+
+    if (touchesCatch) {
+      const defs = startFloErrorDefaults(nextNodes);
+      nextNodes = attachErrorHandleFlags(nextNodes, defs);
+      setNodes(nextNodes);
+      if ('catchErrorScope' in patch) {
+        const node = nextNodes.find(n => n.id === nodeId);
+        if (node) {
+          setEdges(eds => stripErrorEdgesForNode(
+            nodeId, node.data as Record<string, unknown>, eds, defs,
+          ));
+        }
+      } else {
+        setEdges(eds => stripDisabledErrorEdges(nextNodes, eds));
+      }
+    } else {
+      setNodes(nextNodes);
+    }
+
+    setSelectedNode(sel => {
+      if (sel?.id !== nodeId) return sel;
+      return nextNodes.find(n => n.id === nodeId) ?? { ...sel, data: { ...sel.data, ...patch } };
+    });
+  }, [setNodes, setEdges]);
 
   const floList = useMemo(
     () => flos.map(f => ({ id: f.id, name: f.name })),
@@ -1014,6 +1205,11 @@ const DesignerInner: React.FC<DesignerProps> = ({
     }
   }, [activeFlo, activeWs, functions, hubId, tenantId, updateNodeData]);
 
+  const floErrorDefaults = useMemo(
+    () => startFloErrorDefaults(nodes),
+    [nodes],
+  );
+
   const inspectorCtx: DesignerInspectorContext = useMemo(() => ({
     functions,
     hubId,
@@ -1025,9 +1221,10 @@ const DesignerInner: React.FC<DesignerProps> = ({
     lastRunInput:  lastRunInputRef.current,
     onTestNode:    testNode,
     testingNodeId,
+    floErrorDefaults,
     floActions,
     getHubActionDoc: (floKitId: string) => floActionNodeMap.current.get(floKitId),
-  }), [functions, hubId, tenantId, floList, activeFlo?.id, nodes, edges, testNode, testingNodeId, floActions]);
+  }), [functions, hubId, tenantId, floList, activeFlo?.id, nodes, edges, testNode, testingNodeId, floErrorDefaults, floActions]);
 
   const deleteNode = useCallback((nodeId: string) => {
     const node = nodesRef.current.find(n => n.id === nodeId);
@@ -1048,8 +1245,8 @@ const DesignerInner: React.FC<DesignerProps> = ({
     setNodeContextMenu(null);
   }, [setEdges, recordCanvasHistory]);
 
-  const hydrateCanvasNodes = useCallback((savedNodes: Node[]): Node[] => (
-    savedNodes.map(n => {
+  const hydrateCanvasNodes = useCallback((savedNodes: Node[]): Node[] => {
+    const hydrated = savedNodes.map(n => {
       const legacyData = { ...n.data } as Record<string, unknown>;
       if (n.type === 'subFloNode' && !legacyData.displayName && legacyData.canvasName) {
         legacyData.displayName = legacyData.canvasName;
@@ -1147,11 +1344,12 @@ const DesignerInner: React.FC<DesignerProps> = ({
         ...(n.height != null ? { height: n.height } : {}),
         data: baseData,
       };
-    })
-  ), [hubId, tenantId, updateNodeData, deleteNode, plugs, flos]);
+    });
+    return attachErrorHandleFlags(hydrated);
+  }, [hubId, tenantId, updateNodeData, deleteNode, plugs, flos]);
 
   const applyCanvasSnapshot = useCallback((snap: CanvasSnapshot) => {
-    setNodes(hydrateCanvasNodes(snap.nodes));
+    setNodes(hydrateCanvasNodes(normalizeLoadedNodes(snap.nodes)));
     setEdges(snap.edges.map(normalizeFlowEdge));
     setSelectedNode(null);
   }, [hydrateCanvasNodes, setNodes, setEdges]);
@@ -1213,16 +1411,16 @@ const DesignerInner: React.FC<DesignerProps> = ({
       const inProgressDraft = hasInProgressDraft(data);
       const floName = (data.name as string) ?? flow.name;
       const publishedVersion = (data.publishedVersion as number | undefined) ?? flow.publishedVersion;
-      const savedNodes: Node[] = (draft.nodes as Node[]) ?? [];
+      const savedNodes = normalizeLoadedNodes((draft.nodes as Node[]) ?? []);
 
-      const hasStart = savedNodes.some(n => n.type === 'startNode');
-      const hasEnd   = savedNodes.some(n => n.type === 'endNode');
+      const hasStart = savedNodes.some(n => n.type === 'startNode' || n.id === 'start-node');
+      const hasEnd   = savedNodes.some(n => n.type === 'endNode'   || n.id === 'end-node');
       const defaults = makeDefaultNodes();
-      const merged   = [
+      const merged   = normalizeLoadedNodes([
         ...savedNodes,
         ...(!hasStart ? [defaults[0]] : []),
         ...(!hasEnd   ? [defaults[1]] : []),
-      ];
+      ]);
 
       const hydrated = hydrateCanvasNodes(merged);
       const loadedEdges = ((draft.edges as Edge[]) ?? []).map(normalizeFlowEdge);
@@ -1428,7 +1626,7 @@ const DesignerInner: React.FC<DesignerProps> = ({
         setTimeout(() => setStatusMsg(''), 3000);
         return;
       }
-      const pubNodes = hydrateCanvasNodes(published.nodes as Node[]);
+      const pubNodes = hydrateCanvasNodes(normalizeLoadedNodes(published.nodes as Node[]));
       const pubEdges = ((published.edges as Edge[]) ?? []).map(normalizeFlowEdge);
       setNodes(pubNodes);
       setEdges(pubEdges);
@@ -1614,12 +1812,13 @@ const DesignerInner: React.FC<DesignerProps> = ({
       return;
     }
     recordCanvasHistory();
+    const isError = (params.sourceHandle ?? '') === ERROR_HANDLE;
     setEdges(eds => addEdge({
       ...params,
       type:          'deletable',
       animated:      true,
       reconnectable: true,
-      style:         { stroke: '#4f8ef7', strokeWidth: 1.5 },
+      style:         { stroke: isError ? '#ef4444' : '#4f8ef7', strokeWidth: 1.5 },
     }, eds));
 
     const sourceNode = nodesRef.current.find(n => n.id === params.source);

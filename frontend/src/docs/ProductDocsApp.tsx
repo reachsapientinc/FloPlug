@@ -7,7 +7,9 @@ import {
   categoriesForPortal,
   defaultPageForCategory,
   findDocPage,
+  groupedPages,
   pagesInCategory,
+  PRODUCT_GROUPS,
 } from './registry';
 import {
   defaultCategoryForPortal,
@@ -135,6 +137,15 @@ export const ProductDocsApp: React.FC<ProductDocsAppProps> = ({
     () => pagesInCategory('platform-internal', portal, isHubAdmin, isPlatformStaff),
     [portal, isHubAdmin, isPlatformStaff],
   );
+  const productGroups = useMemo(() => groupedPages(productPages, PRODUCT_GROUPS), [productPages]);
+
+  // Track which sidebar groups are expanded. All open by default.
+  const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set(PRODUCT_GROUPS.map(g => g.id)));
+  const toggleGroup = (id: string) => setOpenGroups(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
 
   const goToProduct = (page: DocPage) => {
     navigateDocsHash({ category: 'product', slug: page.slug });
@@ -240,18 +251,38 @@ export const ProductDocsApp: React.FC<ProductDocsAppProps> = ({
               </button>
               {route.category === cat.id && cat.id === 'product' && (
                 <nav className="fp-doc-page-list">
-                  {productPages.map(p => (
-                    <button
-                      key={p.id}
-                      type="button"
-                      className={`fp-doc-page-link ${staticPage?.id === p.id ? 'active' : ''}`}
-                      onClick={() => goToProduct(p)}
-                    >
-                      <span>{p.title}</span>
-                      {p.audience === 'platform-staff' && (
-                        <span className="fp-doc-badge fp-doc-badge-inline">Staff</span>
+                  {productGroups.map(({ group, pages }) => (
+                    <div key={group.id} className="fp-doc-page-group">
+                      <button
+                        type="button"
+                        className="fp-doc-group-header"
+                        onClick={() => toggleGroup(group.id)}
+                        aria-expanded={openGroups.has(group.id)}
+                      >
+                        <span className="fp-doc-group-icon">{group.icon}</span>
+                        <span className="fp-doc-group-label">{group.label}</span>
+                        <span className="fp-doc-group-chevron">
+                          {openGroups.has(group.id) ? '▾' : '▸'}
+                        </span>
+                      </button>
+                      {openGroups.has(group.id) && (
+                        <div className="fp-doc-group-pages">
+                          {pages.map(p => (
+                            <button
+                              key={p.id}
+                              type="button"
+                              className={`fp-doc-page-link ${staticPage?.id === p.id ? 'active' : ''}`}
+                              onClick={() => goToProduct(p)}
+                            >
+                              <span>{p.title}</span>
+                              {p.audience === 'platform-staff' && (
+                                <span className="fp-doc-badge fp-doc-badge-inline">Staff</span>
+                              )}
+                            </button>
+                          ))}
+                        </div>
                       )}
-                    </button>
+                    </div>
                   ))}
                 </nav>
               )}

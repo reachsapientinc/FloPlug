@@ -1,6 +1,61 @@
 import React from 'react';
 import { Handle, Position } from '@xyflow/react';
+import { ERROR_HANDLE } from '@floplug/shared';
 import { FlowNodeShell, nodeDeleteHandler, nodeDimensions, type FlowNodeShellProps } from './FlowNodeShell';
+
+const ERROR_COLOR = '#ef4444';
+
+/**
+ * Distinctive error-path handle — a bold hexagonal shield with a ⚡ lightning bolt.
+ * Much larger and more visible than a plain dot; clearly signals "error routing".
+ */
+export const ErrorSourceHandle: React.FC<{ top?: string | number }> = ({ top = '72%' }) => (
+  <Handle
+    type="source"
+    id={ERROR_HANDLE}
+    position={Position.Right}
+    style={{
+      /* React Flow requires a round/square handle — we overdraw with an SVG child */
+      width: 22, height: 22,
+      background: 'transparent',
+      border: 'none',
+      borderRadius: 0,
+      top,
+      /* pull it slightly further right so it doesn't overlap the node border */
+      right: -4,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+    }}
+    title="Error path — wire to your error handler"
+  >
+    {/* SVG bolt-in-shield: visible inside the Handle div */}
+    <svg
+      width="22" height="22" viewBox="0 0 22 22"
+      style={{ pointerEvents: 'none', display: 'block', overflow: 'visible' }}
+    >
+      {/* Hexagon shield */}
+      <polygon
+        points="11,1 20,5.5 20,16.5 11,21 2,16.5 2,5.5"
+        fill="#1a0a0a"
+        stroke={ERROR_COLOR}
+        strokeWidth="1.6"
+      />
+      {/* Glow ring */}
+      <polygon
+        points="11,1 20,5.5 20,16.5 11,21 2,16.5 2,5.5"
+        fill="none"
+        stroke={ERROR_COLOR}
+        strokeWidth="4"
+        opacity="0.18"
+      />
+      {/* ⚡ Lightning bolt path */}
+      <path
+        d="M12.5 3.5 L7.5 12 L11 12 L9.5 18.5 L14.5 10 L11 10 Z"
+        fill={ERROR_COLOR}
+        stroke="none"
+      />
+    </svg>
+  </Handle>
+);
 
 export type NodeStatus = 'idle' | 'running' | 'ok' | 'error';
 
@@ -20,8 +75,9 @@ export interface CompactNodeProps {
   subtitle?:   string;
   badge?:      string;
   status?:     NodeStatus;
-  hasTarget?:  boolean;
-  hasSource?:  boolean;
+  hasTarget?:        boolean;
+  hasSource?:        boolean;
+  showErrorHandle?:  boolean;
   onDelete?:   () => void;
   deletable?:  boolean;
   width?:      number;
@@ -56,7 +112,7 @@ export const floActionIoBadge = (data: Record<string, unknown>): string | undefi
 
 export const CompactNode: React.FC<CompactNodeProps> = ({
   id: _id, selected, color, icon, title, subtitle, badge, status = 'idle',
-  hasTarget = true, hasSource = true, onDelete, deletable = true,
+  hasTarget = true, hasSource = true, showErrorHandle = false, onDelete, deletable = true,
   width = 172, height = 64,
 }) => (
   <FlowNodeShell
@@ -78,8 +134,10 @@ export const CompactNode: React.FC<CompactNodeProps> = ({
           <Handle type="source" position={Position.Right} style={{
             width: 10, height: 10, background: color,
             border: '2px solid #0f1117', borderRadius: '50%',
+            ...(showErrorHandle ? { top: '38%' } : {}),
           }} />
         )}
+        {showErrorHandle && <ErrorSourceHandle top="72%" />}
       </>
     }
   >

@@ -27,6 +27,7 @@ import {
 } from '@floplug/shared';
 import { ConditionRowsEditor } from './ConditionRowsEditor';
 import { SwitchInspectorCore } from './SwitchInspector';
+import { ErrorCatchSection } from './ErrorCatchSection';
 import { IconFilter } from './icons';
 
 const SF_OBJECTS = ['Contact', 'Account', 'Opportunity', 'Lead', 'Case'];
@@ -55,6 +56,11 @@ const withOutput = (
   return (
     <>
       <Panel {...props} />
+      <ErrorCatchSection
+        data={d}
+        floDefaults={props.ctx.floErrorDefaults}
+        onChange={p => props.onUpdate(props.node.id, p)}
+      />
       {showOutput && (
         <OutputTargetSection
           outputTarget={(d.outputTarget as string) ?? 'cStream'}
@@ -302,6 +308,11 @@ export const StartInspector: React.FC<NodeInspectorProps> = ({ node, onUpdate, c
   const patch = (next: typeof initVars) => onUpdate(node.id, { initVars: next });
   return (
     <>
+      <ErrorCatchSection
+        data={d}
+        isStartNode
+        onChange={p => onUpdate(node.id, p)}
+      />
       {initVars.map((v, i) => (
         <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 24px', gap: 4, marginBottom: 6 }}>
           <Inp value={v.key} placeholder="key" onChange={e => patch(initVars.map((x, idx) => idx === i ? { ...x, key: e.target.value } : x))} />

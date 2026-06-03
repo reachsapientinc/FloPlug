@@ -3,6 +3,7 @@
  */
 
 import { NODE_TYPES } from '../constants/constants.js';
+import { ERROR_HANDLE } from '../types/errorHandling.js';
 import { LOOP_LOOP_HANDLE, LOOP_EXIT_HANDLE } from '../types/subFloNode.js';
 
 export interface GraphNode {
@@ -128,7 +129,9 @@ export function filterExecutableMainNodes(nodes: GraphNode[], edges: GraphEdge[]
 
 export function filterExecutableMainEdges(nodes: GraphNode[], edges: GraphEdge[]): GraphEdge[] {
   const mainIds = new Set(filterExecutableMainNodes(nodes, edges).map(n => n.id));
-  return edges.filter(e => mainIds.has(e.source) && mainIds.has(e.target));
+  return edges.filter(
+    e => mainIds.has(e.source) && mainIds.has(e.target) && (e.sourceHandle ?? '') !== ERROR_HANDLE,
+  );
 }
 
 /** Static cycle detection via DFS (for validation). */

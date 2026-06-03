@@ -92,4 +92,8 @@ export interface RunContext {
   /** Full flo graph for InvokeSubFlo / Loop (set on first executeFloNodes call). */
   graphNodes?: { id: string; type: string; data: Record<string, unknown> }[];
   graphEdges?: { source: string; target: string; sourceHandle?: string | null; targetHandle?: string | null }[];
+  /** Success-path parent + cStream snapshots for error propagation. */
+  executionPath?: import('./errorHandling.js').ExecutionPathState;
+  /** When executing a compartment/loop body, parent for entry nodes with no incoming edge. */
+  entryParentNodeId?: string;
 }

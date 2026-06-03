@@ -19,6 +19,7 @@ export const WorkdayNode: React.FC<NodeProps> = ({ id, data, selected, ...dimPro
       subtitle={refId ? `${action} · ${refId}` : action}
       badge={outputTargetBadge(d)}
       status={deriveNodeStatus(d)}
+      showErrorHandle={!!d._showErrorHandle}
       width={dims.width}
       height={dims.height}
       onDelete={() => (d.onDelete as (nid: string) => void)?.(id)}

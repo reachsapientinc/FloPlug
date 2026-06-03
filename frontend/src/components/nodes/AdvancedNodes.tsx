@@ -26,6 +26,7 @@ const logicCard = (
     subtitle={subtitle}
     badge={outputTargetBadge(data)}
     status={deriveNodeStatus(data)}
+    showErrorHandle={!!data._showErrorHandle}
     width={dims.width}
     height={dims.height}
     onDelete={() => (data.onDelete as (nid: string) => void)?.(id)}

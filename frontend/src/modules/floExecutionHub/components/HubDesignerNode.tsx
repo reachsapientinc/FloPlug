@@ -12,6 +12,8 @@ export interface HubDesignerNodeData {
   status:      HubNodeExecStatus;
   error?:      string;
   durationMs?: number;
+  caughtCount?: number;
+  isGlobalCatcher?: boolean;
 }
 
 function execToCompactStatus(status: HubNodeExecStatus): NodeStatus {
@@ -25,10 +27,15 @@ export const HubDesignerNode = memo(({ id, data, selected }: NodeProps) => {
   const d = data as unknown as HubDesignerNodeData;
   const graphData = d.graphData ?? {};
   const visual = hubNodeVisual(d.nodeType, graphData);
-  const title = hubNodeTitle(d.nodeType, graphData, id);
+  const title = d.isGlobalCatcher
+    ? 'Flo Error Handler (Global Catch)'
+    : hubNodeTitle(d.nodeType, graphData, id);
   const subtitle = d.stepIndex != null
     ? `Step ${d.stepIndex} · ${formatDuration(d.durationMs)}`
     : formatDuration(d.durationMs);
+  const catchBadge = d.caughtCount && d.caughtCount > 0
+    ? (d.isGlobalCatcher ? `global caught ${d.caughtCount}` : `caught ${d.caughtCount}`)
+    : undefined;
 
   return (
     <div style={{ position: 'relative' }}>
@@ -41,6 +48,7 @@ export const HubDesignerNode = memo(({ id, data, selected }: NodeProps) => {
         icon={visual.icon}
         title={title}
         subtitle={subtitle !== '—' ? subtitle : (d.nodeType.replace(/Node$/, '') || 'node')}
+        badge={catchBadge}
         status={execToCompactStatus(d.status)}
         hasTarget
         hasSource

@@ -25,6 +25,21 @@ export const DocContentRenderer: React.FC<{ sections: DocSection[] }> = ({ secti
         {sec.code && (
           <pre className="fp-doc-code"><code>{sec.code}</code></pre>
         )}
+        {sec.flowDiagram && (
+          <pre style={{
+            background: '#0a0f1a',
+            border: '1px solid #0d9488',
+            borderRadius: 8,
+            padding: '14px 18px',
+            fontFamily: '"Fira Mono", "Cascadia Code", monospace',
+            fontSize: 11,
+            color: '#5eead4',
+            lineHeight: 1.7,
+            overflowX: 'auto',
+            margin: '10px 0',
+            boxShadow: '0 0 18px rgba(13,148,136,0.15)',
+          }}><code style={{ color: '#5eead4' }}>{sec.flowDiagram}</code></pre>
+        )}
         {sec.callout && (
           <div
             className="fp-doc-callout"

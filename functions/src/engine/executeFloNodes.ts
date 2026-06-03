@@ -35,7 +35,7 @@ import { wrapMessage }               from '../nodes/cStreamMeta.js';
 import { getValue, setValue }        from '../utils/pathUtils.js';
 import type { RunContext, NodeExecutionHubPayload, NodeHttpTrace } from '@floplug/shared';
 import { isReservedStoreKey } from '@floplug/shared';
-import { NODE_TYPES, COLLECTIONS, HUB_COLLECTIONS, getPublishedGraph } from '@floplug/shared';
+import { NODE_TYPES, COLLECTIONS, HUB_COLLECTIONS, getPublishedGraph, ERROR_HANDLE } from '@floplug/shared';
 import {
   filterExecutableMainNodes,
   filterExecutableMainEdges,
@@ -48,6 +48,12 @@ import {
   shouldPersistNodeExecution,
 } from '@floplug/shared';
 import { RunKilledError, touchRunHeartbeat } from './runLifecycle.js';
+import {
+  handleExecutionError,
+  recordNodeCStreamSnapshot,
+  recordNodeExecutionParent,
+  UnhandledFloError,
+} from './floErrorHandler.js';
 
 const db = getFirestore();
 
@@ -212,7 +218,9 @@ async function executeFloNodesInner(
     const persistCfg = parseNodeDataPersistence(node.data as Record<string, unknown>);
     const willPersist = Boolean(ctx.onNodeComplete && shouldPersistNodeExecution(persistCfg));
     try {
-      const incoming = edges.filter(e => e.target === node.id);
+      const incoming = edges.filter(
+        e => e.target === node.id && (e.sourceHandle ?? '') !== ERROR_HANDLE,
+      );
       const activeIncoming = incoming.filter(e => {
         const route = switchRoutes[e.source];
         if (route !== undefined) {
@@ -255,6 +263,13 @@ async function executeFloNodesInner(
       if (willPersist) {
         hubBeforeRaw = cloneForHubRecord(cStream);
       }
+
+      const parentId = activeIncoming.length > 0
+        ? activeIncoming[0].source
+        : (ctx.entryParentNodeId ?? null);
+      recordNodeExecutionParent(ctx, node.id, parentId);
+      recordNodeCStreamSnapshot(ctx, node.id, cStream);
+
       const nd: Record<string, any> = { ...node.data, hubId, tenantId, id: node.id, dryRun };
       let result: unknown;
 
@@ -425,7 +440,7 @@ async function executeFloNodesInner(
 
         case NODE_TYPES.INVOKE_SUB_FLO: {
           const { cStream: next, logLine } = await executeInvokeSubFloNode(
-            cStream, nd, ctx, allNodes, allEdges, executeFloNodes,
+            cStream, nd, ctx, allNodes, allEdges, executeFloNodes, node.id,
           );
           result = next;
           log.push(`${'  '.repeat(ctx.depth)}  ${logLine}`);
@@ -509,8 +524,54 @@ async function executeFloNodesInner(
       }
 
     } catch (err: any) {
+      if (err instanceof RunKilledError) throw err;
+      if (err instanceof UnhandledFloError) throw err;
+
       const hubDiag = floActionErrorToHubDiagnostics(err);
       log.push(`${'  '.repeat(ctx.depth)}  Error in ${node.id}: ${hubDiag.error}`);
+
+      try {
+        const errorResult = await handleExecutionError(
+          err,
+          node,
+          ctx,
+          hubBeforeRaw,
+          nodeHttpTrace as Record<string, unknown> | undefined,
+          {
+            allNodes,
+            allEdges,
+            runSubgraph: (subNodes, subEdges, initial, subCtx) =>
+              executeFloNodesInner(subNodes, subEdges, initial, subCtx, allNodes, allEdges),
+          },
+        );
+        if (errorResult.handled) {
+          outputs[node.id] = null;
+          if (willPersist) {
+            const payload: NodeExecutionHubPayload = {
+              nodeId:     node.id,
+              nodeType:   node.type,
+              nodeLabel:  nodeLabel(node.data as Record<string, unknown>, node.id),
+              status:     'error',
+              before:     buildPersistedInputSnapshot({
+                config: persistCfg,
+                cStream: hubBeforeRaw,
+                local:   { ...store.local },
+                global:  { ...store.global },
+              }),
+              error:      hubDiag.error,
+              durationMs: Date.now() - nodeStarted,
+            };
+            if (ctx.onNodeComplete) {
+              await Promise.resolve(ctx.onNodeComplete(payload));
+            }
+          }
+          return errorResult.resultCStream ?? lastCStream;
+        }
+      } catch (handlerErr) {
+        if (handlerErr instanceof UnhandledFloError) throw handlerErr;
+        throw handlerErr;
+      }
+
       outputs[node.id] = null;
       if (willPersist) {
         const payload: NodeExecutionHubPayload = {

@@ -10,7 +10,7 @@ import {
   SWITCH_DEFAULT_HANDLE,
   type SwitchBranch,
 } from '@floplug/shared';
-import { deriveNodeStatus, outputTargetBadge } from './CompactNode';
+import { deriveNodeStatus, outputTargetBadge, ErrorSourceHandle } from './CompactNode';
 import { FlowNodeShell, nodeDeleteHandler, nodeDimensions } from './FlowNodeShell';
 import { IconAdd, IconChevron, IconDelete, IconDrag } from '../../inspector/icons';
 
@@ -25,6 +25,7 @@ export const SwitchNode: React.FC<NodeProps> = ({ id, data, selected, width, hei
     [d.branches],
   );
   const activeId = String(d.activeBranchId ?? branches[0]?.id ?? '');
+  const showError = !!d._showErrorHandle;
   const title = nodeDisplayTitle(d, 'FloSwitch');
   const n = branches.length;
   const computedH = Math.max(88, 36 + n * 22 + 28);
@@ -98,10 +99,11 @@ export const SwitchNode: React.FC<NodeProps> = ({ id, data, selected, width, hei
             position={Position.Right}
             style={{
               width: 8, height: 8, background: '#6b6b80',
-              border: '2px dashed #0f1117', top: '92%',
+              border: '2px dashed #0f1117', top: showError ? '86%' : '92%',
             }}
             title="defaultFlo"
           />
+          {showError && <ErrorSourceHandle top="96%" />}
         </>
       }
     >
